@@ -262,6 +262,42 @@ function valueBlockScreenRect(node) {
   }
 }
 function pointInValueBlock(node, x, y) { return Math.abs(x - node.x) <= CHIP_W / 2 && Math.abs(y - node.y) <= CHIP_H / 2 }
+// World-space bounding box of every node currently on screen (skips anything
+// mounted into a slot, same filter draw() uses) — the block/chip's own rect
+// widened with fixed padding for what draw() puts just outside that rect:
+// the param-tag pills above a function block's slots, and the two label
+// lines below every block/chip.
+function graphBounds(graphNodes = Object.values(activeNodes()).filter(n => !n.mountedTo)) {
+  if (!graphNodes.length) return null
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  graphNodes.forEach((n) => {
+    const isFn = n.type === 'function'
+    const left = isFn ? functionBlockLeft(n) : n.x - CHIP_W / 2
+    const right = isFn ? functionBlockRight(n) : n.x + CHIP_W / 2
+    const halfH = (isFn ? FN_H : CHIP_H) / 2
+    minX = Math.min(minX, left); maxX = Math.max(maxX, right)
+    minY = Math.min(minY, n.y - halfH - 40); maxY = Math.max(maxY, n.y + halfH + 50)
+  })
+  return { minX, minY, maxX, maxY }
+}
+// Real "fit to content": zooms/pans so every node on the active graph sits
+// inside the canvas viewport, instead of the old #fit handler which just
+// reset to a hardcoded zoom/offset and left anything below the fold (e.g.
+// the lower rows of the 15-node main graph) cut off below the canvas edge.
+function fitToView() {
+  const w = canvas.clientWidth, h = canvas.clientHeight
+  const bounds = graphBounds()
+  const PAD = 36
+  if (!bounds) { state.zoom = 1; state.offset = { x: 0, y: 0 } } else {
+    const boundsW = bounds.maxX - bounds.minX, boundsH = bounds.maxY - bounds.minY
+    const zoom = Math.min((w - PAD * 2) / boundsW, (h - PAD * 2) / boundsH, 1.4)
+    state.zoom = Math.max(.15, zoom)
+    state.offset.x = PAD - bounds.minX * state.zoom + Math.max(0, (w - PAD * 2 - boundsW * state.zoom)) / 2
+    state.offset.y = PAD - bounds.minY * state.zoom + Math.max(0, (h - PAD * 2 - boundsH * state.zoom)) / 2
+  }
+  document.querySelector('#zoom-level').textContent = `${Math.round(state.zoom * 100)}%`
+  draw()
+}
 function roundedRectPath(c, x, y, w, h, r) {
   c.beginPath(); c.moveTo(x + r, y)
   c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r)
@@ -842,17 +878,16 @@ function enterFunction(id) {
   if (!functionBodies[id]) functionBodies[id] = { output: { id: `${id}-output`, type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
   state.activeFunction = id
   state.selected = 'output'
-  state.offset = { x: 0, y: 0 }
   renderFunctionLibrary()
   updateInspector()
-  draw()
+  fitToView()
 }
-document.querySelector('#back-graph').onclick = () => { state.activeFunction = null; state.selected = 'add'; state.offset = { x: 0, y: 0 }; renderFunctionLibrary(); updateInspector(); draw() }
+document.querySelector('#back-graph').onclick = () => { state.activeFunction = null; state.selected = 'add'; renderFunctionLibrary(); updateInspector(); fitToView() }
 document.querySelector('#run').onclick = () => executeFunction(activeNodes().add || nodes.add)
-document.querySelector('#reset').onclick = () => { Object.keys(nodes).filter(id => id.startsWith('output-') || id.startsWith('call-') || id.startsWith('number-')).forEach(id => delete nodes[id]); Object.values(functionBodies).forEach(body => Object.keys(body).filter(id => id.startsWith('call-')).forEach(id => delete body[id])); Object.values(nodes).forEach(node => { node.mountedTo = null; node.connected = false }); state.activeFunction = null; state.selected = 'add'; renderFunctionLibrary(); updateInspector(); draw() }
+document.querySelector('#reset').onclick = () => { Object.keys(nodes).filter(id => id.startsWith('output-') || id.startsWith('call-') || id.startsWith('number-')).forEach(id => delete nodes[id]); Object.values(functionBodies).forEach(body => Object.keys(body).filter(id => id.startsWith('call-')).forEach(id => delete body[id])); Object.values(nodes).forEach(node => { node.mountedTo = null; node.connected = false }); state.activeFunction = null; state.selected = 'add'; renderFunctionLibrary(); updateInspector(); fitToView() }
 document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
 document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
-document.querySelector('#fit').onclick = () => { state.zoom = 1; state.offset = { x: 0, y: 0 }; document.querySelector('#zoom-level').textContent = '100%'; draw() }
+document.querySelector('#fit').onclick = () => fitToView()
 window.addEventListener('resize', resize)
 document.querySelector('.add-node').addEventListener('click', createCustomFunction)
 document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
@@ -865,4 +900,4 @@ document.querySelectorAll('.node-library > .library-item[data-type]').forEach((i
   updateInspector()
   draw()
 }))
-renderFunctionLibrary(); updateInspector(); resize()
+renderFunctionLibrary(); updateInspector(); resize(); fitToView()
