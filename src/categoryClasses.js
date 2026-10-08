@@ -45,6 +45,9 @@ declareInstance('Monoid', app('Maybe', $a), [pred('Semigroup', $a)])
 const $b = tvar('$b')
 declareInstance('Semigroup', ttuple($a, $b), [pred('Semigroup', $a), pred('Semigroup', $b)])
 declareInstance('Monoid', ttuple($a, $b), [pred('Monoid', $a), pred('Monoid', $b)])
+// Pictures overlay: gloss's Monoid Picture.
+declareInstance('Semigroup', tcon('Picture'))
+declareInstance('Monoid', tcon('Picture'))
 // The terminal object is the trivial monoid.
 declareInstance('Semigroup', tcon('()'))
 declareInstance('Monoid', tcon('()'))

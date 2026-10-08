@@ -13,6 +13,7 @@ import { pred, tapp, tcon, tlist, ttuple, tvar } from './typeSystem.js'
 const $a = tvar('$a')
 const $b = tvar('$b')
 declareInstance('Show', tcon('StdGen'))
+for (const cls of ['Eq', 'Show']) declareInstance(cls, tcon('Color'))
 for (const cls of ['Eq', 'Ord', 'Show']) {
   declareInstance(cls, ttuple($a, $b), [pred(cls, $a), pred(cls, $b)])
   declareInstance(cls, tcon('Char'))

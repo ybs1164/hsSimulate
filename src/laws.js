@@ -40,6 +40,8 @@ export function samplesOf(type, types, fns, depth = 0) {
     if (NUMBERS[type.name]) return NUMBERS[type.name]
     if (type.name === 'Bool') return [false, true]
     if (type.name === 'Char') return ['a', 'z', ' ']
+    if (type.name === 'StdGen') return [1, 99, 2026].map((seed) => ({ kind: 'data', type: 'StdGen', ctor: 'StdGen', ctorIndex: 0, args: [seed] }))
+    if (type.name === 'Color') return [[1, 0, 0], [0, 0.5, 1]].map((rgb) => ({ kind: 'data', type: 'Color', ctor: 'RGB', ctorIndex: 0, args: rgb }))
     if (type.name === '()') return [{ kind: 'data', type: '()', ctor: '()', ctorIndex: 0, args: [] }]
     const decl = types[type.name]
     if (!decl || depth > 2) return null

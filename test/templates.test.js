@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildBlankGame } from '../src/examples/blankGame.js'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
+import { buildDice } from '../src/examples/dice.js'
 import { createEvaluator } from '../src/evaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
@@ -20,7 +21,7 @@ function registryOf(project) {
   }
 }
 
-for (const [name, build, firstButton, after] of [['click counter', buildClickCounter, 'Click!', 'Clicks: 3'], ['blank game', buildBlankGame, '+1', 'Count: 3']]) {
+for (const [name, build, firstButton, after] of [['click counter', buildClickCounter, 'Click!', 'Clicks: 3'], ['blank game', buildBlankGame, '+1', 'Count: 3'], ['dice', buildDice, 'Roll', null]]) {
   test(`${name}: plays and type-checks as Program Model Msg`, () => {
     const project = build()
     const nodes = registryOf(project)
@@ -35,7 +36,8 @@ for (const [name, build, firstButton, after] of [['click counter', buildClickCou
     const texts = []
     const collect = (w) => { if (w.kind === 'text') texts.push(w.text); (w.children || []).forEach(collect) }
     collect(game.view())
-    assert.ok(texts.includes(after), texts.join(' | '))
+    if (after) assert.ok(texts.includes(after), texts.join(' | '))
+    else assert.ok(texts.some((t) => /^You rolled [1-6]$/.test(t)), texts.join(' | '))
     game.tick(1)
     setDynamicInstances(derivedInstances(project.types))
     try {

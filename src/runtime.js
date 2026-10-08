@@ -43,6 +43,10 @@ export function toWidgetTree(w) {
   if (w.ctor === 'Button') return { kind: 'button', label: toJsString(w.args[0]), msg: w.args[1] }
   if (w.ctor === 'Column' || w.ctor === 'Row') return { kind: w.ctor.toLowerCase(), children: toArray(w.args[0]).map(toWidgetTree) }
   if (w.ctor === 'Progress') return { kind: 'progress', value: Math.min(1, Math.max(0, Number(w.args[0]) || 0)) }
+  if (w.ctor === 'Heading') return { kind: 'heading', text: toJsString(w.args[0]) }
+  if (w.ctor === 'Spacer') return { kind: 'spacer', size: Math.max(0, Number(w.args[0]) || 0) }
+  if (w.ctor === 'Tinted') return { kind: 'tinted', color: toCss(w.args[0]), child: toWidgetTree(w.args[1]) }
+  if (w.ctor === 'Drawing') return { kind: 'drawing', width: Number(w.args[0]) || 0, height: Number(w.args[1]) || 0, shapes: pictureShapes(w.args[2]) }
   throw new EvalError(`Unknown widget: ${w.ctor}`)
 }
 
@@ -58,6 +62,28 @@ export function flattenSub(v, maps = [], out = { every: [], keys: [] }) {
   else if (v.ctor === 'OnKey') out.keys.push({ fn: v.args[0], maps })
   else if (v.ctor === 'Batch') { flattenSub(v.args[0], maps, out); flattenSub(v.args[1], maps, out) }
   else if (v.ctor === 'Map') flattenSub(v.args[1], [v.args[0], ...maps], out)
+  return out
+}
+
+/** A Color value as CSS. */
+export function toCss(c) {
+  const [r, g, b] = (c?.args || [0, 0, 0]).map((x) => Math.round(Math.min(1, Math.max(0, Number(x) || 0)) * 255))
+  return `rgb(${r}, ${g}, ${b})`
+}
+
+/**
+ * A Picture flattened into shapes in world coordinates (gloss: origin at
+ * the centre, y up): { shape: 'circle' | 'rect', x, y, r | w h, solid, color }.
+ */
+export function pictureShapes(p, at = { x: 0, y: 0, color: 'rgb(0, 0, 0)' }, out = []) {
+  if (!p || p.kind === 'mempty' || p.ctor === 'Blank') return out
+  if (p.type !== 'Picture') throw new EvalError('drawing needs a Picture')
+  const n = (v) => Number(v) || 0
+  if (p.ctor === 'Circle' || p.ctor === 'CircleSolid') out.push({ shape: 'circle', x: at.x, y: at.y, r: n(p.args[0]), solid: p.ctor === 'CircleSolid', color: at.color })
+  else if (p.ctor === 'RectangleSolid') out.push({ shape: 'rect', x: at.x, y: at.y, w: n(p.args[0]), h: n(p.args[1]), solid: true, color: at.color })
+  else if (p.ctor === 'Translate') pictureShapes(p.args[2], { ...at, x: at.x + n(p.args[0]), y: at.y + n(p.args[1]) }, out)
+  else if (p.ctor === 'Color') pictureShapes(p.args[1], { ...at, color: toCss(p.args[0]) }, out)
+  else if (p.ctor === 'Pictures') { pictureShapes(p.args[0], at, out); pictureShapes(p.args[1], at, out) }
   return out
 }
 

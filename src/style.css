@@ -303,3 +303,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .te-check{font:11px 'DM Mono';color:var(--ink);display:inline-flex;gap:4px;align-items:center}
 .te-derived{font:11px/1.8 'DM Mono'}
 .te-derived small{color:var(--muted)}
+.w-heading{margin:0;font:600 22px 'DM Mono';color:inherit}
+.w-tinted .w-button{background:var(--tint);box-shadow:none}
+.w-tinted .w-text{color:inherit}
+.w-drawing{background:#fff;border:1px solid var(--line);border-radius:var(--radius-sm);align-self:center}

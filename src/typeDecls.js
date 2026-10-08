@@ -169,7 +169,7 @@ export function parseDecls(text) {
 // ---- Resolution and checking -------------------------------------------------
 
 /** Built-in type names a field may mention (beyond the declared ones). */
-export const builtinTypeNames = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational', 'Bool', 'Char', 'String', 'StdGen', ...Object.keys(constructorArity)]
+export const builtinTypeNames = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational', 'Bool', 'Char', 'String', 'StdGen', 'Picture', 'Color', ...Object.keys(constructorArity)]
 
 function resolveType(t, known) {
   if (t.unit) return tcon('()')

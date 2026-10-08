@@ -22,6 +22,34 @@ export function renderWidget(w, msgs) {
     b.dataset.msg = msgs.push(w.msg) - 1
     return b
   }
+  if (w.kind === 'heading') return Object.assign(document.createElement('h2'), { className: 'w-heading', textContent: w.text })
+  if (w.kind === 'spacer') return Object.assign(document.createElement('div'), { className: 'w-spacer', style: `height:${w.size}px` })
+  if (w.kind === 'tinted') {
+    const box = Object.assign(document.createElement('div'), { className: 'w-tinted', style: `color:${w.color};--tint:${w.color}` })
+    box.append(renderWidget(w.child, msgs))
+    return box
+  }
+  if (w.kind === 'drawing') {
+    // gloss coordinates: origin in the middle, y up
+    const ns = 'http://www.w3.org/2000/svg'
+    const svg = document.createElementNS(ns, 'svg')
+    svg.setAttribute('class', 'w-drawing')
+    svg.setAttribute('width', w.width)
+    svg.setAttribute('height', w.height)
+    svg.setAttribute('viewBox', `${-w.width / 2} ${-w.height / 2} ${w.width} ${w.height}`)
+    const g = document.createElementNS(ns, 'g')
+    g.setAttribute('transform', 'scale(1,-1)')
+    for (const s of w.shapes) {
+      const el = document.createElementNS(ns, s.shape === 'circle' ? 'circle' : 'rect')
+      if (s.shape === 'circle') { el.setAttribute('cx', s.x); el.setAttribute('cy', s.y); el.setAttribute('r', s.r) }
+      else { el.setAttribute('x', s.x - s.w / 2); el.setAttribute('y', s.y - s.h / 2); el.setAttribute('width', s.w); el.setAttribute('height', s.h) }
+      el.setAttribute('fill', s.solid ? s.color : 'none')
+      el.setAttribute('stroke', s.color)
+      g.append(el)
+    }
+    svg.append(g)
+    return svg
+  }
   if (w.kind === 'progress') {
     const bar = Object.assign(document.createElement('div'), { className: 'w-progress' })
     bar.append(Object.assign(document.createElement('i'), { style: `width:${(w.value * 100).toFixed(1)}%` }))
@@ -48,6 +76,9 @@ body{margin:0;font-family:ui-monospace,'DM Mono',monospace;background:#f8f7fc;co
 .w-progress{height:12px;border-radius:999px;background:#efeaff;overflow:hidden}
 .w-progress i{display:block;height:100%;background:#6c5ce7;transition:width .15s}
 .w-error{color:#c0335e}
+.w-heading{margin:0;font-size:22px}
+.w-tinted .w-button{background:var(--tint);box-shadow:none}
+.w-drawing{background:#fff;border:1px solid #e6e3f0;border-radius:12px;align-self:center}
 `
 
 

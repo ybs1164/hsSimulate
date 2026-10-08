@@ -133,6 +133,7 @@ export function concreteMempty(like) {
   if (!isData(like)) throw new EvalError(`mempty has no ${show(like)}-shaped value`)
   if (like.type === 'List') return nil
   if (like.type === 'Maybe') return nothing
+  if (like.type === 'Picture') return picture('Blank', 0, [])
   if (like.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'None', ctorIndex: 0, args: [] }
   if (like.type === 'Sum') return { ...like, args: [now(0)] }
   if (like.type === 'Product') return { ...like, args: [now(1)] }
@@ -190,6 +191,9 @@ export function showCompact(x) {
   const v = Math.trunc((a / 1000 ** e) * 10) / 10
   return `${x < 0 ? '-' : ''}${v >= 100 ? Math.trunc(v) : String(v)}${COMPACT_SUFFIXES[e]}`
 }
+
+const picture = (ctor, ctorIndex, args) => ({ kind: 'data', type: 'Picture', ctor, ctorIndex, args })
+const colour = (r, g, b) => ({ kind: 'data', type: 'Color', ctor: 'RGB', ctorIndex: 0, args: [r, g, b] })
 
 /** One step of mulberry32: a 32-bit state in, [a uniform number in [0, 1), the next state] out. */
 function mulberry32(state) {
@@ -351,6 +355,22 @@ export function createEvaluator(registry) {
     wColumn: [1, (ws) => ({ kind: 'data', type: 'Widget', ctor: 'Column', ctorIndex: 2, args: [ws] })],
     wRow: [1, (ws) => ({ kind: 'data', type: 'Widget', ctor: 'Row', ctorIndex: 3, args: [ws] })],
     wProgress: [1, (x) => ({ kind: 'data', type: 'Widget', ctor: 'Progress', ctorIndex: 4, args: [x] })],
+    wHeading: [1, (s) => ({ kind: 'data', type: 'Widget', ctor: 'Heading', ctorIndex: 5, args: [s] })],
+    wSpacer: [1, (px) => ({ kind: 'data', type: 'Widget', ctor: 'Spacer', ctorIndex: 6, args: [px] })],
+    wColor: [2, (c, w) => ({ kind: 'data', type: 'Widget', ctor: 'Tinted', ctorIndex: 7, args: [c, w] })],
+    wDrawing: [3, (w, h, p) => ({ kind: 'data', type: 'Widget', ctor: 'Drawing', ctorIndex: 8, args: [w, h, p] })],
+    pCircle: [1, (r) => picture('Circle', 1, [r])],
+    pCircleSolid: [1, (r) => picture('CircleSolid', 2, [r])],
+    pRectangleSolid: [2, (w, h) => picture('RectangleSolid', 3, [w, h])],
+    pTranslate: [3, (x, y, p) => picture('Translate', 4, [x, y, p])],
+    pColor: [2, (c, p) => picture('Color', 5, [c, p])],
+    rgb: [3, (r, g, b) => colour(num(r), num(g), num(b))],
+    red: [0, () => colour(1, 0, 0)],
+    green: [0, () => colour(0, 0.7, 0)],
+    blue: [0, () => colour(0, 0, 1)],
+    yellow: [0, () => colour(1, 0.85, 0)],
+    black: [0, () => colour(0, 0, 0)],
+    white: [0, () => colour(1, 1, 1)],
     appEndo: [2, (e, x) => {
       const v = force(e)
       if (isMempty(v)) return force(x) // mempty :: Endo a is the identity
@@ -421,6 +441,7 @@ export function createEvaluator(registry) {
     if (a.type === 'Maybe') return a.ctorIndex === 0 ? b : b.ctorIndex === 0 ? a : just(delay(() => mappend(a.args[0], b.args[0])))
     if (a.type === 'Sum') return { ...a, args: [delay(() => lift2((p, q) => p + q, a.args[0], b.args[0]))] }
     if (a.type === 'Product') return { ...a, args: [delay(() => lift2((p, q) => p * q, a.args[0], b.args[0]))] }
+    if (a.type === 'Picture') return picture('Pictures', 6, [now(a), now(b)])
     if (a.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'Batch', ctorIndex: 3, args: [now(a), now(b)] }
     if (a.type === 'Endo') {
       // End(a): (<>) is composition — the protected builtin `compose`.

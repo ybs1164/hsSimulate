@@ -40,6 +40,8 @@ const newtype = (name, x) => tapp(tcon(name), x)
 const e = tvar('e')
 const widget = (msg) => tapp(tcon('Widget'), msg)
 const sub = (msg) => tapp(tcon('Sub'), msg)
+const Picture = tcon('Picture')
+const Color = tcon('Color')
 const prog = (model, msg) => tapp(tapp(tcon('Program'), model), msg)
 
 export const builtinSchemes = {
@@ -134,6 +136,24 @@ export const builtinSchemes = {
   wColumn: scheme(['e'], [], tfun(tlist(widget(e)), widget(e))),
   wRow: scheme(['e'], [], tfun(tlist(widget(e)), widget(e))),
   wProgress: scheme(['e'], [], tfun(Double, widget(e))),
+  wHeading: scheme(['e'], [], tfun(String, widget(e))),
+  wSpacer: scheme(['e'], [], tfun(Double, widget(e))),
+  wColor: scheme(['e'], [], tfun(Color, tfun(widget(e), widget(e)))),
+  wDrawing: scheme(['e'], [], tfun(Double, tfun(Double, tfun(Picture, widget(e))))),
+  // Pictures, as in gloss: a Monoid (<> draws one over the other, mempty is
+  // blank); the origin is the centre and y points up.
+  pCircle: scheme([], [], tfun(Double, Picture)),
+  pCircleSolid: scheme([], [], tfun(Double, Picture)),
+  pRectangleSolid: scheme([], [], tfun(Double, tfun(Double, Picture))),
+  pTranslate: scheme([], [], tfun(Double, tfun(Double, tfun(Picture, Picture)))),
+  pColor: scheme([], [], tfun(Color, tfun(Picture, Picture))),
+  rgb: scheme([], [], tfun(Double, tfun(Double, tfun(Double, Color)))),
+  red: scheme([], [], Color),
+  green: scheme([], [], Color),
+  blue: scheme([], [], Color),
+  yellow: scheme([], [], Color),
+  black: scheme([], [], Color),
+  white: scheme([], [], Color),
 }
 
 /** `[x₁, …, xₙ] :: a → … → a → [a]` for a list node with `n` slots. */
