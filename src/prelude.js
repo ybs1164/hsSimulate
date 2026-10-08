@@ -4,6 +4,8 @@
 // environment is never consulted before its declarations have loaded.
 import './numericClasses.js'
 import './dataTypes.js'
+import './categoryClasses.js'
 
 export { ContextError, classClosure, classNames, defaultTypes, entails, instancesOf, isClass, listInstances, pickDefault, predsOnVar, reduce, setDynamicInstances, simplify, superclassesOf, withDynamicInstances } from './classEnv.js'
 export { literalClass, numericTypes } from './numericClasses.js'
+export { productLiftable } from './categoryClasses.js'

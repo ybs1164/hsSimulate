@@ -31,6 +31,12 @@ const Bool = tcon('Bool')
 const Rational = tcon('Rational')
 const Maybe = (t) => tapp(tcon('Maybe'), t)
 const String = tlist(tcon('Char'))
+const f = tvar('f')
+const t = tvar('t')
+const m = tvar('m')
+const Double = tcon('Double')
+const ap = (h, x) => tapp(h, x)
+const newtype = (name, x) => tapp(tcon(name), x)
 
 export const builtinSchemes = {
   zero: scheme([], [], Int),
@@ -72,6 +78,23 @@ export const builtinSchemes = {
   just: scheme(['a'], [], tfun(a, Maybe(a))),
   maybe: scheme(['a', 'b'], [], tfun(b, tfun(tfun(a, b), tfun(Maybe(a), b)))),
   show: scheme(['a'], [pred('Show', a)], tfun(a, String)),
+
+  // Category classes (src/categoryClasses.js), Haskell names.
+  mappend: scheme(['a'], [pred('Semigroup', a)], tfun(a, tfun(a, a))),
+  mempty: scheme(['a'], [pred('Monoid', a)], a),
+  mconcat: scheme(['a'], [pred('Monoid', a)], tfun(tlist(a), a)),
+  fmap: scheme(['f', 'a', 'b'], [pred('Functor', f)], tfun(tfun(a, b), tfun(ap(f, a), ap(f, b)))),
+  foldMap: scheme(['t', 'm', 'a'], [pred('Foldable', t), pred('Monoid', m)], tfun(tfun(a, m), tfun(ap(t, a), m))),
+  leq: scheme(['a'], [pred('PartialOrd', a)], tfun(a, tfun(a, Bool))),
+  join: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
+  meet: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
+  scale: scheme(['a'], [pred('VectorSpace', a)], tfun(Double, tfun(a, a))),
+  mkSum: scheme(['a'], [], tfun(a, newtype('Sum', a))),
+  getSum: scheme(['a'], [], tfun(newtype('Sum', a), a)),
+  mkProduct: scheme(['a'], [], tfun(a, newtype('Product', a))),
+  getProduct: scheme(['a'], [], tfun(newtype('Product', a), a)),
+  mkEndo: scheme(['a'], [], tfun(tfun(a, a), newtype('Endo', a))),
+  appEndo: scheme(['a'], [], tfun(newtype('Endo', a), tfun(a, a))),
 }
 
 /** `[x₁, …, xₙ] :: a → … → a → [a]` for a list node with `n` slots. */

@@ -22,7 +22,7 @@
 //     follows inductive structure)
 //
 // and registers the instances its `deriving` clauses ask for.
-import { classClosure, entails, isClass, withDynamicInstances } from './prelude.js'
+import { classClosure, entails, isClass, productLiftable, withDynamicInstances } from './prelude.js'
 import { constructorArity, pred, scheme, showType, tapp, tcon, tfun, tlist, tvar, wellKinded } from './typeSystem.js'
 
 export class DeclError extends Error {}
@@ -227,14 +227,47 @@ function printDecl(d) {
   return `${d.keyword} ${d.name} = ${ctors.join(' | ')}${derivs.join('')}`
 }
 
-// Classes `deriving` can produce, by strategy. Stock deriving mirrors GHC's
-// standard derivable classes; more (via Generically, anyclass) arrive with
-// the category classes.
+// What each `deriving` strategy can produce, as in GHC:
+// - stock: the standard derivable classes;
+// - via Generically: Semigroup/Monoid fieldwise, for a product (as base's
+//   `Generically` does);
+// - anyclass: the pointwise algebraic structures a product admits — exactly
+//   the classes defined by equations alone (Lawvere theories, whose models
+//   are closed under products; see categoryClasses.js);
+// - newtype: anything the wrapped type has (GeneralizedNewtypeDeriving).
 const STOCK = ['Eq', 'Ord', 'Show']
+const VIA_GENERICALLY = ['Semigroup', 'Monoid']
+const NOT_LIFTABLE = {
+  Field: "a product of fields isn't a field: only non-zero elements have inverses — not an equation, so it doesn't survive products ((1, 0) has no inverse)",
+  Ord: 'a product of total orders is only a partial order — derive PartialOrd/Lattice and compare with leq',
+}
+function whyNotLiftable(cls) {
+  for (const [root, why] of Object.entries(NOT_LIFTABLE)) if (classClosure(cls).includes(root)) return why
+  return null
+}
 
 /** The `{ cls, type }` instances a set of declarations derives (unchecked). */
 function requestedInstances(types) {
-  return Object.values(types).flatMap((d) => d.deriving.flatMap((c) => c.classes.map((cls) => ({ cls, type: d.name, strategy: c.strategy }))))
+  return Object.values(types).flatMap((d) => d.deriving.flatMap((c) => c.classes.map((cls) => ({ cls, type: d.name, strategy: c.strategy, via: c.via }))))
+}
+
+function checkStrategy(r, d) {
+  const where = `deriving ${r.cls} for ${r.type}`
+  const isProduct = d.constructors.length === 1
+  if (r.strategy === 'stock') {
+    if (!STOCK.includes(r.cls)) throw new DeclError(`${where}: stock deriving covers ${STOCK.join(', ')} — try \`deriving anyclass\`, \`deriving newtype\` or \`via Generically ${d.name}\``)
+  } else if (r.strategy === 'via') {
+    if (!(r.via?.con === 'Generically' && r.via.args.length === 1 && r.via.args[0].con === d.name)) throw new DeclError(`${where}: only \`via Generically ${d.name}\` is supported`)
+    if (!VIA_GENERICALLY.includes(r.cls)) throw new DeclError(`${where}: Generically gives ${VIA_GENERICALLY.join(' and ')}`)
+    if (!isProduct) throw new DeclError(`${where}: Generically needs a product (one constructor), not a sum`)
+  } else if (r.strategy === 'anyclass') {
+    const why = whyNotLiftable(r.cls)
+    if (why) throw new DeclError(`${where}: ${why}`)
+    if (!productLiftable.includes(r.cls) || VIA_GENERICALLY.includes(r.cls)) throw new DeclError(`${where}: anyclass deriving covers the pointwise structures ${productLiftable.filter((c) => !VIA_GENERICALLY.includes(c)).join(', ')}${VIA_GENERICALLY.includes(r.cls) ? ` (use via Generically ${d.name})` : ''}`)
+    if (!isProduct) throw new DeclError(`${where}: a pointwise structure needs a product (one constructor), not a sum`)
+  } else if (r.strategy === 'newtype') {
+    if (d.keyword !== 'newtype') throw new DeclError(`${where}: newtype deriving needs a newtype declaration`)
+  }
 }
 
 /**
@@ -263,7 +296,7 @@ export function checkTypes(types, functionLabels = []) {
   const requested = requestedInstances(types)
   for (const r of requested) {
     if (!isClass(r.cls)) throw new DeclError(`deriving ${r.cls} for ${r.type}: no such class`)
-    if (r.strategy !== 'stock' || !STOCK.includes(r.cls)) throw new DeclError(`deriving ${r.cls} for ${r.type}: only stock deriving of ${STOCK.join(', ')} is supported so far`)
+    checkStrategy(r, types[r.type])
   }
   // Judge with all requested instances in scope (allows recursion).
   const instances = derivedInstances(types)
@@ -311,9 +344,9 @@ export function derivedDefinitions(types) {
     const only = d.constructors.length === 1 ? d.constructors[0] : null
     if (only?.record) {
       only.fields.forEach((f, fieldIndex) => {
-        defs.push({ label: f.name, params: [lowerFirst(d.name)], scheme: scheme([], [], tfun(T, f.type)), derived: { op: 'get', type: d.name, fieldIndex, arity: 1 } })
-        defs.push({ label: `set ${f.name}`, params: [f.name, lowerFirst(d.name)], scheme: scheme([], [], tfun(f.type, tfun(T, T))), derived: { op: 'set', type: d.name, fieldIndex, arity: 2 } })
-        defs.push({ label: `over ${f.name}`, params: ['f', lowerFirst(d.name)], scheme: scheme([], [], tfun(tfun(f.type, f.type), tfun(T, T))), derived: { op: 'over', type: d.name, fieldIndex, arity: 2 } })
+        defs.push({ label: f.name, params: [lowerFirst(d.name)], scheme: scheme([], [], tfun(T, f.type)), derived: { op: 'get', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 1 } })
+        defs.push({ label: `set ${f.name}`, params: [f.name, lowerFirst(d.name)], scheme: scheme([], [], tfun(f.type, tfun(T, T))), derived: { op: 'set', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 2 } })
+        defs.push({ label: `over ${f.name}`, params: ['f', lowerFirst(d.name)], scheme: scheme([], [], tfun(tfun(f.type, f.type), tfun(T, T))), derived: { op: 'over', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 2 } })
       })
     }
     defs.push({

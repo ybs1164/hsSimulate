@@ -60,7 +60,7 @@ export function isData(v) {
 }
 
 function show(v) {
-  return isClosure(v) ? `ƒ ${v.callee}` : isData(v) ? v.ctor : String(v)
+  return isClosure(v) ? `ƒ ${v.callee}` : isData(v) ? v.ctor : isMempty(v) ? 'mempty' : String(v)
 }
 
 /**
@@ -70,6 +70,7 @@ function show(v) {
  */
 export function showValue(v, types = {}, asArg = false) {
   if (isClosure(v)) return `ƒ ${v.callee}`
+  if (isMempty(v)) return 'mempty'
   if (typeof v === 'string') return `'${v}'` // a Char
   if (isData(v) && v.type === 'List') {
     const items = []
@@ -101,6 +102,39 @@ function reviveValue(v) {
   return { kind: 'closure', callee: v.callee, args: v.args.map((a) => (a === null ? null : now(reviveValue(a)))) }
 }
 
+// ---- Runtime algebra ------------------------------------------------------
+// The evaluator is untyped, so class methods dispatch on the shape of the
+// values they meet:
+//
+// - Arithmetic, lattice and vector operations work on numbers and lift
+//   pointwise over data values (a record that derives AddGroup adds field by
+//   field — the product of the structures).
+// - A bare number meeting a data value is broadcast along it: the diagonal
+//   ℤ → R × S, which is the (unique) ring map, so `0`/`addZero` and
+//   `1`/`mulOne` already are the zero and one of any product ring.
+// - `mempty` can't be a number (lists, Maybe, Endo have no map from ℤ), so
+//   it is a formal identity, MEMPTY, that `<>` absorbs and that becomes a
+//   concrete value of the right shape whenever it's observed: `[]`,
+//   `Nothing`, `Sum 0`, the identity function, or a record of MEMPTYs.
+export const MEMPTY = Object.freeze({ kind: 'mempty' })
+export const isMempty = (v) => v === MEMPTY || (v !== null && typeof v === 'object' && v.kind === 'mempty')
+
+/** Spread a number along a data value's shape (the diagonal into a product). */
+function broadcast(n, like) {
+  if (!isData(like)) return n
+  return { ...like, args: like.args.map((f) => delay(() => broadcast(n, force(f)))) }
+}
+
+/** MEMPTY made concrete in the shape of `like`. */
+function concreteMempty(like) {
+  if (!isData(like)) throw new EvalError(`mempty has no ${show(like)}-shaped value`)
+  if (like.type === 'List') return nil
+  if (like.type === 'Maybe') return nothing
+  if (like.type === 'Sum') return { ...like, args: [now(0)] }
+  if (like.type === 'Product') return { ...like, args: [now(1)] }
+  return { ...like, args: like.args.map(() => now(MEMPTY)) }
+}
+
 const num = (t) => {
   const v = force(t)
   if (typeof v !== 'number') throw new EvalError(`Expected a number, got ${show(v)}`)
@@ -117,8 +151,13 @@ const bool = (t) => {
  * Returns -1, 0 or 1. (The type checker keeps functions out of here.)
  */
 function compareValues(x, y) {
-  const a = force(x)
-  const b = force(y)
+  let a = force(x)
+  let b = force(y)
+  if (isMempty(a) && isMempty(b)) return 0
+  if (isMempty(a)) a = concreteMempty(b)
+  if (isMempty(b)) b = concreteMempty(a)
+  if (typeof a === 'number' && isData(b)) a = broadcast(a, b)
+  if (typeof b === 'number' && isData(a)) b = broadcast(b, a)
   if ((typeof a === 'number' && typeof b === 'number') || (typeof a === 'string' && typeof b === 'string')) return a < b ? -1 : a > b ? 1 : 0
   if (typeof a === 'boolean' && typeof b === 'boolean') return a === b ? 0 : a ? 1 : -1
   if (isData(a) && isData(b)) {
@@ -162,10 +201,10 @@ export function createEvaluator(registry) {
     isZero: [1, (n) => num(n) === 0],
     ifThenElse: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
 
-    plus: [2, (x, y) => num(x) + num(y)],
-    negate: [1, (x) => -num(x)],
-    minus: [2, (x, y) => num(x) - num(y)],
-    times: [2, (x, y) => num(x) * num(y)],
+    plus: [2, (x, y) => lift2((a, b) => a + b, x, y)],
+    negate: [1, (x) => lift1((a) => -a, x)],
+    minus: [2, (x, y) => lift2((a, b) => a - b, x, y)],
+    times: [2, (x, y) => lift2((a, b) => a * b, x, y)],
     addZero: [0, () => 0],
     mulOne: [0, () => 1],
     divide: [2, (x, y) => num(x) / num(y)],
@@ -223,10 +262,114 @@ export function createEvaluator(registry) {
     }],
     show: [1, (x) => fromJsString(showValue(serializeValue(x), registry.types || {}))],
     listOf: [null, (...xs) => xs.reduceRight((tail, x) => cons(x, now(tail)), nil)], // arity = the node's slot count
+
+    // Category classes (categoryClasses.js).
+    mappend: [2, (x, y) => mappend(x, y)],
+    mempty: [0, () => MEMPTY],
+    mconcat: [1, (xs) => {
+      const go = (t) => {
+        const l = list(t)
+        return l.ctorIndex === 0 ? MEMPTY : mappend(l.args[0], delay(() => go(l.args[1])))
+      }
+      return go(xs)
+    }],
+    fmap: [2, (f, t) => {
+      const v = force(t)
+      if (isData(v) && v.type === 'Maybe') return v.ctorIndex === 0 ? nothing : just(delay(() => applyValue(f, [v.args[0]])))
+      return builtins.map[1](f, now(v))
+    }],
+    foldMap: [2, (f, t) => {
+      const v = force(t)
+      if (isData(v) && v.type === 'Maybe') return v.ctorIndex === 0 ? MEMPTY : applyValue(f, [v.args[0]])
+      const go = (u) => {
+        const l = list(u)
+        return l.ctorIndex === 0 ? MEMPTY : mappend(delay(() => applyValue(f, [l.args[0]])), delay(() => go(l.args[1])))
+      }
+      return go(now(v))
+    }],
+    leq: [2, (x, y) => leq(x, y)],
+    join: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a || b : Math.max(a, b)), x, y)],
+    meet: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a && b : Math.min(a, b)), x, y)],
+    scale: [2, (k, v) => lift1((a) => num(k) * a, v)],
+    mkSum: [1, (x) => ({ kind: 'data', type: 'Sum', ctor: 'Sum', ctorIndex: 0, args: [x] })],
+    getSum: [1, (s) => newtypeField(s, 'Sum', 0)],
+    mkProduct: [1, (x) => ({ kind: 'data', type: 'Product', ctor: 'Product', ctorIndex: 0, args: [x] })],
+    getProduct: [1, (s) => newtypeField(s, 'Product', 1)],
+    mkEndo: [1, (f) => ({ kind: 'data', type: 'Endo', ctor: 'Endo', ctorIndex: 0, args: [f] })],
+    appEndo: [2, (e, x) => {
+      const v = force(e)
+      if (isMempty(v)) return force(x) // mempty :: Endo a is the identity
+      if (!isData(v) || v.type !== 'Endo') throw new EvalError(`Expected an Endo, got ${show(v)}`)
+      return applyValue(v.args[0], [x])
+    }],
+  }
+
+  /** The field of a newtype value; MEMPTY of Sum/Product unwraps to its carrier's identity. */
+  function newtypeField(t, type, identity) {
+    const v = force(t)
+    if (isMempty(v)) return identity
+    if (!isData(v) || v.type !== type) throw new EvalError(`Expected a ${type}, got ${show(v)}`)
+    return force(v.args[0])
+  }
+
+  /** A unary numeric/boolean operation, lifted pointwise over data values. */
+  function lift1(op, x) {
+    const a = force(x)
+    if (isData(a)) return { ...a, args: a.args.map((f) => delay(() => lift1(op, f))) }
+    if (typeof a !== 'number' && typeof a !== 'boolean') throw new EvalError(`Expected a number, got ${show(a)}`)
+    return op(a)
+  }
+
+  /** A binary operation, lifted pointwise over data values; a bare number is broadcast along the other side. */
+  function lift2(op, x, y) {
+    let a = force(x)
+    let b = force(y)
+    if (typeof a === 'number' && isData(b)) a = broadcast(a, b)
+    if (typeof b === 'number' && isData(a)) b = broadcast(b, a)
+    if (isData(a) && isData(b)) {
+      if (a.ctorIndex !== b.ctorIndex) throw new EvalError(`Cannot combine ${a.ctor} with ${b.ctor}`)
+      return { ...a, args: a.args.map((f, i) => delay(() => lift2(op, f, b.args[i]))) }
+    }
+    const ok = (v) => typeof v === 'number' || typeof v === 'boolean'
+    if (!ok(a) || !ok(b)) throw new EvalError(`Expected numbers, got ${show(a)} and ${show(b)}`)
+    return op(a, b)
+  }
+
+  /** The partial order: pointwise on data values (a product of posets). */
+  function leq(x, y) {
+    let a = force(x)
+    let b = force(y)
+    if (typeof a === 'number' && isData(b)) a = broadcast(a, b)
+    if (typeof b === 'number' && isData(a)) b = broadcast(b, a)
+    if (isData(a) && isData(b)) return a.ctorIndex === b.ctorIndex && a.args.every((f, i) => leq(f, b.args[i]))
+    if (typeof a === 'boolean') return !a || b
+    return num(now(a)) <= num(now(b))
+  }
+
+  /** The monoid operation, by the shape of its arguments. MEMPTY is absorbed. */
+  function mappend(x, y) {
+    const a = force(x)
+    if (isMempty(a)) return force(y)
+    if (isData(a) && a.type === 'List') return builtins.append[1](now(a), y) // the free monoid: (++), lazy in y
+    const b = force(y)
+    if (isMempty(b)) return a
+    if (!isData(a) || !isData(b)) throw new EvalError(`No (<>) for ${show(a)}`)
+    if (a.type === 'Maybe') return a.ctorIndex === 0 ? b : b.ctorIndex === 0 ? a : just(delay(() => mappend(a.args[0], b.args[0])))
+    if (a.type === 'Sum') return { ...a, args: [delay(() => lift2((p, q) => p + q, a.args[0], b.args[0]))] }
+    if (a.type === 'Product') return { ...a, args: [delay(() => lift2((p, q) => p * q, a.args[0], b.args[0]))] }
+    if (a.type === 'Endo') {
+      // End(a): (<>) is composition — the protected builtin `compose`.
+      if (registry.nodes.compose?.builtin !== 'compose') throw new EvalError('Endo needs the compose builtin')
+      return { ...a, args: [now({ kind: 'closure', callee: 'compose', args: [a.args[0], b.args[0], null] })] }
+    }
+    // A record deriving Semigroup via Generically: fieldwise.
+    if (a.ctorIndex !== b.ctorIndex) throw new EvalError(`Cannot combine ${a.ctor} with ${b.ctor}`)
+    return { ...a, args: a.args.map((f, i) => delay(() => mappend(f, b.args[i]))) }
   }
 
   function list(t) {
     const v = force(t)
+    if (isMempty(v)) return nil
     if (!isData(v) || v.type !== 'List') throw new EvalError(`Expected a list, got ${show(v)}`)
     return v
   }
@@ -264,6 +407,8 @@ export function createEvaluator(registry) {
   function runDerived(d, args) {
     const record = (t) => {
       const v = force(t)
+      // A broadcast number or MEMPTY standing for a whole record: every field is that same value.
+      if ((typeof v === 'number' || isMempty(v)) && d.fieldCount !== undefined) return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount }, () => now(v)) }
       if (!isData(v) || v.type !== d.type) throw new EvalError(`Expected a ${d.type}, got ${show(v)}`)
       return v
     }

@@ -48,6 +48,7 @@ npm run preview
     - 분기 함수(쌍대짝) `caseEvent :: a → (Double → a) → (Int → a) → Event → a` — `maybe`/`either`/`bool`과 같은 모양
     - `deriving`은 stock `Eq`, `Ord`(사전순), `Show`를 지원하며, GHC처럼 `Ord`는 `Eq`가 필요하고 모든 필드가 그 클래스를 가져야 합니다. 생성자 필드는 하스켈처럼 지연 평가됩니다.
 11. 좌측 `PRELUDE`에는 리스트·Maybe·텍스트 함수가 하스켈 이름 그대로 있습니다: `[ , , ]`(슬롯 수만큼의 리스트, `+`로 추가), `[]`, `(:)`, `foldr`(리스트의 재귀자), `map`, `length`, `(++)`, `(!?)`, `Nothing`, `Just`, `maybe`(Maybe = 1 + a의 쌍대짝), `show`. 리스트는 하스켈처럼 지연 평가되는 유도 타입(`[] | x : xs`)이라 무한 리스트도 필요한 만큼만 계산됩니다. `String = [Char]`이며, `Text` 노드나 슬롯의 `"글자"`·`'c'` 리터럴로 만들 수 있습니다. `Eq a ⇒ Eq [a]`처럼 문맥 있는 인스턴스로 리스트·Maybe의 비교·출력이 타입 검사됩니다.
+12. 카테고리 이론의 대수 구조도 하스켈 클래스 이름 그대로 있습니다(`src/categoryClasses.js`). `Semigroup`/`Monoid`(`(<>)`, `mempty`, `mconcat`) — 리스트는 자유 모노이드, `Endo a`는 합성·항등의 자기사상 모노이드, 한 대상에 구조가 여럿일 때는 `Sum`/`Product`로 고릅니다. `Functor`·`Foldable`(`fmap`, `foldMap` — 자유 모노이드에서 나가는 유일한 준동형), `PartialOrd`·`Lattice`(`leq`, `(\/)`, `(/\)` — 순서 집합은 thin 카테고리), `VectorSpace`(`(*^)`). 곱 타입은 등식만으로 정의되는 구조를 점별로 가질 수 있습니다(Lawvere 이론): `deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)`, `deriving (Semigroup, Monoid) via Generically T`. `Field`나 `Ord`처럼 곱에서 살아남지 않는 구조는 이유와 함께 거부됩니다. 숫자 리터럴은 곱을 따라 대각선으로 퍼지고(ℤ → R×S), `mempty`는 관찰될 때 맞는 모양(`[]`, `Nothing`, `Sum 0`, 항등 함수, 필드별 `mempty`)이 됩니다.
 
 ## 캔버스 조작
 
@@ -74,6 +75,7 @@ npm run preview
 - `src/inferGraph.js`: 캔버스 그래프의 연결(`mounted`/`output.source`)과 인라인 리터럴을 단일화 제약으로 읽어 타입(과 남은 클래스 제약)을 추론하는 패스
 - `src/evaluator.js`: 같은 그래프를 지연 평가하는 실행기(클로저·부분 적용·재귀)
 - `src/literals.js`: 슬롯 인라인 리터럴 파서(타입 패스와 실행기가 공유)
+- `src/categoryClasses.js`: Semigroup/Monoid/PartialOrd/Lattice/VectorSpace/Functor/Foldable 선언과 인스턴스, 곱으로 올라가는 클래스 목록
 - `src/dataTypes.js`: 내장 유도 타입(`[a]`, `Maybe a`, `Char`, `()`)의 인스턴스와 런타임 표현
 - `src/typeDecls.js`: 하스켈 `data`/`newtype` 선언 파서·검사기와, 선언에서 유도되는 생성자·사영·갱신·분기 함수와 `deriving` 인스턴스
 - `src/classEnv.js`: 클래스 환경과 제약 해소기(문맥 있는 인스턴스, entailment, context reduction, 디폴팅)

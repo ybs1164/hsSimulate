@@ -126,6 +126,10 @@ const PRELUDE = [
   ['Lists', [['listOf', '[ , , ]', ['x1', 'x2', 'x3']], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
   ['Text', [['show', 'show', ['x']]]],
+  ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']], ['mkSum', 'Sum', ['x']], ['getSum', 'getSum', ['s']], ['mkProduct', 'Product', ['x']], ['getProduct', 'getProduct', ['p']], ['mkEndo', 'Endo', ['f']], ['appEndo', 'appEndo', ['e', 'x']]]],
+  ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
+  ['Lattice', [['leq', 'leq', ['x', 'y']], ['join', '(\\/)', ['x', 'y']], ['meet', '(/\\)', ['x', 'y']]]],
+  ['VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
 ]
 const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).map(([builtin, label, params]) => [`prelude:${builtin}`, { id: `prelude:${builtin}`, type: 'function', builtin, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#5fa8e8' }]))
 const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] })
@@ -186,7 +190,7 @@ function openTypeDialog(editing = null) {
   const dialog = document.createElement('div')
   dialog.id = 'function-dialog'
   const example = 'data Model = Model { clicks :: Double, perClick :: Double } deriving (Eq, Show)'
-  dialog.innerHTML = `<form class="function-form type-form"><h2>${editing ? `${editing} 수정` : '새 타입 선언'}</h2><label>하스켈 data / newtype 선언<textarea name="source" rows="5" spellcheck="false"></textarea></label><p class="type-error" role="alert"></p><p>곱(레코드)·합(생성자 여럿) 타입을 선언하면 생성자, 필드 getter·<code>set</code>·<code>over</code>, 분기 함수 <code>case타입명</code>이 만들어집니다. <code>deriving</code>은 Eq, Ord, Show를 지원합니다.</p><div>${editing ? '<button type="button" class="danger" data-delete>삭제</button>' : ''}<button type="button" data-cancel>취소</button><button class="tool-button primary">${editing ? '저장' : '선언'}</button></div></form>`
+  dialog.innerHTML = `<form class="function-form type-form"><h2>${editing ? `${editing} 수정` : '새 타입 선언'}</h2><label>하스켈 data / newtype 선언<textarea name="source" rows="5" spellcheck="false"></textarea></label><p class="type-error" role="alert"></p><p>곱(레코드)·합(생성자 여럿) 타입을 선언하면 생성자, 필드 getter·<code>set</code>·<code>over</code>, 분기 함수 <code>case타입명</code>이 만들어집니다. <code>deriving</code>: stock <code>(Eq, Ord, Show)</code> · 곱 타입의 점별 구조 <code>deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)</code> · <code>deriving (Semigroup, Monoid) via Generically T</code> · newtype은 <code>deriving newtype (…)</code>.</p><div>${editing ? '<button type="button" class="danger" data-delete>삭제</button>' : ''}<button type="button" data-cancel>취소</button><button class="tool-button primary">${editing ? '저장' : '선언'}</button></div></form>`
   document.body.append(dialog)
   const form = dialog.querySelector('form')
   const textarea = form.querySelector('textarea')
@@ -210,7 +214,8 @@ function openTypeDialog(editing = null) {
   form.onsubmit = (event) => {
     event.preventDefault()
     try {
-      const labels = Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId).map((n) => n.label) // definitions only — call nodes repeat their callee's name
+      // Definitions only (call nodes repeat their callee's name), plus the Prelude's.
+      const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId), ...Object.values(preludeDefs)].map((n) => n.label)
       applyTypes(declareTypes(types, textarea.value, { replacing: editing, functionLabels: labels }))
     } catch (e) {
       if (!(e instanceof DeclError)) throw e
