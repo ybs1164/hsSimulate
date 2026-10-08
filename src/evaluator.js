@@ -146,6 +146,7 @@ export function concreteMempty(like) {
   if (like.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'None', ctorIndex: 0, args: [] }
   if (like.type === 'Sum') return { ...like, args: [now(0)] }
   if (like.type === 'Product') return { ...like, args: [now(1)] }
+  if (like.type === 'Endo') return { ...like, args: [now({ kind: 'closure', callee: 'identity', args: [null] })] } // End(a)'s identity
   return { ...like, args: like.args.map(() => now(MEMPTY)) }
 }
 
@@ -510,8 +511,10 @@ export function createEvaluator(registry) {
   function runDerived(d, args) {
     const record = (t) => {
       const v = force(t)
-      // A broadcast number or MEMPTY standing for a whole record: every field is that same value.
-      if ((typeof v === 'number' || isMempty(v)) && d.fieldCount !== undefined) return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount }, () => now(v)) }
+      // MEMPTY standing for a value of the type: its identity (`Sum 0`, `Nothing`, a record of MEMPTYs, …).
+      if (isMempty(v)) return concreteMempty({ kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount ?? 0 }, () => now(MEMPTY)) })
+      // A broadcast number standing for a whole record: every field is that same value.
+      if (typeof v === 'number' && d.fieldCount !== undefined) return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount }, () => now(v)) }
       if (!isData(v) || v.type !== d.type) throw new EvalError(`Expected a ${d.type}, got ${show(v)}`)
       return v
     }

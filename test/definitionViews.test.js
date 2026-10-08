@@ -3,9 +3,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDefinitionView, viewIdOf } from '../src/definitionViews.js'
+import { preludeDefs, preludeTypeDefs } from '../src/library.js'
 import { createEvaluator, showValue } from '../src/evaluator.js'
 import { printDefinition } from '../src/haskellPrint.js'
-import { inferGraph } from '../src/inferGraph.js'
+import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { declareTypes, derivedDefinitions } from '../src/typeDecls.js'
 import { showQual } from '../src/typeSystem.js'
 
@@ -83,10 +84,63 @@ test('a view prints as the Haskell definition it is, with the real type', () => 
 })
 
 test('a primitive is shown as its parameters applied to it, with a note', () => {
-  const view = buildDefinitionView(base['prelude:maybe'], (id) => base[id])
-  const def = view.defs[viewIdOf('prelude:maybe')]
-  assert.match(def.note, /eliminator of Maybe/)
-  assert.equal(printDefinition(view.viewId, { ...base, ...view.defs }, view.bodies), 'maybe default f m = maybe default f m')
+  const view = buildDefinitionView(base['prelude:foldr'], (id) => base[id])
+  const def = view.defs[viewIdOf('prelude:foldr')]
+  assert.match(def.note, /recursor of the inductive type \[a\]/)
+  assert.equal(printDefinition(view.viewId, { ...base, ...view.defs }, view.bodies), 'foldr f z xs = foldr f z xs')
+})
+
+// The whole library, as the app holds it.
+const library = { ...base, ...preludeDefs, ...preludeTypeDefs, mappend: base['prelude:mappend'] }
+const libraryPrint = (defId) => {
+  const view = buildDefinitionView(library[defId], (id) => library[id])
+  return printDefinition(view.viewId, { ...library, ...view.defs }, view.bodies)
+}
+
+test('Prelude functions on the Prelude types are written with their constructors and eliminators', () => {
+  assert.equal(libraryPrint('prelude:maybe'), 'maybe default f m = caseMaybe default f m')
+  assert.equal(libraryPrint('prelude:wText'), 'text s = Text s')
+  assert.equal(libraryPrint('prelude:wColor'), 'withColor color widget = Tinted color widget')
+  assert.equal(libraryPrint('prelude:rgb'), 'rgb r g b = RGB r g b')
+  assert.equal(libraryPrint('prelude:getSum'), 'getSum s = caseSum (\\x -> x) s')
+  assert.equal(libraryPrint('prelude:appEndo'), 'appEndo e x = caseEndo ((\\x f -> apply f x) x) e')
+  assert.equal(libraryPrint('prelude:program'), 'program initial view handle step = Program initial view handle step 10 604800 (\\model -> mempty)')
+  assert.equal(libraryPrint('prelude:setStepsPerSecond'), 'set stepsPerSecond n program = caseProgram ((\\new initial view handle step stepsPerSecond maxOffline subscriptions -> Program initial view handle step new maxOffline subscriptions) n) program')
+  // the types check: each graph has the type the builtin is given
+  for (const id of ['prelude:maybe', 'prelude:wButton', 'prelude:program', 'prelude:setSubscriptions', 'prelude:appEndo', 'prelude:getProduct', 'prelude:pTranslate', 'prelude:every', 'prelude:onKey']) {
+    const view = buildDefinitionView(library[id], (x) => library[x])
+    const pass = inferGraph({ ...library, ...view.defs }, view.bodies, { v: view.defs[view.viewId] })
+    const declared = view.defs[view.viewId].scheme
+    assert.equal(showQual(pass.perNode.get('v').preds, valueTypeOfEntry(pass.perNode.get('v'))), showQual(declared.preds, declared.type), id)
+  }
+})
+
+test('…and mean what the builtins do', () => {
+  const run = (defId, args, extra = {}) => {
+    const view = buildDefinitionView(library[defId], (id) => library[id])
+    const ev = createEvaluator({ nodes: { ...library, ...view.defs }, functionBodies: view.bodies })
+    const call = (sourceFunctionId) => ({ ...extra, call: { id: 'call', type: 'function', sourceFunctionId, params: args.map((a) => (typeof a === 'string' ? a : '')), mounted: args.map((a) => (typeof a === 'string' ? null : a.id)) } })
+    return [ev.run(call(view.viewId), 'call'), ev.run(call(defId), 'call')]
+  }
+  const same = (defId, args, extra) => assert.deepEqual(...run(defId, args, extra).map((v) => showValue(v)), defId)
+  same('prelude:wText', ['"hi"'])
+  same('prelude:wButton', ['"go"', '3'])
+  same('prelude:pTranslate', ['1', '2', { id: 'c' }], { c: { id: 'c', type: 'function', sourceFunctionId: 'prelude:pCircle', params: ['5'], mounted: [null] } })
+  same('prelude:rgb', ['1', '0.5', '0'])
+  same('prelude:every', ['2', '7'])
+  const sum = { id: 's', type: 'function', sourceFunctionId: 'prelude:mkSum', params: ['4'], mounted: [null] }
+  same('prelude:getSum', [{ id: 's' }], { s: sum })
+  const mempty = { id: 'e', type: 'function', sourceFunctionId: 'prelude:mempty', params: [], mounted: [] }
+  same('prelude:getSum', [{ id: 'e' }], { e: mempty }) // getSum mempty = 0
+  same('prelude:appEndo', [{ id: 'e' }, '5'], { e: mempty }) // appEndo mempty = id
+  const just = { id: 'j', type: 'function', sourceFunctionId: 'prelude:just', params: ['4'], mounted: [null] }
+  const inc = { id: 'inc', type: 'function', sourceFunctionId: 'plus', params: ['1', ''], mounted: [null, null] }
+  same('prelude:maybe', ['0', { id: 'inc' }, { id: 'j' }], { j: just, inc })
+  // a Program's settings: the record update changes one field and keeps the rest
+  const prog = { id: 'p', type: 'function', sourceFunctionId: 'prelude:program', params: ['0', '1', '2', '3'], mounted: [null, null, null, null] }
+  const [viewed, builtin] = run('prelude:setStepsPerSecond', ['30', { id: 'p' }], { p: prog })
+  assert.deepEqual(viewed.args.slice(4, 6), [30, 604800])
+  assert.deepEqual(builtin.args.slice(4, 6), [30, 604800])
 })
 
 test('projections, updates and the recursor of a declared type are written with its eliminator', () => {

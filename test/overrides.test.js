@@ -6,7 +6,7 @@ import { buildClickCounter } from '../src/examples/clickCounter.js'
 import { buildDefinitionView, isEditableView, overrideFromView } from '../src/definitionViews.js'
 import { createEvaluator } from '../src/evaluator.js'
 import { inferGraph } from '../src/inferGraph.js'
-import { preludeDefs } from '../src/library.js'
+import { preludeDefs, preludeTypeDefs } from '../src/library.js'
 import { createGame } from '../src/runtime.js'
 import { derivedDefinitions } from '../src/typeDecls.js'
 import { drawSignature } from '../src/typeGraph.js'
@@ -26,7 +26,7 @@ const BUILTINS = {
 /** The click counter as the app holds it: every definition, and its bodies (overrides go in there). */
 function clickCounter() {
   const project = buildClickCounter()
-  const definitions = { ...BUILTINS, ...preludeDefs, ...Object.fromEntries(derivedDefinitions(project.types).map((d) => [d.id, d])), ...project.nodes }
+  const definitions = { ...BUILTINS, ...preludeDefs, ...preludeTypeDefs, ...Object.fromEntries(derivedDefinitions(project.types).map((d) => [d.id, d])), ...project.nodes }
   return { project, definitions, bodies: project.functionBodies }
 }
 
@@ -57,7 +57,7 @@ function texts({ definitions, bodies, project }, clicks = 3) {
 test('an edited definition, left as it was, plays exactly like the builtin', () => {
   const before = texts(clickCounter())
   const app = clickCounter()
-  for (const id of ['prelude:append', 'type:Model:over wallet', 'type:Model:perClick', 'type:Wallet:clicks']) edit(app, id)
+  for (const id of ['prelude:append', 'type:Model:over wallet', 'type:Model:perClick', 'type:Wallet:clicks', 'prelude:wText', 'prelude:wButton', 'prelude:program', 'prelude:setStepsPerSecond', 'prelude:setSubscriptions', 'prelude:onKey']) edit(app, id)
   assert.ok(Object.keys(app.definitions).some((id) => id.startsWith('type:Model:over wallet/λ')), 'its λs come along, renamed')
   assert.deepEqual(texts(app), before)
   assert.ok(before.includes('Clicks: 3'))
@@ -89,7 +89,7 @@ test('an edited definition keeps its type, and is checked against it', () => {
 
 test('primitives and the protected builtins have nothing to edit', () => {
   const { definitions } = clickCounter()
-  for (const id of ['type:Wallet:Wallet', 'type:Msg:caseMsg', 'prelude:foldr', 'compose', 'identity', 'plus']) {
+  for (const id of ['type:Wallet:Wallet', 'type:Msg:caseMsg', 'prelude:foldr', 'prelude:just', 'type:Widget:Text', 'type:Program:caseProgram', 'prelude:show', 'compose', 'identity', 'plus']) {
     const view = buildDefinitionView(definitions[id], (x) => definitions[x])
     assert.equal(isEditableView(view.viewId, view.defs), false, id)
   }

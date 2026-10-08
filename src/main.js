@@ -9,7 +9,7 @@ import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, identifier, printDefinitionTokens, printLambdaText } from './haskellPrint.js'
 import { parseLiteral } from './literals.js'
-import { PRELUDE, preludeDefs } from './library.js'
+import { PRELUDE, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
 import { buildDefinitionView, isEditableView, overrideFromView, viewIdOf } from './definitionViews.js'
 import { drawSignature, makeTypeNode, readSignature, typeNodeLabel, typeSlotName } from './typeGraph.js'
 import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
@@ -147,7 +147,7 @@ const derivedDefs = {}
 // uses; they're never saved.
 const viewDefs = {}
 const viewBodies = {}
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] ?? viewDefs[id] })
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] ?? viewDefs[id] })
 const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
 function applyTypes(next) {
   types = next
@@ -304,6 +304,9 @@ function renderPreludeLibrary() {
     const sch = builtin === 'listOf' ? listOfScheme(3) : builtinSchemes[builtin]
     return `<button class="derived-item${isOverride(def.id) ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${isOverride(def.id) ? ' · edited definition' : ''}"><b>${def.label}${isOverride(def.id) ? ' ✎' : ''}</b><small>${showQual(sch.preds, sch.type)}</small></button>`
   }).join('')}`).join('')
+  // The Prelude's data types (library.js): their constructors and eliminators.
+  const byType = Object.groupBy(Object.values(preludeTypeDefs), (def) => def.derived.type)
+  document.querySelector('#prelude-library').insertAdjacentHTML('beforeend', Object.values(preludeTypes).map((d) => `<div class="prelude-group" title="${escapeAttr(d.source)}">${d.keyword} ${escapeAttr([d.name, ...d.params].join(' '))}</div>${byType[d.name].map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}`).join(''))
   document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
   applySearch()
 }
@@ -2479,7 +2482,7 @@ document.querySelector('#export-game').onclick = () => {
   const info = entryId && nodes[entryId] ? programInfo(entryId) : null
   if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
   const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
-  const data = { title, definitions: { ...preludeDefs, ...derivedDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok }
+  const data = { title, definitions: { ...preludeDefs, ...preludeTypeDefs, ...derivedDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok }
   const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
   const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
   link.click()

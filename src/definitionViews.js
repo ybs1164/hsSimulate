@@ -44,21 +44,30 @@ const PRIMITIVE_NOTES = {
   isNaN: METHOD('IEEEFloat'), geq: METHOD('Ord'), eq: METHOD('Eq'),
   nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
-  nothing: CONSTRUCTOR('Maybe a'), just: CONSTRUCTOR('Maybe a'), maybe: 'primitive · the eliminator of Maybe a (a copairing)',
+  nothing: CONSTRUCTOR('Maybe a'), just: CONSTRUCTOR('Maybe a'),
   pair: 'primitive · the pairing of the product (a, b)', fst: 'primitive · the first projection π₁ of the product (a, b)', snd: 'primitive · the second projection π₂ of the product (a, b)',
   mappend: METHOD('Semigroup'), mempty: METHOD('Monoid'), fmap: METHOD('Functor'), foldMap: METHOD('Foldable'),
   leq: METHOD('PartialOrd'), join: METHOD('Lattice'), meet: METHOD('Lattice'), scale: METHOD('VectorSpace'),
-  mkSum: CONSTRUCTOR('Sum a'), getSum: 'primitive · the field of the newtype Sum a', mkProduct: CONSTRUCTOR('Product a'), getProduct: 'primitive · the field of the newtype Product a',
-  mkEndo: CONSTRUCTOR('Endo a'), appEndo: 'primitive · the field of the newtype Endo a, applied',
-  program: CONSTRUCTOR('Program m e'), setStepsPerSecond: 'primitive · a record update of Program m e', setMaxOffline: 'primitive · a record update of Program m e', setSubscriptions: 'primitive · a record update of Program m e',
-  every: CONSTRUCTOR('Sub e'), onKey: CONSTRUCTOR('Sub e'),
-  wText: CONSTRUCTOR('Widget e'), wButton: CONSTRUCTOR('Widget e'), wColumn: CONSTRUCTOR('Widget e'), wRow: CONSTRUCTOR('Widget e'), wProgress: CONSTRUCTOR('Widget e'), wHeading: CONSTRUCTOR('Widget e'), wSpacer: CONSTRUCTOR('Widget e'), wColor: CONSTRUCTOR('Widget e'), wDrawing: CONSTRUCTOR('Widget e'),
-  pCircle: CONSTRUCTOR('Picture'), pCircleSolid: CONSTRUCTOR('Picture'), pRectangleSolid: CONSTRUCTOR('Picture'), pTranslate: CONSTRUCTOR('Picture'), pColor: CONSTRUCTOR('Picture'), rgb: CONSTRUCTOR('Color'),
+  mkSum: CONSTRUCTOR('Sum a'), mkProduct: CONSTRUCTOR('Product a'), mkEndo: CONSTRUCTOR('Endo a'),
+  show: 'primitive · rendering a value as text (Show)', showFFloat: 'primitive · decimal rendering of a floating-point number', showCompact: 'primitive · compact rendering of a number (1.2K, 3.4M)',
+  mkStdGen: 'primitive · a random generator from a seed', randomR: 'primitive · a uniform random number in a range, and the next generator', randomRInt: 'primitive · a uniform random integer in a range, and the next generator',
 }
 
+// A Prelude function that is a constructor of a Prelude type under another
+// name (`text s = Text s`, a smart constructor), or a record update of a
+// Program written with its eliminator (src/library.js declares the types).
+const viaConstructor = (type, ctor) => (g, n) => g.call(`type:${type}:${ctor}`, Array.from({ length: n }, (_, i) => g.param(i)))
+const PROGRAM_FIELDS = ['initial', 'view', 'handle', 'step', 'stepsPerSecond', 'maxOffline', 'subscriptions']
+// set field new p = caseProgram (\new initial view … -> Program initial … new …) p
+const setProgramField = (index) => (g) => g.call('type:Program:caseProgram', [
+  g.lambda(['new', ...PROGRAM_FIELDS], (l) => l.call('type:Program:Program', PROGRAM_FIELDS.map((_, i) => l.param(i === index ? 0 : i + 1))), [g.param(0)]),
+  g.param(1),
+])
+// getSum s = caseSum (\x -> x) s
+const unwrap = (type) => (g) => g.call(`type:${type}:case${type}`, [g.lambda(['x'], (l) => l.param(0)), g.param(0)])
+const COLOURS = { red: ['1', '0', '0'], green: ['0', '0.7', '0'], blue: ['0', '0', '1'], yellow: ['1', '0.85', '0'], black: ['0', '0', '0'], white: ['1', '1', '1'] }
 // The functions written as graphs, by builtin name. Each gets a builder
 // (see `graph` below) and returns the node feeding Output.
-const COLOURS = { red: ['1', '0', '0'], green: ['0', '0.7', '0'], blue: ['0', '0', '1'], yellow: ['1', '0.85', '0'], black: ['0', '0', '0'], white: ['1', '1', '1'] }
 const GRAPHS = {
   // [x₁, …, xₙ] = x₁ : … : xₙ : [] — syntax for the constructors of [a]
   listOf: (g, n) => Array.from({ length: n }, (_, i) => i).reduceRight((tail, i) => g.call('prelude:cons', [g.param(i), tail]), g.call('prelude:nil', [])),
@@ -87,6 +96,22 @@ const GRAPHS = {
     ]),
     g.param(1),
   ]),
+  maybe: (g) => g.call('type:Maybe:caseMaybe', [g.param(0), g.param(1), g.param(2)]),
+  getSum: unwrap('Sum'),
+  getProduct: unwrap('Product'),
+  // appEndo e x = caseEndo (\x f -> apply f x) e
+  appEndo: (g) => g.call('type:Endo:caseEndo', [g.lambda(['x', 'f'], (l) => l.call('apply', [l.param(1), l.param(0)]), [g.param(1)]), g.param(0)]),
+  // program initial view handle step = Program initial view handle step 10 604800 (\model -> mempty)
+  program: (g) => g.call('type:Program:Program', [g.param(0), g.param(1), g.param(2), g.param(3), { lit: '10' }, { lit: '604800' }, g.lambda(['model'], (l) => l.call('prelude:mempty', []))]),
+  setStepsPerSecond: setProgramField(4),
+  setMaxOffline: setProgramField(5),
+  setSubscriptions: setProgramField(6),
+  every: viaConstructor('Sub', 'Every'),
+  onKey: viaConstructor('Sub', 'OnKey'),
+  wText: viaConstructor('Widget', 'Text'), wButton: viaConstructor('Widget', 'Button'), wColumn: viaConstructor('Widget', 'Column'), wRow: viaConstructor('Widget', 'Row'),
+  wProgress: viaConstructor('Widget', 'Progress'), wHeading: viaConstructor('Widget', 'Heading'), wSpacer: viaConstructor('Widget', 'Spacer'), wColor: viaConstructor('Widget', 'Tinted'), wDrawing: viaConstructor('Widget', 'Drawing'),
+  pCircle: viaConstructor('Picture', 'Circle'), pCircleSolid: viaConstructor('Picture', 'CircleSolid'), pRectangleSolid: viaConstructor('Picture', 'RectangleSolid'), pTranslate: viaConstructor('Picture', 'Translate'), pColor: viaConstructor('Picture', 'Color'),
+  rgb: viaConstructor('Color', 'RGB'),
   ...Object.fromEntries(Object.entries(COLOURS).map(([name, rgb]) => [name, (g) => g.call('prelude:rgb', rgb.map((lit) => ({ lit })))])),
 }
 
