@@ -126,7 +126,7 @@ function broadcast(n, like) {
 }
 
 /** MEMPTY made concrete in the shape of `like`. */
-function concreteMempty(like) {
+export function concreteMempty(like) {
   if (!isData(like)) throw new EvalError(`mempty has no ${show(like)}-shaped value`)
   if (like.type === 'List') return nil
   if (like.type === 'Maybe') return nothing
@@ -514,15 +514,28 @@ export function createEvaluator(registry) {
   }
 
   return {
-    /** Evaluate node `nodeId` of `graph` to JSON-safe data: a number, a boolean, or a closure. */
+    /** Evaluate node `nodeId` of `graph` to JSON-safe data: a number, a boolean, a data value, or a closure. */
     run(graph, nodeId) {
-      steps = 0
-      try {
-        return serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map() }))
-      } catch (e) {
-        if (e instanceof RangeError) throw new EvalError('Recursion too deep')
-        throw e
-      }
+      return guarded(() => serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map() })))
     },
+    /** Apply builtin `name` (e.g. 'mappend', 'plus') to already-built values — used by the law checker. */
+    invokeBuiltin(name, values) {
+      if (!builtins[name]) throw new EvalError(`Unknown builtin: ${name}`)
+      return guarded(() => serializeValue(builtins[name][1](...values.map((v) => now(reviveValue(v))))))
+    },
+    /** Apply any function value (e.g. a closure over a custom function) to values. */
+    apply(fn, values) {
+      return guarded(() => serializeValue(applyValue(now(reviveValue(fn)), values.map((v) => now(reviveValue(v))))))
+    },
+  }
+
+  function guarded(fn) {
+    steps = 0
+    try {
+      return fn()
+    } catch (e) {
+      if (e instanceof RangeError) throw new EvalError('Recursion too deep')
+      throw e
+    }
   }
 }

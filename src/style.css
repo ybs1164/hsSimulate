@@ -228,3 +228,13 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .type-error{color:#c0335e;font:11px/1.5 'DM Mono';min-height:1em;white-space:pre-wrap}
 .type-form .danger{color:#c0335e;margin-right:auto}
 .prelude-group{font:600 9px 'DM Mono';letter-spacing:1px;color:var(--muted-2);margin:8px 0 2px 8px;text-transform:uppercase}
+.law-report{margin:6px 0 10px}
+.law-report label{font:600 9px 'DM Mono';letter-spacing:1.4px;color:var(--muted)}
+.law-report ul{list-style:none;padding:0;margin:6px 0 0;max-height:180px;overflow:auto}
+.law{font:10px/1.6 'DM Mono';color:var(--muted)}
+.law.ok{color:#1f8f74}
+.law.bad{color:#c0335e}
+.law em{font-style:normal;color:var(--ink)}
+.law-row{display:flex;gap:8px;align-items:baseline;margin-bottom:6px;flex-wrap:wrap}
+.law-check{border:1.5px solid var(--line);border-radius:var(--radius-full);background:var(--panel);padding:3px 10px;font:10px 'DM Mono';color:var(--muted);cursor:pointer}
+.law-check:hover{background:var(--accent-soft);color:var(--accent-ink)}

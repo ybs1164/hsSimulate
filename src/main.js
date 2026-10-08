@@ -5,6 +5,7 @@ import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances } from './prelude.js'
 import { createEvaluator, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from './typeDecls.js'
+import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 
 const app = document.querySelector('#app')
@@ -183,6 +184,18 @@ function renderTypeLibrary() {
   typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeDialog(item.dataset.typeName) })
   typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
 }
+// The laws of every algebraic instance a declared type has, checked on
+// samples by actually running them (src/laws.js).
+function lawReport(typeName) {
+  const classes = lawfulClassesOf(tcon(typeName))
+  if (!classes.length) return ''
+  const rows = classes.flatMap((cls) => {
+    const { results, skipped } = checkClassLaws(cls, tcon(typeName), { ev: evaluator, types })
+    if (skipped) return [`<li class="law skipped">${cls}: ${escapeAttr(skipped)}</li>`]
+    return results.map((r) => `<li class="law ${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓' : '✗'} <b>${r.cls}</b> ${escapeAttr(r.law)}${r.ok ? '' : ` — <em>${escapeAttr(r.counterexample)}</em>`}</li>`)
+  })
+  return `<div class="law-report"><label>LAWS (checked on samples)</label><ul>${rows.join('')}</ul></div>`
+}
 // Declare or edit a type in Haskell syntax. The whole set of declarations is
 // re-checked on save; errors are shown in the dialog, GHC-style.
 function openTypeDialog(editing = null) {
@@ -190,7 +203,7 @@ function openTypeDialog(editing = null) {
   const dialog = document.createElement('div')
   dialog.id = 'function-dialog'
   const example = 'data Model = Model { clicks :: Double, perClick :: Double } deriving (Eq, Show)'
-  dialog.innerHTML = `<form class="function-form type-form"><h2>${editing ? `${editing} 수정` : '새 타입 선언'}</h2><label>하스켈 data / newtype 선언<textarea name="source" rows="5" spellcheck="false"></textarea></label><p class="type-error" role="alert"></p><p>곱(레코드)·합(생성자 여럿) 타입을 선언하면 생성자, 필드 getter·<code>set</code>·<code>over</code>, 분기 함수 <code>case타입명</code>이 만들어집니다. <code>deriving</code>: stock <code>(Eq, Ord, Show)</code> · 곱 타입의 점별 구조 <code>deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)</code> · <code>deriving (Semigroup, Monoid) via Generically T</code> · newtype은 <code>deriving newtype (…)</code>.</p><div>${editing ? '<button type="button" class="danger" data-delete>삭제</button>' : ''}<button type="button" data-cancel>취소</button><button class="tool-button primary">${editing ? '저장' : '선언'}</button></div></form>`
+  dialog.innerHTML = `<form class="function-form type-form"><h2>${editing ? `${editing} 수정` : '새 타입 선언'}</h2><label>하스켈 data / newtype 선언<textarea name="source" rows="5" spellcheck="false"></textarea></label><p class="type-error" role="alert"></p>${editing ? lawReport(editing) : ''}<p>곱(레코드)·합(생성자 여럿) 타입을 선언하면 생성자, 필드 getter·<code>set</code>·<code>over</code>, 분기 함수 <code>case타입명</code>이 만들어집니다. <code>deriving</code>: stock <code>(Eq, Ord, Show)</code> · 곱 타입의 점별 구조 <code>deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)</code> · <code>deriving (Semigroup, Monoid) via Generically T</code> · newtype은 <code>deriving newtype (…)</code>.</p><div>${editing ? '<button type="button" class="danger" data-delete>삭제</button>' : ''}<button type="button" data-cancel>취소</button><button class="tool-button primary">${editing ? '저장' : '선언'}</button></div></form>`
   document.body.append(dialog)
   const form = dialog.querySelector('form')
   const textarea = form.querySelector('textarea')
@@ -831,6 +844,38 @@ function deleteBlocker(n) {
   }
   return null
 }
+// Laws a custom function can be checked against: a monoid homomorphism (e.g.
+// production :: Owned → Wallet), a monoid action (tick :: Double → Model →
+// Model — then offline progress is one step), or inflationary on a
+// partial order (achievements never go backwards).
+const lawResults = new Map() // function id -> { [law]: result }
+function functionLawsPanel(n) {
+  const results = lawResults.get(n.id) || {}
+  const rows = FUNCTION_LAWS.map((law) => {
+    const r = results[law]
+    const status = !r ? '' : r.ok ? `<span class="law ok">✓ ${escapeAttr(r.law)}</span>` : `<span class="law bad">✗ ${escapeAttr(r.law)} — <em>${escapeAttr(r.counterexample)}</em></span>`
+    return `<div class="law-row"><button class="law-check" data-law="${law}">${law}</button>${status}</div>`
+  })
+  return `<div class="property"><label>LAWS</label>${rows.join('')}</div>`
+}
+function runFunctionLaw(n, law) {
+  const entry = typePass(nodes).perNode.get(n.id)
+  const arity = Object.values(functionBodies[n.id] || {}).filter((m) => m.type === 'parameter').length
+  let fnType = entry?.paramTypes ? entry.paramTypes.reduceRight((acc, t) => tfun(t, acc), entry.resultType) : null
+  // Samples need concrete types: default each type variable the way GHC
+  // resolves an ambiguous one (Semiring a → Integer, Field a → Double).
+  const unresolved = []
+  if (fnType) {
+    const defaults = new Map()
+    ftv(fnType).forEach((v) => { const d = pickDefault(entry.preds || [], v); if (d) defaults.set(v, tcon(d)); else unresolved.push(v) })
+    fnType = applySubst(defaults, fnType)
+  }
+  const result = !fnType ? { law, ok: false, counterexample: 'no type' }
+    : unresolved.length ? { law, ok: false, counterexample: `${showQual(entry.preds || [], fnType)} is polymorphic — use it at a concrete type to check its laws` }
+    : checkFunctionLaw(law, { kind: 'closure', callee: n.id, args: Array(arity).fill(null) }, fnType, { ev: evaluator, types })
+  lawResults.set(n.id, { ...(lawResults.get(n.id) || {}), [law]: result })
+  updateInspector()
+}
 function useAgainButton(n) {
   return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
 }
@@ -868,7 +913,7 @@ function updateInspector() {
   inspector.innerHTML = n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
@@ -876,6 +921,9 @@ function updateInspector() {
   if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
   const disconnectOutput = document.querySelector('#disconnect-output')
   if (disconnectOutput) disconnectOutput.onclick = () => { const source = activeNodes()[n.source]; if (source) source.connected = false; n.source = null; n.value = 'open'; updateInspector(); draw() }
+  document.querySelectorAll('.law-check').forEach((button) => { button.onclick = () => runFunctionLaw(n, button.dataset.law) })
+  const openBody = document.querySelector('#open-body')
+  if (openBody) openBody.onclick = () => enterFunction(n.sourceFunctionId || n.id)
   const useAgainNode = document.querySelector('#use-again')
   if (useAgainNode) useAgainNode.onclick = () => useAgain(n)
   const deleteNodeButton = document.querySelector('#delete-node')
@@ -1107,8 +1155,13 @@ canvas.addEventListener('click', (event) => {
     executeFunction(fn)
     return
   }
+})
+// A single click only selects (so the inspector shows the function);
+// double-clicking a custom function — its definition or a call to it — on
+// `main` opens its body, as does the inspector's "Open body".
+canvas.addEventListener('dblclick', (event) => {
+  const p = canvasPoint(event)
   const selected = Object.values(activeNodes()).find(n => n.type === 'function' && !n.mountedTo && pointInFunctionBlock(n, p.x, p.y))
-  // Clicking a custom function (its definition or a call to it) on `main` opens its body.
   const definitionId = selected && (selected.sourceFunctionId || selected.id)
   if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
 })
