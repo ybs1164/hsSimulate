@@ -19,7 +19,7 @@
 //   whatever's left free, then let each call site instantiate it fresh.
 import { applySubst, freshVar, ftv, generalize, instantiate, pred, tcon, tfun, unify, scheme } from './typeSystem.js'
 import { builtinSchemes } from './builtinSchemes.js'
-import { reduce } from './numericClasses.js'
+import { literalClass, reduce } from './numericClasses.js'
 
 const Int = tcon('Int')
 const Bool = tcon('Bool')
@@ -75,7 +75,7 @@ function inferCustomFunctionScheme(body, ctx) {
   // any nested customSchemeOf call for another function fully pushes and
   // splices its own slice before this one takes its end-snapshot), resolve
   // them against the current substitution, and reduce — a param wired into
-  // `plus` keeps its `Num` obligation here; one wired into `isZero` doesn't
+  // `plus` keeps its `AddSemigroup` obligation here; one wired into `isZero` doesn't
   // (Int already satisfies it, so reduce discharges it). Fall back to the
   // unreduced set defensively rather than let a broken body kill the pass.
   const own = ctx.preds.splice(predsStart).map((p) => pred(p.cls, applySubst(ctx.subst, p.type)))
@@ -101,17 +101,17 @@ function resolveNodeType(id, graph, ctx, memo) {
   }
   if (node.type === 'number') {
     // A genuine type annotation (like Haskell's `5 :: Double`) resolves
-    // outright, no constraint needed. Otherwise this is a numeric literal:
-    // `Num a => a` for a plain literal, or `Fractional a => a` if it has a
-    // decimal point (matches how a literal with a `.` desugars via
-    // fromRational instead of fromInteger).
+    // outright, no constraint needed. Otherwise this is a numeric literal
+    // carrying only the structure its text needs: `Semiring a => a` for a
+    // non-negative integer, `Ring a => a` for a negative one, `Field a => a`
+    // for a decimal (see literalClass).
     if (node.annotation) {
       const entry = { kind: 'value', valueType: tcon(node.annotation) }
       memo.set(id, entry)
       return entry
     }
     const v = freshVar()
-    ctx.preds.push(pred(/\./.test(node.value ?? '') ? 'Fractional' : 'Num', v))
+    ctx.preds.push(pred(literalClass(node.value ?? ''), v))
     const entry = { kind: 'value', valueType: v }
     memo.set(id, entry)
     return entry

@@ -1,47 +1,113 @@
-// The numeric type-class hierarchy: Num, Real, Integral, Fractional,
-// Floating, RealFrac, RealFloat, plus the constraint-solving machinery
-// (predicate entailment, context reduction, defaulting) needed to actually
-// type-check code that uses them.
+// The numeric type-class hierarchy, rebuilt along group-theoretic lines
+// (CLAUDE.md: "숫자 타입클래스 계층은 군론을 따른다"), plus the
+// constraint-solving machinery (predicate entailment, context reduction,
+// defaulting) needed to actually type-check code that uses it.
 //
-// Ported from Mark P. Jones & Simon Peyton Jones, "Typing Haskell in
-// Haskell" (https://web.cecs.pdx.edu/~mpj/thih/TypingHaskellInHaskell.html):
+// The solver is ported from Mark P. Jones & Simon Peyton Jones, "Typing
+// Haskell in Haskell" (https://web.cecs.pdx.edu/~mpj/thih/TypingHaskellInHaskell.html):
 // bySuper/byInst/entail, toHnf/toHnfs/simplify/reduce (context reduction),
-// and candidates/withDefaults (defaulting). Class definitions and instances
-// per the Haskell 2010 Report, ch. 6
-// (https://www.haskell.org/onlinereport/haskell2010/haskellch6.html).
+// and candidates/withDefaults (defaulting).
 //
-// Simplification versus the real Haskell Report (documented, not an
-// oversight): the Report's actual superclasses also require Eq/Ord/Enum/Show
-// (`Real` needs (Num, Ord)`, `Integral` needs `(Real, Enum)`), but this app
-// doesn't model Eq/Ord/Enum/Show anywhere at all, so those edges are simply
-// dropped — `Real`'s only modeled superclass is `Num`, `Integral`'s is only
-// `Real`. The other four classes' superclasses (Fractional/Floating/
-// RealFrac/RealFloat) already don't involve Eq/Ord/Enum/Show in the Report
-// either, so they're modeled exactly as specified.
+// The class hierarchy is NOT the Haskell Report's Num/Real/Integral/... tower.
+// A number type carries two independent algebraic structures (+ and *), so
+// each gets its own single-parameter chain, in the style of numeric-prelude's
+// `Algebra.*` modules:
+//
+//   AddSemigroup (+) → AddMonoid → AddCommutativeMonoid ─┐
+//                         └→ AddGroup (negate, -) → AddAbelianGroup ─┐
+//   MulSemigroup (*) → MulMonoid ─┐                    │              │
+//                                 └──→ Semiring ←──────┘              │
+//                                         └──→ Ring ←─────────────────┘
+//   Ring (+ Ord) → OrderedRing → EuclideanRing     (div/mod, toInteger)
+//   Ring → Field                                    (/, recip)
+//   OrderedRing + Field → OrderedField              (round, floor: Archimedean)
+//   Field → Transcendental                          (sqrt, exp — analysis, not algebra)
+//   OrderedField + Transcendental → IEEEFloat       (isNaN)
+//
+// Rough correspondence to the Haskell Report classes this replaces:
+// Num→Ring, Real→OrderedRing, Integral→EuclideanRing, Fractional→Field,
+// Floating→Transcendental, RealFrac→OrderedField, RealFloat→IEEEFloat.
+//
+// Documented simplifications: EuclideanRing sits under OrderedRing (as
+// Haskell's Integral sits under Real) even though a Euclidean domain needs no
+// order; Int is modeled as ℤ (its 64-bit overflow is outside the model) and
+// Float/Double as fields although IEEE arithmetic is only approximately
+// associative; Transcendental is an analytic extension, not a
+// group-theoretic structure. Eq/Ord/Show are auxiliary (order theory /
+// display), not part of the algebraic tower, and don't count as numeric for
+// defaulting.
 import { pred } from './typeSystem.js'
 
-/** Direct superclass edges (this app's simplified subset — see file header). */
+/** Direct superclass edges. */
 const superclasses = {
-  Num: [],
-  Real: ['Num'],
-  Integral: ['Real'],
-  Fractional: ['Num'],
-  Floating: ['Fractional'],
-  RealFrac: ['Real', 'Fractional'],
-  RealFloat: ['RealFrac', 'Floating'],
+  AddSemigroup: [],
+  AddMonoid: ['AddSemigroup'],
+  AddCommutativeMonoid: ['AddMonoid'],
+  AddGroup: ['AddMonoid'],
+  AddAbelianGroup: ['AddGroup', 'AddCommutativeMonoid'],
+  MulSemigroup: [],
+  MulMonoid: ['MulSemigroup'],
+  Semiring: ['AddCommutativeMonoid', 'MulMonoid'],
+  Ring: ['Semiring', 'AddAbelianGroup'],
+  OrderedRing: ['Ring', 'Ord'],
+  EuclideanRing: ['OrderedRing'],
+  Field: ['Ring'],
+  OrderedField: ['OrderedRing', 'Field'],
+  Transcendental: ['Field'],
+  IEEEFloat: ['OrderedField', 'Transcendental'],
+  Eq: [],
+  Ord: ['Eq'],
+  Show: [],
 }
 
-/** Which classes each concrete numeric type instantiates. */
-const instances = {
-  Int: ['Num', 'Real', 'Integral'],
-  Integer: ['Num', 'Real', 'Integral'],
-  Word: ['Num', 'Real', 'Integral'],
-  Float: ['Num', 'Real', 'Fractional', 'Floating', 'RealFrac', 'RealFloat'],
-  Double: ['Num', 'Real', 'Fractional', 'Floating', 'RealFrac', 'RealFloat'],
-  Rational: ['Num', 'Real', 'Fractional', 'RealFrac'],
+/** Every class `cls` implies, itself included. */
+export function classClosure(cls) {
+  return [...new Set([cls, ...(superclasses[cls] || []).flatMap(classClosure)])]
 }
 
-/** GHC's actual default list when no `default` declaration is given: try Integer, then Double. */
+/**
+ * Which classes each concrete type instantiates, given only by its most
+ * specific classes and closed upward — so "has C ⇒ has every superclass of
+ * C" holds by construction, never by hand-maintenance.
+ */
+const instances = Object.fromEntries(
+  Object.entries({
+    Int: ['EuclideanRing', 'Show'], // modeled as ℤ; overflow is outside the model (as IEEE rounding is for Float/Double)
+    Integer: ['EuclideanRing', 'Show'],
+    // Word genuinely is ℤ/2⁶⁴: wrapping gives additive inverses (a ring, not
+    // just a semiring), but its order isn't compatible with + (0 ≤ 1 yet
+    // 0 + max > 1 + max), so it is NOT an OrderedRing — and hence not a
+    // EuclideanRing either. It can't feed fromIntegral/toRational or be
+    // round's result.
+    Word: ['Ring', 'Ord', 'Show'],
+    Natural: ['Semiring', 'Ord', 'Show'], // ℕ: no additive inverse — a semiring, not a ring
+    Rational: ['OrderedField', 'Show'],
+    Float: ['IEEEFloat', 'Show'],
+    Double: ['IEEEFloat', 'Show'],
+    Bool: ['Ord', 'Show'],
+  }).map(([type, classes]) => [type, [...new Set(classes.flatMap(classClosure))]]),
+)
+
+/** The concrete numeric types a literal or annotation may name, in display order. */
+export const numericTypes = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational']
+
+/** All classes concrete type `name` is an instance of (empty for unknown types). */
+export function instancesOf(name) {
+  return instances[name] || []
+}
+
+/**
+ * The class a numeric literal's text demands: a non-negative integer only
+ * needs `Semiring` (n = 1 + 1 + … + 1), a negative one needs additive
+ * inverses (`Ring`), and a decimal needs division (`Field`).
+ */
+export function literalClass(text = '') {
+  if (/\./.test(text)) return 'Field'
+  if (/^\s*-/.test(text)) return 'Ring'
+  return 'Semiring'
+}
+
+/** Same default list GHC uses when no `default` declaration is given: try Integer, then Double. */
 export const defaultTypes = ['Integer', 'Double']
 
 export class ContextError extends Error {
@@ -60,7 +126,7 @@ function bySuper(p) {
  * If `p`'s type is concrete, does it actually have this instance? Returns
  * `[]` (no sub-obligations — numeric instances here are all "base" instances)
  * if satisfied, or `null` if not. A var-headed pred can't be judged yet; a
- * fun-headed pred (e.g. `Num (a -> b)`, a function value in a numeric slot)
+ * fun-headed pred (e.g. `Ring (a -> b)`, a function value in a numeric slot)
  * NEVER has an instance — deliberately treated the same as an unmatched
  * concrete type, not as "undecidable", so it fails cleanly at toHnf.
  */
@@ -100,7 +166,7 @@ function toHnfs(preds) {
   return preds.flatMap(toHnf)
 }
 
-/** Drop any predicate already implied by the rest (e.g. drop `Num a` once `Integral a` is also present). */
+/** Drop any predicate already implied by the rest (e.g. drop `Ring a` once `EuclideanRing a` is also present). */
 export function simplify(preds) {
   const kept = []
   for (let i = 0; i < preds.length; i++) {
@@ -120,7 +186,8 @@ export function predsOnVar(preds, varId) {
   return preds.filter((p) => p.type.kind === 'var' && p.type.id === varId)
 }
 
-const numericClasses = Object.keys(superclasses)
+const auxiliaryClasses = ['Eq', 'Ord', 'Show']
+const numericClasses = Object.keys(superclasses).filter((c) => !auxiliaryClasses.includes(c))
 
 /**
  * GHC's defaulting (Haskell Report §4.3.4 / GHC docs

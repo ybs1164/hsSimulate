@@ -1,4 +1,4 @@
-// Hand-written type schemes for the 7 read-only builtin nodes.
+// Hand-written type schemes for the read-only builtin nodes.
 // Keyed by `node.builtin` (see src/main.js's `nodes` object).
 //
 // `identity`, `apply`, `compose` are genuinely polymorphic — this is the
@@ -10,13 +10,17 @@
 // Bool -> Int -> Int -> Int) even though Haskell's real `if` is
 // `Bool -> a -> a -> a`. Do not generalize these two.
 //
-// The 8 entries below bring in the numeric type-class hierarchy (Num, Real,
-// Integral, Fractional, Floating, RealFrac, RealFloat — see
-// src/numericClasses.js) — one representative Prelude function per class,
-// each a genuine *qualified* type (`Num a => ...`), not a plain polymorphic
-// one. `plus`/`negate` : Num, `divide` : Fractional, `sqrt` : Floating,
-// `toRational` : Real, `fromIntegral` : Integral -> Num, `round` :
-// RealFrac -> Integral, `isNaN` : RealFloat.
+// The entries below bring in the group-theoretic numeric hierarchy (see
+// src/numericClasses.js), each a genuine *qualified* type
+// (`AddGroup a => ...`), not a plain polymorphic one. Every function demands
+// only the weakest structure it actually needs: `(+)` is just a semigroup
+// operation, `negate`/`(-)` need additive inverses (AddGroup), `(*)` a
+// multiplicative semigroup, `addZero`/`mulOne` the two monoid identities,
+// `(/)` a Field, `sqrt` Transcendental, `toRational` OrderedRing,
+// `fromIntegral` EuclideanRing -> Ring (ℤ is the initial ring), `round`
+// OrderedField -> EuclideanRing, `isNaN` IEEEFloat. `geq`/`eq` use the
+// auxiliary Ord/Eq classes, and `select` is the polymorphic `if` that the
+// pinned `ifThenElse` deliberately is not.
 import { pred, scheme, tcon, tfun, tvar } from './typeSystem.js'
 
 const a = tvar('a')
@@ -35,12 +39,19 @@ export const builtinSchemes = {
   isZero: scheme([], [], tfun(Int, Bool)),
   ifThenElse: scheme([], [], tfun(Bool, tfun(Int, tfun(Int, Int)))),
 
-  plus: scheme(['a'], [pred('Num', a)], tfun(a, tfun(a, a))),
-  negate: scheme(['a'], [pred('Num', a)], tfun(a, a)),
-  divide: scheme(['a'], [pred('Fractional', a)], tfun(a, tfun(a, a))),
-  sqrt: scheme(['a'], [pred('Floating', a)], tfun(a, a)),
-  toRational: scheme(['a'], [pred('Real', a)], tfun(a, Rational)),
-  fromIntegral: scheme(['a', 'b'], [pred('Integral', a), pred('Num', b)], tfun(a, b)),
-  round: scheme(['a', 'b'], [pred('RealFrac', a), pred('Integral', b)], tfun(a, b)),
-  isNaN: scheme(['a'], [pred('RealFloat', a)], tfun(a, Bool)),
+  plus: scheme(['a'], [pred('AddSemigroup', a)], tfun(a, tfun(a, a))),
+  negate: scheme(['a'], [pred('AddGroup', a)], tfun(a, a)),
+  minus: scheme(['a'], [pred('AddGroup', a)], tfun(a, tfun(a, a))),
+  times: scheme(['a'], [pred('MulSemigroup', a)], tfun(a, tfun(a, a))),
+  addZero: scheme(['a'], [pred('AddMonoid', a)], a),
+  mulOne: scheme(['a'], [pred('MulMonoid', a)], a),
+  divide: scheme(['a'], [pred('Field', a)], tfun(a, tfun(a, a))),
+  sqrt: scheme(['a'], [pred('Transcendental', a)], tfun(a, a)),
+  toRational: scheme(['a'], [pred('OrderedRing', a)], tfun(a, Rational)),
+  fromIntegral: scheme(['a', 'b'], [pred('EuclideanRing', a), pred('Ring', b)], tfun(a, b)),
+  round: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, b)),
+  isNaN: scheme(['a'], [pred('IEEEFloat', a)], tfun(a, Bool)),
+  geq: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
+  eq: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(a, Bool))),
+  select: scheme(['a'], [], tfun(Bool, tfun(a, tfun(a, a)))),
 }

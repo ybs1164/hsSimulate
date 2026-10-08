@@ -18,6 +18,12 @@ npm run dev
 
 터미널에 표시된 로컬 URL을 브라우저에서 엽니다.
 
+### 테스트
+
+```bash
+npm test
+```
+
 ### 프로덕션 빌드 및 미리보기
 
 ```bash
@@ -48,14 +54,15 @@ npm run preview
 
 타입 검증은 하스켈의 힌들리-밀너(Algorithm W) 방식을 그대로 따르는 실제 타입 추론기(`src/typeSystem.js`, `src/inferGraph.js`)가 담당합니다. `identity`, `apply`, `compose`는 콘크리트 타입이 아니라 `∀a. a → a`, `∀a b. (a → b) → a → b`, `∀a b c. (b → c) → (a → b) → a → c`로 선언된 다형 함수이며, 캔버스에 놓인 각 인스턴스는 실제로 연결된 값에 따라 독립적으로 `Int`, `Bool` 등으로 인스턴스화됩니다 — 예를 들어 `identity` 노드 하나에 숫자를 연결하면 `Int → Int`로, 다른 곳에 배치한 별도의 `identity` 콜사이트에 불리언을 연결하면 그쪽만 `Bool → Bool`로 독립적으로 표시됩니다(let-다형성). 커스텀 함수도 본체 배선에서 실제로 요구되는 만큼만 타입이 좁혀지고, 나머지는 자동으로 일반화되어 다형 함수가 됩니다. `isZero`, `ifThenElse`는 프로젝트 규칙에 따라 각각 `Int → Bool`, `Bool → Int → Int → Int`로 고정되어 있습니다. 서로 단일화(unify)할 수 없는 타입끼리는(예: `Bool` 값을 `Int` 입력 포트에) 드래그로 연결할 수 없습니다.
 
-하스켈의 숫자 타입클래스 계층(`Num`, `Real`, `Integral`, `Fractional`, `Floating`, `RealFrac`, `RealFloat`)과 핵심 구체 타입(`Int`, `Integer`, `Word`, `Float`, `Double`, `Rational`)도 그대로 들어와 있습니다(`src/numericClasses.js`). 숫자 리터럴(`Numbers`)은 더 이상 무조건 `Int`가 아니라 `Num a ⇒ a`인 다형 값으로 시작하며(소수점이 있으면 `Fractional a ⇒ a`), 실제로 연결되는 곳에 따라 타입이 좁혀집니다 — 인스펙터의 `ANNOTATE TYPE`에서 `Int`/`Integer`/`Word`/`Float`/`Double`/`Rational` 중 하나로 직접 타입 명시(`:: Double` 같은)를 할 수도 있고, 아무 데도 안 걸려 있으면 `DEFAULT` 줄에 GHC의 실제 디폴팅 규칙(`Num`은 `Integer`, `Fractional`은 `Double`)이 뭘 고를지 안내합니다. `(+)`, `negate`, `(/)`, `sqrt`, `toRational`, `fromIntegral`, `round`, `isNaN` 8개 함수가 이 계층을 대표하며(각각 `Num`/`Num`/`Fractional`/`Floating`/`Real`/`Integral→Num`/`RealFrac→Integral`/`RealFloat`), 클래스가 요구하는 타입이 아니면(예: `Rational`을 `sqrt`에, 함수값을 `(+)`에) 연결 자체가 거부됩니다. `fromIntegral`의 결과를 `sqrt`에 연결하면 공유 타입 변수가 `Num`과 `Floating` 제약을 모두 받고, `Floating`이 `Num`을 함의하므로 중복된 `Num`은 자동으로 사라집니다(entailment/context reduction).
+숫자 타입클래스 계층은 하스켈 Report의 `Num`/`Real`/`Integral`… 대신 **군론 구조**를 따릅니다(`src/numericClasses.js`). 덧셈과 곱셈을 각각의 사슬로 분리해 `AddSemigroup → AddMonoid → AddCommutativeMonoid`, `AddGroup → AddAbelianGroup`, `MulSemigroup → MulMonoid`를 두고, 이들을 합쳐 `Semiring → Ring`을 만듭니다. 그 위에 `OrderedRing → EuclideanRing`, `Field`, `OrderedField`, `Transcendental`, `IEEEFloat`가 있습니다(대략 Num→Ring, Real→OrderedRing, Integral→EuclideanRing, Fractional→Field, Floating→Transcendental, RealFrac→OrderedField, RealFloat→IEEEFloat). `Eq`/`Ord`/`Show`는 군론 계층 밖의 보조 클래스입니다. 구체 타입은 `Int`, `Integer`(유클리드 환), `Word`(ℤ/2⁶⁴ — 환이지만 덧셈과 순서가 호환되지 않아 순서환이 아님), `Natural`(ℕ — 덧셈 역원이 없는 반환), `Rational`(순서체), `Float`, `Double`(IEEE)입니다. 숫자 리터럴은 텍스트가 요구하는 최소 구조만 가집니다: `5`는 `Semiring a ⇒ a`, `-5`는 `Ring a ⇒ a`, `1.5`는 `Field a ⇒ a`. 인스펙터의 `ANNOTATE TYPE`에서는 그 구조를 가진 타입만 고를 수 있고(예: `-5`에는 `Natural`이 나오지 않음), 아무 데도 연결되지 않은 값에는 `DEFAULT` 줄에 디폴팅 결과(`Integer`, 안 되면 `Double`)가 표시됩니다. 각 기초 함수는 실제로 필요한 가장 약한 구조만 요구합니다: `(+)`는 `AddSemigroup`, `negate`/`(-)`는 `AddGroup`, `(*)`는 `MulSemigroup`, `addZero`/`mulOne`은 두 모노이드 항등원, `(/)`는 `Field`, `sqrt`는 `Transcendental`, `toRational`은 `OrderedRing`, `fromIntegral`은 `EuclideanRing → Ring`, `round`는 `OrderedField → EuclideanRing`, `isNaN`은 `IEEEFloat`, `(>=)`/`(==)`는 `Ord`/`Eq`입니다. `select :: Bool → a → a → a`는 `Int`로 고정된 `ifThenElse`의 다형 버전입니다. 구조가 없는 타입은 연결이 거부됩니다(예: `Natural`을 `negate`에, `Rational`을 `sqrt`에, 함수값을 `(+)`에). 리터럴을 `(+)`와 `sqrt`에 함께 연결하면 `Semiring`과 `Transcendental` 제약이 모이고, `Transcendental`이 `Semiring`을 함의하므로 중복 제약은 자동으로 사라집니다(context reduction). 각 타입이 선언한 클래스의 법칙(결합·항등·역원·교환·분배·순서 호환 등)은 `npm test`로 검증합니다.
 
 ## 프로젝트 구조
 
 - `src/main.js`: 앱 화면, 그래프 상태, 캔버스 상호작용 및 실행 로직
 - `src/typeSystem.js`: 힌들리-밀너 타입 엔진 (타입 변수·단일화·치환·일반화/인스턴스화·프리티 프린터)
-- `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블(다형 함수 3개 + 숫자 타입클래스 대표 함수 8개 포함)
-- `src/numericClasses.js`: 숫자 타입클래스 계층·인스턴스 표와 제약 해소(entailment·context reduction·디폴팅) 엔진
+- `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블(다형 함수, 군론 숫자 계층 함수, 비교·`select` 포함)
+- `src/numericClasses.js`: 군론 기반 숫자 타입클래스 계층·인스턴스 표와 제약 해소(entailment·context reduction·디폴팅) 엔진
+- `test/`: `npm test`(Node 내장 테스트 러너) — 타입클래스 법칙·제약 해소·그래프 추론 테스트
 - `src/inferGraph.js`: 캔버스 그래프의 연결(`mounted`/`output.source`)을 단일화 제약으로 읽어 타입(과 남은 클래스 제약)을 추론하는 패스
 - `src/style.css`: 레이아웃과 반응형 스타일
 - `index.html`: 앱 진입 HTML

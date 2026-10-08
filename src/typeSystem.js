@@ -37,7 +37,7 @@ export function scheme(vars, preds, type) {
   return { vars, preds, type }
 }
 
-/** A class constraint, e.g. pred('Num', tvar('a')) means "Num a". */
+/** A class constraint, e.g. pred('Ring', tvar('a')) means "Ring a". */
 export function pred(cls, type) {
   return { cls, type }
 }
@@ -157,8 +157,8 @@ export function showType(type, namer = createNamer()) {
 }
 
 /**
- * Prints a qualified type Haskell-style: `Num a => a -> a -> a`,
- * `(Integral a, Num b) => a -> b`. Pass the same `namer` used for the body
+ * Prints a qualified type Haskell-style: `AddGroup a => a -> a -> a`,
+ * `(EuclideanRing a, Ring b) => a -> b`. Pass the same `namer` used for the body
  * type so a constraint and the arrow it constrains agree on which letter is
  * which. Falls back to plain showType(type, namer) when there are no preds.
  */

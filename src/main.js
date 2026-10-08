@@ -1,7 +1,7 @@
 import './style.css'
-import { applySubst, showQual, tfun, unify, createNamer, pred } from './typeSystem.js'
+import { applySubst, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
-import { reduce, predsOnVar, pickDefault } from './numericClasses.js'
+import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes } from './numericClasses.js'
 
 const app = document.querySelector('#app')
 
@@ -48,8 +48,8 @@ const nodes = {
   compose: { id: 'compose', type: 'function', x: 300, y: 630, label: 'compose', params: ['f', 'g', 'x'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#2bb8b0', scope: 'main', builtin: 'compose', readonly: true, expression: 'λf g x. f (g x)' },
   isZero: { id: 'isZero', type: 'function', x: 620, y: 630, label: 'isZero', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#ed6b84', scope: 'main', builtin: 'isZero', readonly: true, expression: 'λn. n == 0' },
   ifThenElse: { id: 'ifThenElse', type: 'function', x: 620, y: 850, label: 'ifThenElse', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'ifThenElse', readonly: true, expression: 'λc a b. c ? a : b' },
-  // Numeric type-class hierarchy demo builtins (see src/numericClasses.js) —
-  // one representative Prelude function per class.
+  // Group-theoretic numeric hierarchy builtins (see src/numericClasses.js) —
+  // each demands only the weakest algebraic structure it needs.
   plus: { id: 'plus', type: 'function', x: 300, y: 1070, label: '(+)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#e8b23c', scope: 'main', builtin: 'plus', readonly: true, expression: 'x + y' },
   negate: { id: 'negate', type: 'function', x: 620, y: 1070, label: 'negate', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#8c7cf2', scope: 'main', builtin: 'negate', readonly: true, expression: '-x' },
   divide: { id: 'divide', type: 'function', x: 300, y: 1290, label: '(/)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#35b4e0', scope: 'main', builtin: 'divide', readonly: true, expression: 'x / y' },
@@ -58,6 +58,13 @@ const nodes = {
   fromIntegral: { id: 'fromIntegral', type: 'function', x: 620, y: 1510, label: 'fromIntegral', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#ec7550', scope: 'main', builtin: 'fromIntegral', readonly: true, expression: 'fromIntegral x' },
   round: { id: 'round', type: 'function', x: 300, y: 1730, label: 'round', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#86c24c', scope: 'main', builtin: 'round', readonly: true, expression: 'round x' },
   isNaN: { id: 'isNaN', type: 'function', x: 620, y: 1730, label: 'isNaN', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#e85c9e', scope: 'main', builtin: 'isNaN', readonly: true, expression: 'isNaN x' },
+  minus: { id: 'minus', type: 'function', x: 300, y: 1950, label: '(-)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#5fa8e8', scope: 'main', builtin: 'minus', readonly: true, expression: 'x - y' },
+  times: { id: 'times', type: 'function', x: 620, y: 1950, label: '(*)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#f0954a', scope: 'main', builtin: 'times', readonly: true, expression: 'x * y' },
+  addZero: { id: 'addZero', type: 'function', x: 300, y: 2170, label: 'addZero', params: [], mounted: [], paramScopes: [], color: '#4fc2c2', scope: 'main', builtin: 'addZero', readonly: true, expression: '0 (additive identity)' },
+  mulOne: { id: 'mulOne', type: 'function', x: 620, y: 2170, label: 'mulOne', params: [], mounted: [], paramScopes: [], color: '#b98fef', scope: 'main', builtin: 'mulOne', readonly: true, expression: '1 (multiplicative identity)' },
+  geq: { id: 'geq', type: 'function', x: 300, y: 2390, label: '(>=)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#ed8fa8', scope: 'main', builtin: 'geq', readonly: true, expression: 'x >= y' },
+  eq: { id: 'eq', type: 'function', x: 620, y: 2390, label: '(==)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#3cbe9e', scope: 'main', builtin: 'eq', readonly: true, expression: 'x == y' },
+  select: { id: 'select', type: 'function', x: 620, y: 2610, label: 'select', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'select', readonly: true, expression: 'λc a b. c ? a : b' },
 }
 function activeNodes() { return state.activeFunction ? functionBodies[state.activeFunction] : nodes }
 function activeName() { return state.activeFunction ? nodes[state.activeFunction].label : 'main' }
@@ -214,7 +221,7 @@ const FN_TAIL = 40       // right padding after the last slot before the block's
 const CHIP_W = 132       // value/boolean/output/curried chip width — same pill language as the function block, just shorter
 const CHIP_H = 64        // chip height — matches SLOT_D so a standalone chip reads as the same unit as an embedded slot
 const SNAP_RADIUS = 130  // world-space magnet radius: highlight + auto-connect distance
-const TYPE_COLORS = { Int: '#4f8ef7', Integer: '#e8b23c', Word: '#35b4e0', Float: '#3cbe84', Double: '#a96ef0', Rational: '#d66bd1', Bool: '#ed6b84' }
+const TYPE_COLORS = { Int: '#4f8ef7', Integer: '#e8b23c', Word: '#35b4e0', Float: '#3cbe84', Double: '#a96ef0', Rational: '#d66bd1', Natural: '#e07a5f', Bool: '#ed6b84' }
 const VAR_PALETTE = ['#8b7cf2', '#5fa8e8', '#3cbe9e', '#e8b23c', '#ed8fa8', '#4fc2c2', '#b98fef', '#f0954a']
 const FN_TYPE_COLOR = '#6c5ce7'
 const NEUTRAL_BORDER = '#d6d1e8'  // shared, undecorated outline for every pill — function block or value chip alike
@@ -336,7 +343,7 @@ function expectedParamType(node, index, graph = activeNodes(), namer, pass = typ
 // The (preds, Type) of `node` as a value — a function node folds to its
 // arrow type, so it can be unified against a Function-shaped slot (e.g.
 // apply's `f`). Preds are whatever's still pending on that value (e.g. an
-// unconnected numeric literal carries `Num a` until something pins it).
+// unconnected numeric literal carries `Semiring a` until something pins it).
 function resolvedValueQual(node, graph = activeNodes(), pass = typePass(graph)) {
   const entry = pass.perNode.get(node.id)
   return { preds: entry?.preds || [], type: valueTypeOfEntry(entry) }
@@ -348,7 +355,7 @@ function canConnect(source, target, index) {
   try {
     const s2 = unify(valueTypeOfEntry(pass.perNode.get(source.id)), expected, pass.subst)
     // Unification alone doesn't know about classes — it would happily let a
-    // function value (e.g. identity :: x -> x) bind to a `Num a` slot.
+    // function value (e.g. identity :: x -> x) bind to a `Semiring a` slot.
     // Re-check every outstanding predicate against the hypothetical result;
     // reduce() throws if any of them turns out unsatisfiable (wrong concrete
     // type, or a fun-headed type where a numeric one was required).
@@ -590,9 +597,13 @@ function renderValueInspector(n) {
   const q = resolvedValueQual(n)
   const isNumber = n.type === 'number'
   const defaultType = q.type.kind === 'var' ? pickDefault(q.preds, q.type.id) : null
-  const defaultRow = defaultType ? `<div class="property"><label>DEFAULT</label><div class="connection-tag">${defaultType} <em>(GHC 디폴팅 규칙)</em></div></div>` : ''
+  const defaultRow = defaultType ? `<div class="property"><label>DEFAULT</label><div class="connection-tag">${defaultType} <em>(디폴팅: Integer → Double)</em></div></div>` : ''
+  // Only offer annotations whose type actually has the structure the literal's
+  // text demands (e.g. `-3` needs Ring, so Natural isn't offered) — keeping
+  // the current choice listed even if a later edit made it unfit.
+  const litPred = (t) => pred(literalClass(n.value ?? ''), tcon(t))
   const annotateRow = isNumber
-    ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${['Int', 'Integer', 'Word', 'Float', 'Double', 'Rational'].map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
+    ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
   return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label><input class="value-input" value="${n.value ?? 'partial'}" ${isNumber ? '' : 'readonly'} /></div>`
 }
@@ -632,7 +643,7 @@ function executeFunction(fn) {
     const entry = typePass().perNode.get(fn.id)
     const residual = entry?.paramTypes ? entry.paramTypes.slice(filled).reduceRight((acc, t) => tfun(t, acc), entry.resultType) : null
     // Note: unlike a full signature, this residual doesn't carry the preds
-    // still pending on it (e.g. partially-applying `plus` loses its `Num`
+    // still pending on it (e.g. partially-applying `plus` loses its `AddSemigroup`
     // obligation in this display) — an intentionally narrow scope limit,
     // same spirit as leaving curried nodes untyped for reconnection below.
     activeNodes()[id] = { id, type: 'curried', typeName: residual ? showQual([], residual) : functionSignature(fn), resolvedType: residual || undefined, x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45, label: `${fn.label} · ${filled}/${fn.params.length}`, value: 'ƒ', remaining: fn.params.length - filled, color: '#a96ef0' }
@@ -663,7 +674,16 @@ function evaluateFunction(fn, values, seen = new Set(), environment = {}) {
   if (source?.builtin === 'sqrt') return Math.sqrt(values[0] || 0)
   if (source?.builtin === 'toRational' || source?.builtin === 'fromIntegral') return values[0] || 0 // this app has no distinct runtime numeric representations — type-level only
   if (source?.builtin === 'round') return Math.round(values[0] || 0) // Haskell rounds half-to-even; simplified here
-  if (source?.builtin === 'isNaN') return Number.isNaN(values[0]) // note: executeFunction launders every param through `Number(value) || 0` before this runs, so a real NaN can never actually arrive — this is a type-level demo of RealFloat, its Play result is always false
+  if (source?.builtin === 'isNaN') return Number.isNaN(values[0]) // note: executeFunction launders every param through `Number(value) || 0` before this runs, so a real NaN can never actually arrive — this is a type-level demo of IEEEFloat, its Play result is always false
+  if (source?.builtin === 'minus') return (values[0] || 0) - (values[1] || 0)
+  if (source?.builtin === 'times') return (values[0] || 0) * (values[1] || 0)
+  if (source?.builtin === 'addZero') return 0
+  if (source?.builtin === 'mulOne') return 1
+  if (source?.builtin === 'geq') return (values[0] || 0) >= (values[1] || 0)
+  if (source?.builtin === 'eq') return (values[0] || 0) === (values[1] || 0)
+  // `values` has already been through `Number(value) || 0`, which turns the
+  // string 'true' into 0 — read the raw port text for the Bool condition.
+  if (source?.builtin === 'select') return fn.params?.[0] === 'true' || (fn.params?.[0] !== 'false' && Boolean(values[0])) ? values[1] || 0 : values[2] || 0
   if (source?.builtin === 'apply') {
     const target = findFunctionById(fn.mounted?.[0])
     return target ? evaluateFunction(target, [values[1] || 0], new Set([...seen, fn.id]), environment) : values[1] || 0
