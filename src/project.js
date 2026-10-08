@@ -1,17 +1,18 @@
 // Project persistence and undo history — pure data in, data out. main.js
 // owns the live `nodes`/`functionBodies` objects and decides when to call in.
 //
-// A snapshot is the JSON text of `{ version, nodes, functionBodies, entry,
-// outputId }`. Comparing snapshots as strings is what lets the history skip
+// A snapshot is the JSON text of `{ version, nodes, functionBodies, types,
+// entry, outputId }` (`types`: user type declarations, see typeDecls.js —
+// added in version 2; version 1 files load with none). Comparing snapshots as strings is what lets the history skip
 // no-op checkpoints (pan/zoom live in main.js's view state, not here).
 
 export const STORAGE_KEY = 'hs-simulate:project'
-const VERSION = 1
+const VERSION = 2
 
 export class ProjectError extends Error {}
 
-export function serializeProject({ nodes, functionBodies, entry = null, outputId = 0 }) {
-  return JSON.stringify({ version: VERSION, nodes, functionBodies, entry, outputId })
+export function serializeProject({ nodes, functionBodies, types = {}, entry = null, outputId = 0 }) {
+  return JSON.stringify({ version: VERSION, nodes, functionBodies, types, entry, outputId })
 }
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -24,7 +25,8 @@ export function parseProject(text) {
   } catch {
     throw new ProjectError('Not a valid JSON file')
   }
-  if (!isRecord(data) || data.version !== VERSION) throw new ProjectError('Not an hs/simulate project (or an unsupported version)')
+  if (!isRecord(data) || ![1, VERSION].includes(data.version)) throw new ProjectError('Not an hs/simulate project (or an unsupported version)')
+  if (data.types !== undefined && !isRecord(data.types)) throw new ProjectError('Project has malformed type declarations')
   if (!isRecord(data.nodes) || !isRecord(data.functionBodies)) throw new ProjectError('Project is missing its nodes or function bodies')
   for (const [id, node] of Object.entries(data.nodes)) {
     if (!isRecord(node) || node.id !== id || typeof node.type !== 'string') throw new ProjectError(`Malformed node: ${id}`)
@@ -35,6 +37,7 @@ export function parseProject(text) {
   return {
     nodes: data.nodes,
     functionBodies: data.functionBodies,
+    types: data.types || {},
     entry: typeof data.entry === 'string' && data.nodes[data.entry] ? data.entry : null,
     outputId: Number.isInteger(data.outputId) ? data.outputId : 0,
   }

@@ -37,6 +37,17 @@ export function setDynamicInstances(list) {
   dynamicInstances = list
 }
 
+/** Run `fn` with `list` as the derived instances in scope, then restore the previous ones. */
+export function withDynamicInstances(list, fn) {
+  const before = dynamicInstances
+  dynamicInstances = list
+  try {
+    return fn()
+  } finally {
+    dynamicInstances = before
+  }
+}
+
 function allInstances() {
   return [...staticInstances, ...dynamicInstances]
 }

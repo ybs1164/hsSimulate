@@ -4,5 +4,5 @@
 // environment is never consulted before its declarations have loaded.
 import './numericClasses.js'
 
-export { ContextError, classClosure, classNames, defaultTypes, entails, instancesOf, isClass, listInstances, pickDefault, predsOnVar, reduce, setDynamicInstances, simplify, superclassesOf } from './classEnv.js'
+export { ContextError, classClosure, classNames, defaultTypes, entails, instancesOf, isClass, listInstances, pickDefault, predsOnVar, reduce, setDynamicInstances, simplify, superclassesOf, withDynamicInstances } from './classEnv.js'
 export { literalClass, numericTypes } from './numericClasses.js'

@@ -42,6 +42,11 @@ npm run preview
 7. 좌측 `+` 버튼으로 함수 이름과 매개변수를 입력하면 커스텀 함수가 생성됩니다. 함수 목록에서 생성한 함수를 열고, 본체의 매개변수 노드 또는 다른 함수 호출 노드를 `Output`에 연결해 동작을 정의합니다.
 8. 선택한 노드는 `Delete`/`Backspace` 키 또는 Inspector의 `Delete node`로 지웁니다. 기초 함수, 함수의 `Output`·매개변수, 아직 호출되고 있는 커스텀 함수는 지울 수 없습니다.
 9. `↶`/`↷`(`Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`)로 실행 취소·다시 실행합니다. 프로젝트는 브라우저(localStorage)에 자동 저장되어 새로고침해도 유지되며, `Export`/`Import`로 JSON 파일로 내보내고 불러올 수 있습니다.
+10. 좌측 `TYPES`의 `+`로 하스켈 문법 그대로 타입을 선언합니다. 예: `data Model = Model { clicks :: Double, perClick :: Double } deriving (Eq, Show)`, `data Event = Click | Tick Double | Buy Int`. 선언 하나는 곱(필드)들의 쌍대곱(생성자)이며, 다음 함수가 자동으로 만들어져 타입 아래에 표시됩니다(클릭하면 캔버스에 호출 노드 추가).
+    - 생성자(주입) `Model :: Double → Double → Model`, `Tick :: Double → Event`
+    - 레코드 필드의 사영 `clicks :: Model → Double`과 lens식 갱신 `set clicks :: Double → Model → Model`, `over clicks :: (Double → Double) → Model → Model`
+    - 분기 함수(쌍대짝) `caseEvent :: a → (Double → a) → (Int → a) → Event → a` — `maybe`/`either`/`bool`과 같은 모양
+    - `deriving`은 stock `Eq`, `Ord`(사전순), `Show`를 지원하며, GHC처럼 `Ord`는 `Eq`가 필요하고 모든 필드가 그 클래스를 가져야 합니다. 생성자 필드는 하스켈처럼 지연 평가됩니다.
 
 ## 캔버스 조작
 
@@ -63,11 +68,14 @@ npm run preview
 - `src/main.js`: 앱 화면, 그래프 상태, 캔버스 상호작용 및 실행 로직
 - `src/typeSystem.js`: 힌들리-밀너 타입 엔진 (타입 변수·단일화·치환·일반화/인스턴스화·프리티 프린터)
 - `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블(다형 함수, 군론 숫자 계층 함수, 비교·`select` 포함)
-- `src/numericClasses.js`: 군론 기반 숫자 타입클래스 계층·인스턴스 표와 제약 해소(entailment·context reduction·디폴팅) 엔진
+- `src/numericClasses.js`: 군론 기반 숫자 타입클래스 계층과 인스턴스 선언
 - `test/`: `npm test`(Node 내장 테스트 러너) — 타입클래스 법칙·제약 해소·그래프 추론 테스트
 - `src/inferGraph.js`: 캔버스 그래프의 연결(`mounted`/`output.source`)과 인라인 리터럴을 단일화 제약으로 읽어 타입(과 남은 클래스 제약)을 추론하는 패스
 - `src/evaluator.js`: 같은 그래프를 지연 평가하는 실행기(클로저·부분 적용·재귀)
 - `src/literals.js`: 슬롯 인라인 리터럴 파서(타입 패스와 실행기가 공유)
+- `src/typeDecls.js`: 하스켈 `data`/`newtype` 선언 파서·검사기와, 선언에서 유도되는 생성자·사영·갱신·분기 함수와 `deriving` 인스턴스
+- `src/classEnv.js`: 클래스 환경과 제약 해소기(문맥 있는 인스턴스, entailment, context reduction, 디폴팅)
+- `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소기를 다시 내보내는 진입점(하스켈 Prelude처럼)
 - `src/project.js`: 프로젝트 직렬화·불러오기 검증·기초 함수 병합·실행 취소 기록
 - `src/style.css`: 레이아웃과 반응형 스타일
 - `index.html`: 앱 진입 HTML

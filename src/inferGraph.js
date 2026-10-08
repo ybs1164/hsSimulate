@@ -90,6 +90,7 @@ function markInvalid(ctx, graph, id, index) {
 }
 
 function schemeFor(node, ctx) {
+  if (node.scheme) return node.scheme // a definition that carries its own type (e.g. derived from a type declaration)
   if (node.builtin) return builtinSchemes[node.builtin]
   return customSchemeOf(node.sourceFunctionId || node.id, ctx)
 }
@@ -99,6 +100,7 @@ function customSchemeOf(id, ctx) {
   if (ctx.customCache.has(id)) return ctx.customCache.get(id)
   const def = ctx.nodesRegistry[id]
   if (!def) return scheme([], [], freshVar())
+  if (def.scheme) return def.scheme
   if (def.builtin) return builtinSchemes[def.builtin]
   if (ctx.visiting.has(id)) return scheme([], [], freshVar()) // recursive custom function: monomorphic fallback, not cached
   ctx.visiting.add(id)
@@ -183,7 +185,7 @@ function resolveNodeType(id, graph, ctx, memo) {
     memo.set(id, entry)
     return entry
   }
-  if (node.type === 'curried') {
+  if (node.type === 'curried' || node.type === 'value') {
     // A Play result with open slots stores its residual as a generalized
     // scheme (constraints included), instantiated fresh here like any other
     // polymorphic value. `resolvedType` is the older bare-type form.

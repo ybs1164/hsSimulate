@@ -9,14 +9,20 @@ const builtinNodes = {
 const builtinBodies = { add: { output: { id: 'add-output', type: 'output' } } }
 
 test('snapshots round-trip', () => {
-  const text = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, entry: 'add', outputId: 3 })
-  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, entry: 'add', outputId: 3 })
+  const types = { Score: { name: 'Score', keyword: 'newtype', constructors: [{ name: 'Score', record: false, fields: [{ name: null, type: { kind: 'con', name: 'Int' } }] }], deriving: [], source: 'newtype Score = Score Int' } }
+  const text = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, types, entry: 'add', outputId: 3 })
+  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, types, entry: 'add', outputId: 3 })
 })
 
 test('malformed files are rejected with a ProjectError', () => {
   assert.throws(() => parseProject('not json'), ProjectError)
   assert.throws(() => parseProject('{"version": 99, "nodes": {}, "functionBodies": {}}'), ProjectError)
+  assert.throws(() => parseProject('{"version": 2, "nodes": {}, "functionBodies": {}, "types": []}'), ProjectError)
   assert.throws(() => parseProject('{"version": 1, "nodes": {"a": {"id": "b", "type": "number"}}, "functionBodies": {}}'), ProjectError)
+})
+
+test('version 1 files still load, with no type declarations', () => {
+  assert.deepEqual(parseProject('{"version": 1, "nodes": {}, "functionBodies": {}}').types, {})
 })
 
 test('a dangling entry is cleared', () => {

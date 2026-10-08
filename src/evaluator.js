@@ -9,9 +9,11 @@
 //   when a builtin actually needs them, so `select`/`ifThenElse` evaluate
 //   only the branch they take and a recursive custom function with a base
 //   case terminates.
-// - Runtime values are numbers, booleans and closures. A closure is plain
-//   data once forced (`run` returns it that way), so a partial application
-//   can be stored on a curried node and survive save/load.
+// - Runtime values are numbers, booleans, closures and data values (a
+//   constructor of a user-declared type applied to its fields — lazily, as
+//   Haskell constructors are). Closures and data values are plain data once
+//   forced (`run` returns them that way), so they can be stored on a node
+//   and survive save/load.
 import { parseLiteral } from './literals.js'
 
 export class EvalError extends Error {}
@@ -52,19 +54,41 @@ export function isClosure(v) {
   return v !== null && typeof v === 'object' && v.kind === 'closure'
 }
 
+export function isData(v) {
+  return v !== null && typeof v === 'object' && v.kind === 'data'
+}
+
 function show(v) {
-  return isClosure(v) ? `ƒ ${v.callee}` : String(v)
+  return isClosure(v) ? `ƒ ${v.callee}` : isData(v) ? v.ctor : String(v)
+}
+
+/**
+ * Haskell `show`-style rendering of a forced value: `Model {clicks = 1, perClick = 2}`,
+ * `Tick 0.5`, `Buy (Just 3)`. `types` (the project's declarations) supplies
+ * record field names; without it records print positionally.
+ */
+export function showValue(v, types = {}, asArg = false) {
+  if (isClosure(v)) return `ƒ ${v.callee}`
+  if (!isData(v)) return String(v)
+  if (!v.args.length) return v.ctor
+  const ctor = types[v.type]?.constructors.find((c) => c.name === v.ctor)
+  const rendered = ctor?.record
+    ? `${v.ctor} {${ctor.fields.map((f, i) => `${f.name} = ${showValue(v.args[i], types)}`).join(', ')}}`
+    : `${v.ctor} ${v.args.map((a) => showValue(a, types, true)).join(' ')}`
+  return asArg ? `(${rendered})` : rendered
 }
 
 /** Fully force a value into JSON-safe data (closure args included). */
 function serializeValue(v) {
   v = force(v)
+  if (isData(v)) return { kind: 'data', type: v.type, ctor: v.ctor, ctorIndex: v.ctorIndex, args: v.args.map(serializeValue) }
   if (!isClosure(v)) return v
   return { kind: 'closure', callee: v.callee, args: v.args.map((a) => (a === null ? null : serializeValue(a))) }
 }
 
 /** Turn stored closure data back into a runtime closure. */
 function reviveValue(v) {
+  if (isData(v)) return { ...v, args: v.args.map((a) => now(reviveValue(a))) }
   if (!isClosure(v)) return v
   return { kind: 'closure', callee: v.callee, args: v.args.map((a) => (a === null ? null : now(reviveValue(a)))) }
 }
@@ -79,11 +103,25 @@ const bool = (t) => {
   if (typeof v !== 'boolean') throw new EvalError(`Expected a Bool, got ${show(v)}`)
   return v
 }
-const comparable = (t) => {
-  const v = force(t)
-  if (typeof v === 'number') return v
-  if (typeof v === 'boolean') return v ? 1 : 0 // Ord Bool: False < True
-  throw new EvalError(`Cannot compare ${show(v)}`)
+/**
+ * Structural comparison, as Haskell's derived Eq/Ord: numbers by value,
+ * False < True, data values by constructor order and then field by field.
+ * Returns -1, 0 or 1. (The type checker keeps functions out of here.)
+ */
+function compareValues(x, y) {
+  const a = force(x)
+  const b = force(y)
+  if (typeof a === 'number' && typeof b === 'number') return a < b ? -1 : a > b ? 1 : 0
+  if (typeof a === 'boolean' && typeof b === 'boolean') return a === b ? 0 : a ? 1 : -1
+  if (isData(a) && isData(b)) {
+    if (a.ctorIndex !== b.ctorIndex) return a.ctorIndex < b.ctorIndex ? -1 : 1
+    for (let i = 0; i < a.args.length; i++) {
+      const c = compareValues(a.args[i], b.args[i])
+      if (c !== 0) return c
+    }
+    return 0
+  }
+  throw new EvalError(`Cannot compare ${show(a)} with ${show(b)}`)
 }
 
 /** Haskell's `round`: halves go to the even neighbour. */
@@ -123,8 +161,8 @@ export function createEvaluator(registry) {
     fromIntegral: [1, (x) => num(x)],
     round: [1, (x) => roundHalfEven(num(x))],
     isNaN: [1, (x) => Number.isNaN(num(x))],
-    geq: [2, (x, y) => comparable(x) >= comparable(y)],
-    eq: [2, (x, y) => comparable(x) === comparable(y)],
+    geq: [2, (x, y) => compareValues(x, y) >= 0],
+    eq: [2, (x, y) => compareValues(x, y) === 0],
     select: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
   }
 
@@ -136,6 +174,7 @@ export function createEvaluator(registry) {
 
   function arityOf(callee) {
     const def = definition(callee)
+    if (def.derived) return def.derived.arity
     if (def.builtin) {
       const impl = builtins[def.builtin]
       if (!impl) throw new EvalError(`${def.label}: no runtime implementation`)
@@ -148,11 +187,45 @@ export function createEvaluator(registry) {
   function call(callee, args) {
     if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
     const def = definition(callee)
+    if (def.derived) return runDerived(def.derived, args)
     if (def.builtin) return builtins[def.builtin][1](...args)
     const body = registry.functionBodies[callee]
     const output = body?.output
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)
     return force(nodeValue(body, output.source, { args, memo: new Map() }))
+  }
+
+  /** The morphisms derived from a type declaration (see typeDecls.js). */
+  function runDerived(d, args) {
+    const record = (t) => {
+      const v = force(t)
+      if (!isData(v) || v.type !== d.type) throw new EvalError(`Expected a ${d.type}, got ${show(v)}`)
+      return v
+    }
+    if (d.op === 'construct') return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: d.ctorIndex, args } // lazy fields
+    if (d.op === 'get') return force(record(args[0]).args[d.fieldIndex])
+    if (d.op === 'set' || d.op === 'over') {
+      const r = record(args[1])
+      const fields = r.args.slice()
+      const old = fields[d.fieldIndex]
+      fields[d.fieldIndex] = d.op === 'set' ? args[0] : delay(() => applyValue(args[0], [old]))
+      return { ...r, args: fields }
+    }
+    if (d.op === 'case') {
+      const v = record(args[args.length - 1])
+      const branch = args[v.ctorIndex]
+      return d.arities[v.ctorIndex] ? applyValue(branch, v.args) : force(branch)
+    }
+    if (d.op === 'fold') {
+      const branches = args.slice(0, -1)
+      const fold = (t) => {
+        const v = record(t)
+        const fields = v.args.map((field, i) => (d.recursive[v.ctorIndex][i] ? delay(() => fold(field)) : field))
+        return d.arities[v.ctorIndex] ? applyValue(branches[v.ctorIndex], fields) : force(branches[v.ctorIndex])
+      }
+      return fold(args[args.length - 1])
+    }
+    throw new EvalError(`Unknown derived operation: ${d.op}`)
   }
 
   /** Apply a function value to argument thunks, filling its open slots left to right. */
@@ -201,6 +274,7 @@ export function createEvaluator(registry) {
       if (!node.source || !graph[node.source]) throw new EvalError('Output is not connected')
       return force(nodeValue(graph, node.source, env))
     }
+    if (node.type === 'value') return reviveValue(node.data) // a stored Play result: data value
     if (node.type === 'curried') {
       if (!isClosure(node.closure)) throw new EvalError(`${node.label}: no stored partial application — Play the function again`)
       return reviveValue(node.closure)

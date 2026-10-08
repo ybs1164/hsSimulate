@@ -216,3 +216,14 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .use-again{width:100%;margin-top:12px;border:1.5px dashed var(--accent-soft-2);border-radius:var(--radius-sm);background:var(--panel);padding:9px 11px;font:11px 'DM Mono';color:var(--accent-ink);cursor:pointer}
 .use-again:hover{background:var(--accent-soft)}
 .use-again small{color:var(--muted-2);margin-left:4px}
+.types-title{margin-top:14px}
+.add-type{display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:var(--radius-full);font-size:16px;line-height:1;color:var(--accent-ink);background:var(--accent-soft);cursor:pointer}
+.add-type:hover{background:var(--accent-soft-2)}
+.type-icon{background:#e3f6f1;color:#1f8f74;font-weight:700}
+.type-entry{margin-bottom:6px}
+.derived-item{display:flex;flex-direction:column;align-items:flex-start;width:calc(100% - 38px);margin-left:38px;border:0;background:none;padding:4px 8px;border-radius:var(--radius-sm);cursor:pointer;text-align:left;font:11px 'DM Mono';color:var(--ink)}
+.derived-item:hover{background:var(--accent-soft)}
+.derived-item small{color:var(--muted);font-size:10px}
+.type-form textarea{width:100%;font:12px/1.5 'DM Mono';padding:10px;border:1.5px solid var(--line);border-radius:var(--radius-sm);resize:vertical;margin-top:6px;box-sizing:border-box}
+.type-error{color:#c0335e;font:11px/1.5 'DM Mono';min-height:1em;white-space:pre-wrap}
+.type-form .danger{color:#c0335e;margin-right:auto}
