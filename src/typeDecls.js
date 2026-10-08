@@ -377,3 +377,42 @@ export function derivedDefinitions(types) {
     return { id, type: 'function', readonly: true, color: '#3cbe9e', mounted: def.params.map(() => null), paramScopes: def.params.map(() => 'local'), scope: 'main', ...def, params: [...def.params] }
   })
 }
+
+// ---- Editing a declaration as its constructor functions -------------------
+// The type editor shows a declaration as what it is made of: constructor
+// functions, each with its fields written inside it (`clicks :: Double`).
+// A draft is that editable shape; it turns back into Haskell source and goes
+// through declareTypes, so every check above still applies.
+
+const asHaskell = (type) => showType(type).replaceAll('→', '->')
+
+/** An editable draft of declaration `d` (or of a new, empty type). */
+export function declToDraft(d) {
+  if (!d) return { name: 'NewType', keyword: 'data', constructors: [{ name: 'NewType', fields: [] }], deriving: { stock: [], anyclass: [], via: [], newtype: [] } }
+  const deriving = { stock: [], anyclass: [], via: [], newtype: [] }
+  for (const c of d.deriving) deriving[c.strategy]?.push(...c.classes)
+  return {
+    name: d.name,
+    keyword: d.keyword,
+    constructors: d.constructors.map((c) => ({ name: c.name, fields: c.fields.map((f) => ({ name: f.name || '', type: asHaskell(f.type) })) })),
+    deriving,
+  }
+}
+
+/** Haskell source for a draft. A constructor is a record when its fields are named. */
+export function draftToSource(draft) {
+  const ctor = (c) => {
+    const named = c.fields.filter((f) => f.name.trim())
+    if (named.length && named.length !== c.fields.length) throw new DeclError(`${c.name}: name every field or none`)
+    if (named.length) return `${c.name} { ${c.fields.map((f) => `${f.name.trim()} :: ${f.type.trim() || '?'}`).join(', ')} }`
+    return [c.name, ...c.fields.map((f) => { const t = f.type.trim() || '?'; return /[\s>]/.test(t) && !/^[[(].*[\])]$/.test(t) ? `(${t})` : t })].join(' ')
+  }
+  const d = draft.deriving
+  const clauses = [
+    d.stock.length && ` deriving stock (${d.stock.join(', ')})`,
+    d.anyclass.length && ` deriving anyclass (${d.anyclass.join(', ')})`,
+    d.via.length && ` deriving (${d.via.join(', ')}) via Generically ${draft.name}`,
+    d.newtype.length && ` deriving newtype (${d.newtype.join(', ')})`,
+  ].filter(Boolean)
+  return `${draft.keyword} ${draft.name} = ${draft.constructors.map(ctor).join(' | ')}${clauses.join('')}`
+}

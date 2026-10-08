@@ -2,9 +2,9 @@ import './style.css'
 import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
-import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances } from './prelude.js'
+import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances, productLiftable } from './prelude.js'
 import { createEvaluator, EvalError, isClosure, isData, showValue } from './evaluator.js'
-import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from './typeDecls.js'
+import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource } from './typeDecls.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, printDefinition } from './haskellPrint.js'
@@ -34,7 +34,7 @@ app.innerHTML = `
         <nav class="node-library">
           <div class="library-title"><span>NODES</span><button class="add-node" aria-label="Add node">+</button></div>
           <div id="function-library"></div>
-          <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type (Haskell data/newtype)">+</button></div>
+          <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
           <div id="type-library"></div>
           <div class="library-title types-title"><span>PRELUDE</span></div>
           <div id="prelude-library"></div>
@@ -48,7 +48,7 @@ app.innerHTML = `
       </aside>
       <section class="canvas-panel">
         <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Unfold every plugged-in expression onto the canvas">⤢</button><button id="fold-all" title="Fold every expression back into its slot">⤡</button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Unfold every plugged-in expression onto the canvas">⤢</button><button id="fold-all" title="Fold every expression back into its slot">⤡</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
       <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
@@ -252,7 +252,7 @@ function renderTypeLibrary() {
       </button>
       ${(byType[d.name] || []).map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${def.label}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}
     </div>`).join('')
-  typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeDialog(item.dataset.typeName) })
+  typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeEditor(item.dataset.typeName) })
   typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
 }
 // The laws of every algebraic instance a declared type has, checked on
@@ -267,46 +267,144 @@ function lawReport(typeName) {
   })
   return `<div class="law-report"><label>LAWS (checked on samples)</label><ul>${rows.join('')}</ul></div>`
 }
-// Declare or edit a type in Haskell syntax. The whole set of declarations is
-// re-checked on save; errors are shown in the dialog, GHC-style.
-function openTypeDialog(editing = null) {
-  if (document.querySelector('#function-dialog')) return
-  const dialog = document.createElement('div')
-  dialog.id = 'function-dialog'
-  const example = 'data Model = Model { clicks :: Double, perClick :: Double } deriving (Eq, Show)'
-  dialog.innerHTML = `<form class="function-form type-form"><h2>${editing ? `${editing} 수정` : '새 타입 선언'}</h2><label>하스켈 data / newtype 선언<textarea name="source" rows="5" spellcheck="false"></textarea></label><p class="type-error" role="alert"></p>${editing ? lawReport(editing) : ''}<p>곱(레코드)·합(생성자 여럿) 타입을 선언하면 생성자, 필드 getter·<code>set</code>·<code>over</code>, 분기 함수 <code>case타입명</code>이 만들어집니다. <code>deriving</code>: stock <code>(Eq, Ord, Show)</code> · 곱 타입의 점별 구조 <code>deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)</code> · <code>deriving (Semigroup, Monoid) via Generically T</code> · newtype은 <code>deriving newtype (…)</code>.</p><div>${editing ? '<button type="button" class="danger" data-delete>삭제</button>' : ''}<button type="button" data-cancel>취소</button><button class="tool-button primary">${editing ? '저장' : '선언'}</button></div></form>`
-  document.body.append(dialog)
-  const form = dialog.querySelector('form')
-  const textarea = form.querySelector('textarea')
-  const error = form.querySelector('.type-error')
-  textarea.value = editing ? types[editing].source : example
-  textarea.focus()
-  dialog.querySelector('[data-cancel]').onclick = () => dialog.remove()
-  const usedBy = (name) => {
+// --- Type editor -------------------------------------------------------------
+// A type is shown and edited as what defines it: its constructor functions.
+// Each constructor is drawn like a function block whose fields are written
+// inside it (`clicks :: Double`), with the resulting signature underneath
+// (`Model :: Double → Model`). Every edit is turned back into a Haskell
+// declaration (typeDecls.js' draftToSource) and checked by declareTypes; a
+// valid edit applies at once (undoable), an invalid one shows why and waits.
+const typePanel = document.querySelector('#type-panel')
+let typeEditor = null // { original: name of the declaration being edited (null until first applied), draft }
+const STOCK_CLASSES = ['Eq', 'Ord', 'Show']
+const GENERICALLY_CLASSES = ['Semigroup', 'Monoid']
+const NEWTYPE_CLASSES = ['Eq', 'Ord', 'Show', 'AddSemigroup', 'AddMonoid', 'AddCommutativeMonoid', 'AddGroup', 'AddAbelianGroup', 'MulSemigroup', 'MulMonoid', 'Semiring', 'Ring', 'OrderedRing', 'EuclideanRing', 'Field', 'OrderedField', 'Transcendental', 'IEEEFloat', 'PartialOrd', 'Lattice', 'Semigroup', 'Monoid']
+
+function openTypeEditor(name = null) {
+  stopGame()
+  if (!name) {
+    // A new type: one constructor without fields, under a free name — valid at once.
+    let n = 1
+    while (types[`NewType${n === 1 ? '' : n}`]) n++
+    const draft = declToDraft(null)
+    draft.name = draft.constructors[0].name = `NewType${n === 1 ? '' : n}`
+    typeEditor = { original: null, draft }
+    applyTypeDraft()
+  } else typeEditor = { original: name, draft: declToDraft(types[name]) }
+  typePanel.hidden = false
+  renderTypeEditor()
+}
+
+function closeTypeEditor() {
+  typeEditor = null
+  typePanel.hidden = true
+  typePanel.innerHTML = ''
+}
+
+// Check the draft; apply it if valid. Returns the error message, or ''.
+function applyTypeDraft() {
+  try {
+    const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId), ...Object.values(preludeDefs)].map((n) => n.label)
+    const next = declareTypes(types, draftToSource(typeEditor.draft), { replacing: typeEditor.original, functionLabels: labels })
+    applyTypes(next)
+    typeEditor.original = typeEditor.draft.name
+    renderFunctionLibrary(); updateInspector(); draw()
+    return ''
+  } catch (e) {
+    if (!(e instanceof DeclError)) throw e
+    return e.message
+  }
+}
+
+function renderTypeEditor(error = '') {
+  if (!typeEditor) return
+  const d = typeEditor.draft
+  const applied = typeEditor.original && types[typeEditor.original]
+  const sigOf = (ctorName) => {
+    const def = derivedDefs[`type:${typeEditor.original}:${ctorName}`]
+    return def ? showQual(def.scheme.preds, def.scheme.type) : ''
+  }
+  const check = (group, cls) => `<label class="te-check"><input type="checkbox" data-group="${group}" value="${cls}" ${d.deriving[group].includes(cls) ? 'checked' : ''}/> ${cls}</label>`
+  const anyclass = productLiftable.filter((c) => !GENERICALLY_CLASSES.includes(c))
+  const derived = applied ? Object.values(derivedDefs).filter((def) => def.derived.type === typeEditor.original) : []
+  typePanel.innerHTML = `
+    <div class="play-bar type-bar"><b>TYPE</b>
+      <select class="te-keyword" title="data: any constructors · newtype: exactly one constructor with one field"><option ${d.keyword === 'data' ? 'selected' : ''}>data</option><option ${d.keyword === 'newtype' ? 'selected' : ''}>newtype</option></select>
+      <input class="te-name" value="${escapeAttr(d.name)}" title="Type name" spellcheck="false" />
+      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
+      <button class="tool-button" data-te="delete">Delete type</button>
+      <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
+    </div>
+    <div class="type-body">
+      <p class="te-hint">A type is its constructors. Each constructor is a function; write its fields inside it as <code>name :: Type</code> (name them all for a record, or none). The functions below are made from it.</p>
+      ${d.constructors.map((c, ci) => `
+        <div class="te-ctor" data-ci="${ci}">
+          <span class="te-head">ƒ</span>
+          <input class="te-cname" value="${escapeAttr(c.name)}" title="Constructor name" spellcheck="false" />
+          ${c.fields.map((f, fi) => `<span class="te-field"><input class="te-fname" data-fi="${fi}" value="${escapeAttr(f.name)}" placeholder="name" spellcheck="false" /><i>::</i><input class="te-ftype" data-fi="${fi}" value="${escapeAttr(f.type)}" placeholder="Type" spellcheck="false" /><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`).join('')}
+          <button class="te-add" data-te="add-field" title="Add a field">+</button>
+          ${d.constructors.length > 1 ? '<button class="te-x te-drop-ctor" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
+          <div class="te-sig">${escapeAttr(sigOf(c.name) ? `${c.name} :: ${sigOf(c.name)}` : '')}</div>
+        </div>`).join('')}
+      <button class="use-again te-add-ctor" data-te="add-ctor">+ constructor (a sum type: one of these)</button>
+      <div class="property"><label>DERIVING</label>
+        <div class="te-group"><small>stock</small>${STOCK_CLASSES.map((c) => check('stock', c)).join('')}</div>
+        <div class="te-group"><small>pointwise (anyclass, product only)</small>${anyclass.map((c) => check('anyclass', c)).join('')}</div>
+        <div class="te-group"><small>via Generically (product only)</small>${GENERICALLY_CLASSES.map((c) => check('via', c)).join('')}</div>
+        ${d.keyword === 'newtype' ? `<div class="te-group"><small>newtype (from the wrapped type)</small>${NEWTYPE_CLASSES.map((c) => check('newtype', c)).join('')}</div>` : ''}
+      </div>
+      ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => `<div class="te-derived"><b>${escapeAttr(def.label)}</b> <small>${escapeAttr(showQual(def.scheme.preds, def.scheme.type))}</small></div>`).join('')}</div>` : ''}
+      ${applied ? lawReport(typeEditor.original) : ''}
+    </div>`
+  const update = (mutate) => { mutate(d); renderTypeEditor(applyTypeDraft()) }
+  const $ = (sel) => typePanel.querySelector(sel)
+  $('.te-keyword').onchange = (e) => update(() => { d.keyword = e.target.value; if (d.keyword !== 'newtype') d.deriving.newtype = [] })
+  $('.te-name').onchange = (e) => update(() => {
+    const old = d.name
+    d.name = e.target.value.trim()
+    // a lone constructor named after the type follows its rename (the Haskell convention)
+    if (d.constructors.length === 1 && d.constructors[0].name === old) d.constructors[0].name = d.name
+  })
+  typePanel.querySelectorAll('.te-ctor').forEach((row) => {
+    const c = d.constructors[Number(row.dataset.ci)]
+    row.querySelector('.te-cname').onchange = (e) => update(() => { c.name = e.target.value.trim() })
+    row.querySelectorAll('.te-fname').forEach((input) => { input.onchange = () => update(() => { c.fields[Number(input.dataset.fi)].name = input.value.trim() }) })
+    row.querySelectorAll('.te-ftype').forEach((input) => { input.onchange = () => update(() => { c.fields[Number(input.dataset.fi)].type = input.value.trim() }) })
+    row.querySelectorAll('[data-te="drop-field"]').forEach((b) => { b.onclick = () => update(() => { c.fields.splice(Number(b.dataset.fi), 1) }) })
+    row.querySelector('[data-te="add-field"]').onclick = () => update(() => {
+      const record = c.fields.some((f) => f.name)
+      let k = c.fields.length + 1
+      while (c.fields.some((f) => f.name === `field${k}`)) k++
+      c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: 'Double' })
+    })
+    row.querySelector('[data-te="drop-ctor"]')?.addEventListener('click', () => update(() => { d.constructors.splice(Number(row.dataset.ci), 1) }))
+  })
+  $('[data-te="add-ctor"]').onclick = () => update(() => {
+    let k = d.constructors.length + 1
+    while (d.constructors.some((c) => c.name === `${d.name}${k}`)) k++
+    d.constructors.push({ name: `${d.name}${k}`, fields: [] })
+  })
+  typePanel.querySelectorAll('.te-check input').forEach((box) => {
+    box.onchange = () => update(() => {
+      const list = d.deriving[box.dataset.group]
+      if (box.checked) list.push(box.value)
+      else list.splice(list.indexOf(box.value), 1)
+    })
+  })
+  $('[data-te="close"]').onclick = closeTypeEditor
+  $('[data-te="delete"]').onclick = () => {
+    const name = typeEditor.original
+    if (!name) return closeTypeEditor()
     const prefix = `type:${name}:`
     const calls = [nodes, ...Object.values(functionBodies)].flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(prefix)).length
-    const fields = Object.values(types).filter((d) => d.name !== name && JSON.stringify(d.constructors).includes(`"name":"${name}"`)).map((d) => d.name)
-    return { calls, fields }
-  }
-  dialog.querySelector('[data-delete]')?.addEventListener('click', () => {
-    const { calls, fields } = usedBy(editing)
-    if (calls || fields.length) { error.textContent = `${editing} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${fields.length ? ` in ${fields.join(', ')}` : ''}`; return }
+    const usedIn = Object.values(types).filter((t) => t.name !== name && JSON.stringify(t.constructors).includes(`"name":"${name}"`)).map((t) => t.name)
+    if (calls || usedIn.length) return renderTypeEditor(`${name} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${usedIn.length ? ` in ${usedIn.join(', ')}` : ''}`)
     const next = { ...types }
-    delete next[editing]
-    applyTypes(next); dialog.remove(); renderFunctionLibrary(); updateInspector(); draw()
-  })
-  form.onsubmit = (event) => {
-    event.preventDefault()
-    try {
-      // Definitions only (call nodes repeat their callee's name), plus the Prelude's.
-      const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId), ...Object.values(preludeDefs)].map((n) => n.label)
-      applyTypes(declareTypes(types, textarea.value, { replacing: editing, functionLabels: labels }))
-    } catch (e) {
-      if (!(e instanceof DeclError)) throw e
-      error.textContent = e.message
-      return
-    }
-    dialog.remove(); renderFunctionLibrary(); updateInspector(); draw()
+    delete next[name]
+    applyTypes(next)
+    closeTypeEditor()
+    renderFunctionLibrary(); updateInspector(); draw()
+    showToast(`Deleted type ${name} (undo to bring it back)`)
   }
 }
 
@@ -1650,6 +1748,7 @@ function loadProject(project) {
   Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
   Object.assign(functionBodies, project.functionBodies)
   applyTypes(project.types || {})
+  if (typeEditor) { if (types[typeEditor.original]) { typeEditor.draft = declToDraft(types[typeEditor.original]); renderTypeEditor() } else closeTypeEditor() }
   entryId = project.entry
   outputId = project.outputId
   if (state.activeFunction && !functionBodies[state.activeFunction]) state.activeFunction = null
@@ -1746,7 +1845,7 @@ document.querySelector('#fold-all').onclick = () => setAllUnfolded(false)
 new ResizeObserver(resize).observe(canvas)
 window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
 document.querySelector('.add-node').addEventListener('click', createCustomFunction)
-document.querySelector('.add-type').addEventListener('click', () => openTypeDialog())
+document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
 document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
   if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
   if (item.dataset.type === 'lambda') return createLambda()
