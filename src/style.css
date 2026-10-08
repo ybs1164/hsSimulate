@@ -281,6 +281,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
 #type-panel{position:absolute;inset:0;z-index:6;background:var(--bg);display:flex;flex-direction:column}
 #type-panel[hidden]{display:none}
 .type-bar .te-name{font:600 13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:180px}
+.type-bar .te-params{font:500 12px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 8px;width:70px}
 .type-bar .te-keyword{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-full);padding:6px 10px;background:var(--panel)}
 .te-status{flex:1;font:11px 'DM Mono';color:var(--muted)}
 .te-status.ok{color:#1f8f74}

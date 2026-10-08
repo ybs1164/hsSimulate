@@ -16,14 +16,14 @@
 // (it must be an instance of the type inferred from the body), and
 // `typeNodes` draws a type as such a graph (to pin an inferred type, or to
 // show a builtin's type in its read-only view).
-import { applySubst, constructorArity, createNamer, instantiate, pred, scheme, showQual, showType, tapp, tcon, tfun, tvar, unify, wellKinded } from './typeSystem.js'
+import { applySubst, arityOf, createNamer, instantiate, pred, scheme, showQual, showType, tapp, tcon, tfun, tvar, unify, wellKinded } from './typeSystem.js'
 import { entails, isClass } from './prelude.js'
 
 /** How many slots a type node of this kind/name has. */
 export function typeNodeArity(tkind, name) {
   if (tkind === 'arrow' || tkind === 'app') return 2
   if (tkind === 'class') return 1
-  if (tkind === 'con') return constructorArity[name] || 0
+  if (tkind === 'con') return arityOf(name)
   return 0
 }
 
@@ -167,7 +167,7 @@ export function typeNodes(preds, type, newId, namer = createNamer()) {
     const args = []
     let head = t
     while (head.kind === 'app') { args.unshift(head.arg); head = head.fn }
-    if (head.kind === 'con' && (constructorArity[head.name] || 0) === args.length) return make('con', head.name, args.map(go))
+    if (head.kind === 'con' && arityOf(head.name) === args.length) return make('con', head.name, args.map(go))
     return make('app', 'app', [go(t.fn), go(t.arg)])
   }
   const root = go(type)

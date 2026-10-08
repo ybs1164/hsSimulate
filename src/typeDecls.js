@@ -3,6 +3,12 @@
 //   data Model = Model { clicks :: Double, perClick :: Double } deriving (Eq, Show)
 //   data Event = Click | Tick Double | Buy Int deriving Show
 //   newtype Score = Score Int
+//   data Tree a = Leaf | Node (Tree a) a (Tree a) deriving (Eq, Show)
+//
+// A declaration may take type parameters (`Tree a`): its functions are then
+// polymorphic in them (`Node :: Tree a → a → Tree a → Tree a`), and a
+// derived instance needs the class of each parameter, as Haskell infers
+// (`instance Eq a => Eq (Tree a)`).
 //
 // Category-theoretically a declaration is a coproduct of products: each
 // constructor injects a product of its fields into the type. From each one
@@ -43,6 +49,8 @@ function tokenize(text) {
 
 const isUpper = (t) => /^[A-Z]/.test(t || '')
 const isLower = (t) => /^[a-z_]/.test(t || '')
+// A type variable — any lowercase name but the keywords that end a declaration or start the next.
+const isTypeVar = (t) => isLower(t) && !['data', 'newtype', 'deriving'].includes(t)
 
 function parser(tokens) {
   let i = 0
@@ -57,7 +65,7 @@ function parser(tokens) {
     if (!isUpper(t)) throw new DeclError(`Expected ${what} (a capitalized name) but found ${t ? `"${t}"` : 'the end'}`)
     return t
   }
-  // Type syntax trees: { con: 'Maybe', args: [...] } | { list: T } | { unit: true } | { fun: [A, B] }
+  // Type syntax trees: { con: 'Maybe', args: [...] } | { var: 'a' } | { list: T } | { unit: true } | { fun: [A, B] }
   function atype() {
     if (peek() === '!') next() // strictness annotations are accepted and ignored
     const t = peek()
@@ -76,10 +84,10 @@ function parser(tokens) {
       return { list: inner }
     }
     if (isUpper(t)) { next(); return { con: t, args: [] } }
-    if (isLower(t)) throw new DeclError(`Type variables like "${t}" aren't supported yet — use concrete types`)
+    if (isTypeVar(t)) { next(); return { var: t } }
     throw new DeclError(`Expected a type but found ${t ? `"${t}"` : 'the end'}`)
   }
-  const startsAtype = (t) => t === '(' || t === '[' || t === '!' || isUpper(t)
+  const startsAtype = (t) => t === '(' || t === '[' || t === '!' || isUpper(t) || isTypeVar(t)
   function btype() {
     const head = atype()
     if (!head.con) return head
@@ -143,13 +151,18 @@ function parser(tokens) {
     const keyword = next()
     if (keyword !== 'data' && keyword !== 'newtype') throw new DeclError(`A declaration starts with "data" or "newtype", not ${keyword ? `"${keyword}"` : 'nothing'}`)
     const name = upper('a type name')
-    if (isLower(peek())) throw new DeclError(`Type parameters ("${peek()}") aren't supported yet`)
+    const params = []
+    while (isLower(peek())) {
+      const p = next()
+      if (params.includes(p)) throw new DeclError(`Type parameter "${p}" appears twice in ${name}`)
+      params.push(p)
+    }
     expect('=')
     const constructors = [constructor()]
     while (peek() === '|') { next(); constructors.push(constructor()) }
     const derivings = deriving()
     if (keyword === 'newtype' && (constructors.length !== 1 || constructors[0].fields.length !== 1)) throw new DeclError(`A newtype has exactly one constructor with exactly one field`)
-    return { keyword, name, constructors, deriving: derivings }
+    return { keyword, name, params, constructors, deriving: derivings }
   }
   return {
     decls() {
@@ -171,16 +184,33 @@ export function parseDecls(text) {
 /** Built-in type names a field may mention (beyond the declared ones). */
 export const builtinTypeNames = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational', 'Bool', 'Char', 'String', 'StdGen', 'Picture', 'Color', ...Object.keys(constructorArity)]
 
-function resolveType(t, known) {
+// `known`: type name -> how many arguments it takes; `params`: the
+// declaration's own type parameters (each of kind *).
+function resolveType(t, known, params = []) {
+  const go = (u) => resolveType(u, known, params)
   if (t.unit) return tcon('()')
-  if (t.tuple) return ttuple(resolveType(t.tuple[0], known), resolveType(t.tuple[1], known))
-  if (t.list) return tlist(resolveType(t.list, known))
-  if (t.fun) return tfun(resolveType(t.fun[0], known), resolveType(t.fun[1], known))
+  if (t.var) {
+    if (!params.includes(t.var)) throw new DeclError(`Type variable "${t.var}" isn't a parameter of the type — declare it after the type's name`)
+    return tvar(t.var)
+  }
+  if (t.tuple) return ttuple(go(t.tuple[0]), go(t.tuple[1]))
+  if (t.list) return tlist(go(t.list))
+  if (t.fun) return tfun(go(t.fun[0]), go(t.fun[1]))
   if (t.con === 'String' && !t.args.length) return tlist(tcon('Char'))
   if (!known.has(t.con)) throw new DeclError(`Unknown type "${t.con}"`)
-  const resolved = t.args.reduce((acc, arg) => tapp(acc, resolveType(arg, known)), tcon(t.con))
-  if (!wellKinded(resolved)) throw new DeclError(`"${showType(resolved)}" has the wrong number of type arguments`)
+  const resolved = t.args.reduce((acc, arg) => tapp(acc, go(arg)), tcon(t.con))
+  if (known.get(t.con) !== t.args.length || !wellKinded(resolved, (n) => known.get(n) ?? 0)) throw new DeclError(`"${showType(resolved)}" has the wrong number of type arguments (${t.con} takes ${known.get(t.con)})`)
   return resolved
+}
+
+/** The type a declaration declares: its name applied to its parameters (`Tree a`). */
+export function declaredType(d) {
+  return (d.params || []).reduce((acc, p) => tapp(acc, tvar(p)), tcon(d.name))
+}
+
+/** How many type arguments each declared type takes. */
+export function declaredArities(types) {
+  return Object.fromEntries(Object.values(types).map((d) => [d.name, (d.params || []).length]))
 }
 
 const lowerFirst = (s) => s[0].toLowerCase() + s.slice(1)
@@ -193,22 +223,22 @@ const lowerFirst = (s) => s[0].toLowerCase() + s.slice(1)
  * types, duplicate names, clashes with existing function names, and
  * underivable `deriving` clauses.
  */
-export function declareTypes(types, text, { replacing = null, functionLabels = [] } = {}) {
+export function declareTypes(types, text, { replacing = null, functionLabels = [], builtin = false } = {}) {
   const parsed = parseDecls(text)
   const next = { ...types }
   if (replacing) delete next[replacing]
   for (const d of parsed) {
     if (next[d.name]) throw new DeclError(`Type "${d.name}" is already declared`)
-    if (builtinTypeNames.includes(d.name) || d.name === '()') throw new DeclError(`"${d.name}" is a built-in type`)
-    next[d.name] = { name: d.name, keyword: d.keyword, constructors: d.constructors, deriving: d.deriving, source: parsed.length === 1 ? text.trim() : null }
+    if (!builtin && (builtinTypeNames.includes(d.name) || d.name === '()')) throw new DeclError(`"${d.name}" is a built-in type`)
+    next[d.name] = { name: d.name, keyword: d.keyword, params: d.params, constructors: d.constructors, deriving: d.deriving, source: parsed.length === 1 ? text.trim() : null }
   }
   // Resolve field types against every declared name (so declarations may refer to each other).
-  const known = new Set([...builtinTypeNames, ...Object.keys(next)])
+  const known = new Map([...builtinTypeNames.map((n) => [n, constructorArity[n] || 0]), ...Object.entries(declaredArities(next))])
   for (const d of parsed) {
     next[d.name] = {
       ...next[d.name],
       source: next[d.name].source ?? printDecl(next[d.name]),
-      constructors: d.constructors.map((c) => ({ name: c.name, record: c.record, fields: c.fields.map((f) => ({ name: f.name ?? null, type: resolveType(f.type, known) })) })),
+      constructors: d.constructors.map((c) => ({ name: c.name, record: c.record, fields: c.fields.map((f) => ({ name: f.name ?? null, type: resolveType(f.type, known, d.params) })) })),
     }
   }
   checkTypes(next, functionLabels)
@@ -217,6 +247,7 @@ export function declareTypes(types, text, { replacing = null, functionLabels = [
 
 function printSyntax(t, asArg = false) {
   if (t.unit) return '()'
+  if (t.var) return t.var
   if (t.tuple) return `(${printSyntax(t.tuple[0])}, ${printSyntax(t.tuple[1])})`
   if (t.list) return `[${printSyntax(t.list)}]`
   if (t.fun) return `(${printSyntax(t.fun[0])} -> ${printSyntax(t.fun[1])})`
@@ -227,7 +258,7 @@ function printSyntax(t, asArg = false) {
 function printDecl(d) {
   const ctors = d.constructors.map((c) => (c.record ? `${c.name} { ${c.fields.map((f) => `${f.name} :: ${printSyntax(f.type)}`).join(', ')} }` : [c.name, ...c.fields.map((f) => printSyntax(f.type, true))].join(' ')))
   const derivs = d.deriving.map((c) => ` deriving${['anyclass', 'newtype'].includes(c.strategy) ? ` ${c.strategy}` : ''} (${c.classes.join(', ')})${c.via ? ` via ${printSyntax(c.via)}` : ''}`)
-  return `${d.keyword} ${d.name} = ${ctors.join(' | ')}${derivs.join('')}`
+  return `${d.keyword} ${[d.name, ...(d.params || [])].join(' ')} = ${ctors.join(' | ')}${derivs.join('')}`
 }
 
 // What each `deriving` strategy can produce, as in GHC:
@@ -261,6 +292,7 @@ function checkStrategy(r, d) {
     if (!STOCK.includes(r.cls)) throw new DeclError(`${where}: stock deriving covers ${STOCK.join(', ')} — try \`deriving anyclass\`, \`deriving newtype\` or \`via Generically ${d.name}\``)
   } else if (r.strategy === 'via') {
     if (!(r.via?.con === 'Generically' && r.via.args.length === 1 && r.via.args[0].con === d.name)) throw new DeclError(`${where}: only \`via Generically ${d.name}\` is supported`)
+    if (d.params?.length) throw new DeclError(`${where}: via Generically needs a type without parameters`)
     if (!VIA_GENERICALLY.includes(r.cls)) throw new DeclError(`${where}: Generically gives ${VIA_GENERICALLY.join(' and ')}`)
     if (!isProduct) throw new DeclError(`${where}: Generically needs a product (one constructor), not a sum`)
   } else if (r.strategy === 'anyclass') {
@@ -301,28 +333,40 @@ export function checkTypes(types, functionLabels = []) {
     if (!isClass(r.cls)) throw new DeclError(`deriving ${r.cls} for ${r.type}: no such class`)
     checkStrategy(r, types[r.type])
   }
-  // Judge with all requested instances in scope (allows recursion).
+  // Judge with all requested instances in scope (allows recursion). A type
+  // with parameters is judged under its instance's context: its parameters
+  // are assumed to have the class.
   const instances = derivedInstances(types)
   for (const r of requested) {
+    const d = types[r.type]
+    const given = (d.params || []).map((p) => pred(r.cls, tvar(p)))
     for (const sup of classClosure(r.cls).filter((c) => c !== r.cls)) {
-      if (!entailsWith(instances, pred(sup, tcon(r.type)))) throw new DeclError(`deriving ${r.cls} for ${r.type} needs an ${sup} instance — add ${sup} to its deriving clause`)
+      const supGiven = (d.params || []).map((p) => pred(sup, tvar(p)))
+      if (!entailsWith(instances, pred(sup, declaredType(d)), [...given, ...supGiven])) throw new DeclError(`deriving ${r.cls} for ${r.type} needs an ${sup} instance — add ${sup} to its deriving clause`)
     }
-    for (const c of types[r.type].constructors) {
+    for (const c of d.constructors) {
       for (const f of c.fields) {
-        if (!entailsWith(instances, pred(r.cls, f.type))) throw new DeclError(`deriving ${r.cls} for ${r.type}: field ${f.name ? `"${f.name}"` : `of ${c.name}`} has type ${showType(f.type)}, which has no ${r.cls} instance`)
+        if (!entailsWith(instances, pred(r.cls, f.type), given)) throw new DeclError(`deriving ${r.cls} for ${r.type}: field ${f.name ? `"${f.name}"` : `of ${c.name}`} has type ${showType(f.type)}, which has no ${r.cls} instance`)
       }
     }
   }
 }
 
-// Judge `p` as if `instances` were the only derived instances in scope.
-function entailsWith(instances, p) {
-  return withDynamicInstances(instances, () => entails([], p))
+// Judge `p` (assuming `given`) as if `instances` were the only derived instances in scope.
+function entailsWith(instances, p, given = []) {
+  return withDynamicInstances(instances, () => entails(given, p))
 }
 
-/** The instances a (checked) set of declarations contributes to the class environment. */
+/**
+ * The instances a (checked) set of declarations contributes to the class
+ * environment: `instance C (T a b)`, needing `C a` and `C b` when the type
+ * has parameters (instance heads use `$`-variables, as dataTypes.js's do).
+ */
 export function derivedInstances(types) {
-  return requestedInstances(types).map((r) => ({ cls: r.cls, head: tcon(r.type), context: [] }))
+  return requestedInstances(types).map((r) => {
+    const params = types[r.type].params || []
+    return { cls: r.cls, head: params.reduce((acc, p) => tapp(acc, tvar(`$${p}`)), tcon(r.type)), context: params.map((p) => pred(r.cls, tvar(`$${p}`))) }
+  })
 }
 
 /**
@@ -333,30 +377,36 @@ export function derivedInstances(types) {
 export function derivedDefinitions(types) {
   const defs = []
   for (const d of Object.values(types)) {
-    const T = tcon(d.name)
-    const r = tvar('r')
+    const T = declaredType(d)
+    const params = d.params || []
+    // The result type of an eliminator, named clear of the type's parameters.
+    let rName = 'r'
+    while (params.includes(rName)) rName = `${rName}'`
+    const r = tvar(rName)
     const curried = (args, result) => args.reduceRight((acc, t) => tfun(t, acc), result)
     d.constructors.forEach((c, ctorIndex) => {
       defs.push({
         label: c.name,
         params: c.fields.map((f, i) => f.name || `x${i + 1}`),
-        scheme: scheme([], [], curried(c.fields.map((f) => f.type), T)),
+        scheme: scheme([...params], [], curried(c.fields.map((f) => f.type), T)),
         derived: { op: 'construct', type: d.name, ctor: c.name, ctorIndex, arity: c.fields.length },
       })
     })
     const only = d.constructors.length === 1 ? d.constructors[0] : null
+    // What the eliminators need to read a bare number or mempty standing for a value of the type.
+    const shape = only ? { ctor: only.name, fieldCount: only.fields.length } : {}
     if (only?.record) {
       only.fields.forEach((f, fieldIndex) => {
-        defs.push({ label: f.name, params: [lowerFirst(d.name)], scheme: scheme([], [], tfun(T, f.type)), derived: { op: 'get', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 1 } })
-        defs.push({ label: `set ${f.name}`, params: [f.name, lowerFirst(d.name)], scheme: scheme([], [], tfun(f.type, tfun(T, T))), derived: { op: 'set', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 2 } })
-        defs.push({ label: `over ${f.name}`, params: ['f', lowerFirst(d.name)], scheme: scheme([], [], tfun(tfun(f.type, f.type), tfun(T, T))), derived: { op: 'over', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 2 } })
+        defs.push({ label: f.name, params: [lowerFirst(d.name)], scheme: scheme([...params], [], tfun(T, f.type)), derived: { op: 'get', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 1 } })
+        defs.push({ label: `set ${f.name}`, params: [f.name, lowerFirst(d.name)], scheme: scheme([...params], [], tfun(f.type, tfun(T, T))), derived: { op: 'set', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 2 } })
+        defs.push({ label: `over ${f.name}`, params: ['f', lowerFirst(d.name)], scheme: scheme([...params], [], tfun(tfun(f.type, f.type), tfun(T, T))), derived: { op: 'over', type: d.name, ctor: only.name, fieldCount: only.fields.length, fieldIndex, arity: 2 } })
       })
     }
     defs.push({
       label: `case${d.name}`,
       params: [...d.constructors.map((c) => lowerFirst(c.name)), lowerFirst(d.name)],
-      scheme: scheme(['r'], [], curried(d.constructors.map((c) => curried(c.fields.map((f) => f.type), r)), tfun(T, r))),
-      derived: { op: 'case', type: d.name, arities: d.constructors.map((c) => c.fields.length), arity: d.constructors.length + 1 },
+      scheme: scheme([...params, rName], [], curried(d.constructors.map((c) => curried(c.fields.map((f) => f.type), r)), tfun(T, r))),
+      derived: { op: 'case', type: d.name, arities: d.constructors.map((c) => c.fields.length), arity: d.constructors.length + 1, ...shape },
     })
     // An inductive (recursive) type also gets its recursor — structural
     // recursion, like `foldr` for lists: each branch receives the recursive
@@ -364,14 +414,14 @@ export function derivedDefinitions(types) {
     // `data Nat = Z | S Nat` gives foldNat :: r → (r → r) → Nat → r.
     // Only direct occurrences of T are folded; T inside another type
     // (`[T]`, `Maybe T`) is passed through as is.
-    const isSelf = (t) => t.kind === 'con' && t.name === d.name
+    const isSelf = (t) => sameType(t, T)
     const recursive = d.constructors.map((c) => c.fields.map((f) => isSelf(f.type)))
     if (recursive.some((fs) => fs.some(Boolean))) {
       defs.push({
         label: `fold${d.name}`,
         params: [...d.constructors.map((c) => lowerFirst(c.name)), lowerFirst(d.name)],
-        scheme: scheme(['r'], [], curried(d.constructors.map((c) => curried(c.fields.map((f) => (isSelf(f.type) ? r : f.type)), r)), tfun(T, r))),
-        derived: { op: 'fold', type: d.name, arities: d.constructors.map((c) => c.fields.length), recursive, arity: d.constructors.length + 1 },
+        scheme: scheme([...params, rName], [], curried(d.constructors.map((c) => curried(c.fields.map((f) => (isSelf(f.type) ? r : f.type)), r)), tfun(T, r))),
+        derived: { op: 'fold', type: d.name, arities: d.constructors.map((c) => c.fields.length), recursive, arity: d.constructors.length + 1, ...shape },
       })
     }
   }
@@ -387,16 +437,25 @@ export function derivedDefinitions(types) {
 // A draft is that editable shape; it turns back into Haskell source and goes
 // through declareTypes, so every check above still applies.
 
-const asHaskell = (type) => showType(type).replaceAll('→', '->')
+const asHaskell = (type) => showType(type, (id) => id).replaceAll('→', '->')
+
+function sameType(a, b) {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'var') return a.id === b.id
+  if (a.kind === 'con') return a.name === b.name
+  if (a.kind === 'fun') return sameType(a.from, b.from) && sameType(a.to, b.to)
+  return sameType(a.fn, b.fn) && sameType(a.arg, b.arg)
+}
 
 /** An editable draft of declaration `d` (or of a new, empty type). */
 export function declToDraft(d) {
-  if (!d) return { name: 'NewType', keyword: 'data', constructors: [{ name: 'NewType', fields: [] }], deriving: { stock: [], anyclass: [], via: [], newtype: [] } }
+  if (!d) return { name: 'NewType', keyword: 'data', params: [], constructors: [{ name: 'NewType', fields: [] }], deriving: { stock: [], anyclass: [], via: [], newtype: [] } }
   const deriving = { stock: [], anyclass: [], via: [], newtype: [] }
   for (const c of d.deriving) deriving[c.strategy]?.push(...c.classes)
   return {
     name: d.name,
     keyword: d.keyword,
+    params: [...(d.params || [])],
     constructors: d.constructors.map((c) => ({ name: c.name, fields: c.fields.map((f) => ({ name: f.name || '', type: asHaskell(f.type) })) })),
     deriving,
   }
@@ -417,5 +476,5 @@ export function draftToSource(draft) {
     d.via.length && ` deriving (${d.via.join(', ')}) via Generically ${draft.name}`,
     d.newtype.length && ` deriving newtype (${d.newtype.join(', ')})`,
   ].filter(Boolean)
-  return `${draft.keyword} ${draft.name} = ${draft.constructors.map(ctor).join(' | ')}${clauses.join('')}`
+  return `${draft.keyword} ${[draft.name, ...(draft.params || [])].join(' ')} = ${draft.constructors.map(ctor).join(' | ')}${clauses.join('')}`
 }

@@ -50,6 +50,17 @@ export function tlist(elem) {
 
 /** How many type arguments each constructor takes (its kind is `*` with that many `* ->` in front). */
 export const constructorArity = { List: 1, Maybe: 1, Endo: 1, Sum: 1, Product: 1, Widget: 1, Program: 2, Sub: 1, '(,)': 2 }
+// The arities of the types the project declares (typeDecls.js), e.g. `Tree: 1`.
+const declaredArity = {}
+/** Replace the declared types' arities (`{ name: argument count }`). */
+export function setDeclaredArities(arities) {
+  Object.keys(declaredArity).forEach((name) => delete declaredArity[name])
+  Object.assign(declaredArity, arities)
+}
+/** How many type arguments the type constructor `name` takes. */
+export function arityOf(name) {
+  return constructorArity[name] ?? declaredArity[name] ?? 0
+}
 
 /** The pair type `(a, b)` — the categorical product. */
 export function ttuple(a, b) {
@@ -61,22 +72,22 @@ export function ttuple(a, b) {
  * kind `*`, or null if that depends on a variable's kind. Throws if a
  * constructor is over-applied or a function/argument isn't of kind `*`.
  */
-export function kindArity(type) {
+export function kindArity(type, arity = arityOf) {
   if (type.kind === 'var') return null
-  if (type.kind === 'con') return constructorArity[type.name] || 0
+  if (type.kind === 'con') return arity(type.name)
   if (type.kind === 'fun') {
-    if (![0, null].includes(kindArity(type.from)) || ![0, null].includes(kindArity(type.to))) throw new Error(`Ill-kinded: ${showType(type)}`)
+    if (![0, null].includes(kindArity(type.from, arity)) || ![0, null].includes(kindArity(type.to, arity))) throw new Error(`Ill-kinded: ${showType(type)}`)
     return 0
   }
-  const head = kindArity(type.fn)
-  if (head === 0 || ![0, null].includes(kindArity(type.arg))) throw new Error(`Ill-kinded: ${showType(type)}`)
+  const head = kindArity(type.fn, arity)
+  if (head === 0 || ![0, null].includes(kindArity(type.arg, arity))) throw new Error(`Ill-kinded: ${showType(type)}`)
   return head === null ? null : head - 1
 }
 
 /** Is `type` a proper type of kind `*` (or possibly so, when that hinges on a variable)? */
-export function wellKinded(type) {
+export function wellKinded(type, arity = arityOf) {
   try {
-    return [0, null].includes(kindArity(type))
+    return [0, null].includes(kindArity(type, arity))
   } catch {
     return false
   }

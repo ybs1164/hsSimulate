@@ -39,9 +39,43 @@ test('declarations are checked like GHC would', () => {
   bad('data Foo = Foo { clicks :: Int }', /"clicks" .* clashes/)
   bad('data Foo = Foo (Double -> Double) deriving Eq', /no Eq instance/)
   bad('data Foo = Foo Int deriving Ord', /needs an Eq instance/)
-  bad('data Foo a = Foo a', /Type parameters/)
+  bad('data Foo = Foo a', /"a" isn't a parameter/)
+  bad('data Foo a a = Foo a', /appears twice/)
+  bad('data Foo a = Foo (a -> a) deriving Eq', /no Eq instance/)
+  bad('data Foo a = Foo a deriving (Semigroup, Monoid) via Generically Foo', /without parameters/)
+  bad('data Foo a = Foo Foo', /wrong number of type arguments/)
   bad('newtype Foo = Foo Int Int', /exactly one field/)
   bad('data Foo = Foo (Maybe)', /wrong number of type arguments/)
+})
+
+test('a type with parameters derives polymorphic functions and instances with a context', () => {
+  const t = declareTypes({}, `data Tree a = Leaf | Node (Tree a) a (Tree a) deriving (Eq, Show)
+data Pair a b = Pair { first :: a, second :: b }`)
+  assert.equal(t.Tree.source, 'data Tree a = Leaf | Node (Tree a) a (Tree a) deriving (Eq, Show)')
+  const d = Object.fromEntries(derivedDefinitions(t).map((x) => [x.label, x]))
+  const show = (label) => showQual(d[label].scheme.preds, d[label].scheme.type)
+  assert.equal(show('Node'), 'Tree a → a → Tree a → Tree a')
+  assert.equal(show('caseTree'), 'a → (Tree b → b → Tree b → a) → Tree b → a')
+  assert.equal(show('foldTree'), 'a → (a → b → a → a) → Tree b → a')
+  assert.equal(show('over second'), '(a → a) → Pair b a → Pair b a')
+  const eq = derivedInstances(t).find((i) => i.cls === 'Eq')
+  assert.equal(showQual(eq.context, eq.head), 'Eq a ⇒ Tree a')
+  // used at Int, Tree Int has Eq; used at a function type it doesn't
+  setDynamicInstances(derivedInstances(t))
+  try {
+    assert.doesNotThrow(() => reduce([{ cls: 'Eq', type: { kind: 'app', fn: { kind: 'con', name: 'Tree' }, arg: { kind: 'con', name: 'Int' } } }]))
+  } finally {
+    setDynamicInstances([])
+  }
+  // its constructors build ordinary (lazy) data values
+  const defsT = Object.fromEntries(derivedDefinitions(t).map((x) => [x.id, x]))
+  const evT = createEvaluator({ nodes: defsT, functionBodies: {} })
+  const g = {
+    leaf: { id: 'leaf', type: 'function', sourceFunctionId: 'type:Tree:Leaf', params: [], mounted: [] },
+    one: { id: 'one', type: 'function', sourceFunctionId: 'type:Tree:Node', params: ['', '1', ''], mounted: ['leaf', null, 'leaf'] },
+    two: { id: 'two', type: 'function', sourceFunctionId: 'type:Tree:Node', params: ['', '2', ''], mounted: ['one', null, 'one'] },
+  }
+  assert.equal(showValue(evT.run(g, 'two'), t), 'Node (Node Leaf 1 Leaf) 2 (Node Leaf 1 Leaf)')
 })
 
 test('recursive types may derive classes that rely on themselves', () => {

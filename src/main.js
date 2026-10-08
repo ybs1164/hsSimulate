@@ -1,10 +1,10 @@
 import './style.css'
-import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred, constructorArity } from './typeSystem.js'
+import { applySubst, ftv, generalize, showQual, tapp, tcon, tfun, unify, createNamer, pred, constructorArity, setDeclaredArities } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances, productLiftable, classNames } from './prelude.js'
 import { createEvaluator, EvalError, isClosure, isData, isOverridableId, showValue } from './evaluator.js'
-import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource } from './typeDecls.js'
+import { DeclError, declToDraft, declareTypes, declaredArities, derivedDefinitions, derivedInstances, draftToSource } from './typeDecls.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, identifier, printDefinitionTokens, printLambdaText } from './haskellPrint.js'
@@ -151,6 +151,7 @@ const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id]
 const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
 function applyTypes(next) {
   types = next
+  setDeclaredArities(declaredArities(types))
   clearViews()
   Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
   derivedDefinitions(types).forEach((def) => { derivedDefs[def.id] = def })
@@ -364,10 +365,12 @@ function renderTypeLibrary() {
 // The laws of every algebraic instance a declared type has, checked on
 // samples by actually running them (src/laws.js).
 function lawReport(typeName) {
-  const classes = lawfulClassesOf(tcon(typeName))
+  // A type with parameters is checked at Double: Tree Double.
+  const type = (types[typeName]?.params || []).reduce((acc) => tapp(acc, tcon('Double')), tcon(typeName))
+  const classes = lawfulClassesOf(type)
   if (!classes.length) return ''
   const rows = classes.flatMap((cls) => {
-    const { results, skipped } = checkClassLaws(cls, tcon(typeName), { ev: evaluator, types })
+    const { results, skipped } = checkClassLaws(cls, type, { ev: evaluator, types })
     if (skipped) return [`<li class="law skipped">${cls}: ${escapeAttr(skipped)}</li>`]
     return results.map((r) => `<li class="law ${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓' : '✗'} <b>${r.cls}</b> ${escapeAttr(r.law)}${r.ok ? '' : ` — <em>${escapeAttr(r.counterexample)}</em>`}</li>`)
   })
@@ -437,6 +440,7 @@ function renderTypeEditor(error = '') {
     <div class="play-bar type-bar"><b>TYPE</b>
       <select class="te-keyword" title="data: any constructors · newtype: exactly one constructor with one field"><option ${d.keyword === 'data' ? 'selected' : ''}>data</option><option ${d.keyword === 'newtype' ? 'selected' : ''}>newtype</option></select>
       <input class="te-name" value="${escapeAttr(d.name)}" title="Type name" spellcheck="false" />
+      <input class="te-params" value="${escapeAttr((d.params || []).join(' '))}" placeholder="a b" title="Type parameters (space-separated, lowercase): data Tree a = …" spellcheck="false" />
       <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
       <button class="tool-button" data-te="delete">Delete type</button>
       <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
@@ -471,6 +475,7 @@ function renderTypeEditor(error = '') {
     // a lone constructor named after the type follows its rename (the Haskell convention)
     if (d.constructors.length === 1 && d.constructors[0].name === old) d.constructors[0].name = d.name
   })
+  $('.te-params').onchange = (e) => update(() => { d.params = e.target.value.trim().split(/\s+/).filter(Boolean) })
   typePanel.querySelectorAll('.te-ctor').forEach((row) => {
     const c = d.constructors[Number(row.dataset.ci)]
     row.querySelector('.te-cname').onchange = (e) => update(() => { c.name = e.target.value.trim() })

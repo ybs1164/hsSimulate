@@ -19,6 +19,7 @@ const MAX_SAMPLES = 5
 
 const head = (t) => (t.kind === 'app' ? head(t.fn) : t)
 const argOf = (t) => t.arg
+const argsOf = (t) => (t.kind === 'app' ? [...argsOf(t.fn), t.arg] : [])
 const isCon = (t, name) => t.kind === 'con' && t.name === name
 
 const NUMBERS = {
@@ -44,20 +45,13 @@ export function samplesOf(type, types, fns, depth = 0) {
     if (type.name === 'Color') return [[1, 0, 0], [0, 0.5, 1]].map((rgb) => ({ kind: 'data', type: 'Color', ctor: 'RGB', ctorIndex: 0, args: rgb }))
     if (type.name === '()') return [{ kind: 'data', type: '()', ctor: '()', ctorIndex: 0, args: [] }]
     const decl = types[type.name]
-    if (!decl || depth > 2) return null
-    const out = []
-    decl.constructors.forEach((c, ctorIndex) => {
-      const fieldSamples = c.fields.map((f) => samplesOf(f.type, types, fns, depth + 1))
-      if (fieldSamples.some((fs) => !fs || !fs.length)) return
-      // A few combinations: the i-th sample of every field, rotating.
-      const count = c.fields.length ? Math.max(...fieldSamples.map((fs) => fs.length)) : 1
-      for (let i = 0; i < count; i++) out.push({ kind: 'data', type: decl.name, ctor: c.name, ctorIndex, args: fieldSamples.map((fs, k) => fs[(i + k) % fs.length]) })
-    })
-    return out.length ? spread(out) : null
+    if (!decl || depth > 2 || decl.params?.length) return null
+    return declaredSamples(decl, [], types, fns, depth)
   }
   if (type.kind === 'fun') return fns && sameType(type.from, type.to) ? fns(type.from) : null
   if (type.kind === 'app') {
     const h = head(type)
+    if (h.kind === 'con' && types[h.name]?.params?.length) return depth > 2 ? null : declaredSamples(types[h.name], argsOf(type), types, fns, depth)
     const inner = samplesOf(argOf(type), types, fns, depth + 1)
     if (!inner) return null
     if (isCon(h, 'List')) return [nilV, consV(inner[0], nilV), consV(inner[1 % inner.length], consV(inner[2 % inner.length], nilV))]
@@ -69,6 +63,21 @@ export function samplesOf(type, types, fns, depth = 0) {
     }
   }
   return null
+}
+
+// Samples of declared type `decl` applied to `args` (one per type parameter).
+function declaredSamples(decl, args, types, fns, depth) {
+  const bound = new Map((decl.params || []).map((p, i) => [p, args[i]]))
+  const subst = (t) => (t.kind === 'var' ? bound.get(t.id) ?? t : t.kind === 'fun' ? { ...t, from: subst(t.from), to: subst(t.to) } : t.kind === 'app' ? { ...t, fn: subst(t.fn), arg: subst(t.arg) } : t)
+  const out = []
+  decl.constructors.forEach((c, ctorIndex) => {
+    const fieldSamples = c.fields.map((f) => samplesOf(subst(f.type), types, fns, depth + 1))
+    if (fieldSamples.some((fs) => !fs || !fs.length)) return
+    // A few combinations: the i-th sample of every field, rotating.
+    const count = c.fields.length ? Math.max(...fieldSamples.map((fs) => fs.length)) : 1
+    for (let i = 0; i < count; i++) out.push({ kind: 'data', type: decl.name, ctor: c.name, ctorIndex, args: fieldSamples.map((fs, k) => fs[(i + k) % fs.length]) })
+  })
+  return out.length ? spread(out) : null
 }
 
 function spread(list) {
