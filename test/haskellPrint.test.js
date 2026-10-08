@@ -5,7 +5,7 @@ import { printDefinition } from '../src/haskellPrint.js'
 import { derivedDefinitions } from '../src/typeDecls.js'
 
 const ex = buildClickCounter()
-const labels = { plus: '(+)', minus: '(-)', select: 'select', apply: 'apply', divide: '(/)', 'prelude:scale': '(*^)', 'prelude:leq': 'leq', 'prelude:show': 'show', 'prelude:showFFloat': 'showFFloat', 'prelude:append': '(++)', 'prelude:wText': 'text', 'prelude:wButton': 'button', 'prelude:wColumn': 'column', 'prelude:wProgress': 'progress', 'prelude:listOf': '[ , , ]', 'prelude:program': 'program' }
+const labels = { plus: '(+)', minus: '(-)', select: 'select', apply: 'apply', divide: '(/)', 'prelude:scale': '(*^)', 'prelude:leq': 'leq', 'prelude:show': 'show', 'prelude:showFFloat': 'showFFloat', 'prelude:showCompact': 'showCompact', 'prelude:append': '(++)', 'prelude:wText': 'text', 'prelude:wButton': 'button', 'prelude:wColumn': 'column', 'prelude:wProgress': 'progress', 'prelude:listOf': '[ , , ]', 'prelude:program': 'program' }
 const defs = { ...Object.fromEntries(Object.entries(labels).map(([id, label]) => [id, { id, label }])), ...Object.fromEntries(derivedDefinitions(ex.types).map((d) => [d.id, d])), ...ex.nodes }
 const print = (f) => printDefinition(f, defs, ex.functionBodies)
 
@@ -23,7 +23,7 @@ test('functions as values, zero-argument definitions', () => {
 
 test('a value used twice is shared with where; lists print as literals', () => {
   const view = print('view')
-  assert.match(view, /^view m = column \[text \("Clicks: " \+\+ showFFloat 0 cl\), /)
+  assert.match(view, /^view m = column \[text \("Clicks: " \+\+ showCompact cl\), /)
   assert.match(view, /progress \(cl \/ 25\)\]\n  where\n    cl = clicks \(wallet m\)$/)
 })
 

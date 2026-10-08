@@ -78,6 +78,8 @@ export function showValue(v, types = {}, asArg = false) {
     if (items.length && items.every((c) => typeof c === 'string')) return JSON.stringify(items.join('')) // a String
     return `[${items.map((x) => showValue(x, types)).join(',')}]`
   }
+  if (typeof v === 'boolean') return v ? 'True' : 'False'
+  if (typeof v === 'number') return asArg && (v < 0 || Object.is(v, -0)) ? `(${v})` : String(v) // Haskell: Tick (-0.5)
   if (!isData(v)) return String(v)
   if (!v.args.length) return v.ctor
   const ctor = types[v.type]?.constructors.find((c) => c.name === v.ctor)
@@ -176,6 +178,17 @@ function fromJsString(str) {
   return [...str].reduceRight((tail, ch) => cons(now(ch), now(tail)), nil)
 }
 
+const COMPACT_SUFFIXES = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc']
+/** 999 → "999", 1234 → "1.2K", 3.4e6 → "3.4M" — truncated, never rounded up past what you have. */
+export function showCompact(x) {
+  if (!Number.isFinite(x)) return String(x)
+  const a = Math.abs(x)
+  if (a < 1000) return String(Math.trunc(x))
+  const e = Math.min(COMPACT_SUFFIXES.length - 1, Math.floor(Math.log10(a) / 3))
+  const v = Math.trunc((a / 1000 ** e) * 10) / 10
+  return `${x < 0 ? '-' : ''}${v >= 100 ? Math.trunc(v) : String(v)}${COMPACT_SUFFIXES[e]}`
+}
+
 /** Haskell's `round`: halves go to the even neighbour. */
 function roundHalfEven(x) {
   const r = Math.round(x)
@@ -262,6 +275,7 @@ export function createEvaluator(registry) {
     }],
     show: [1, (x) => fromJsString(showValue(serializeValue(x), registry.types || {}))],
     showFFloat: [2, (d, x) => fromJsString(num(x).toFixed(Math.max(0, Math.min(20, num(d)))))],
+    showCompact: [1, (x) => fromJsString(showCompact(num(x)))],
     listOf: [null, (...xs) => xs.reduceRight((tail, x) => cons(x, now(tail)), nil)], // arity = the node's slot count
 
     // Category classes (categoryClasses.js).

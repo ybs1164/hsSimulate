@@ -82,6 +82,8 @@ export const builtinSchemes = {
   show: scheme(['a'], [pred('Show', a)], tfun(a, String)),
   // Numeric.showFFloat (Just digits) x "" — simplified to take the digit count directly.
   showFFloat: scheme(['a'], [pred('IEEEFloat', a)], tfun(Int, tfun(a, String))), // Haskell's RealFloat a
+  // Big numbers the way idle games show them: 999, 1.2K, 3.4M, 5.6B, 7.8T, 1.2Qa …
+  showCompact: scheme(['a'], [pred('IEEEFloat', a)], tfun(a, String)),
 
   // Category classes (src/categoryClasses.js), Haskell names.
   mappend: scheme(['a'], [pred('Semigroup', a)], tfun(a, tfun(a, a))),

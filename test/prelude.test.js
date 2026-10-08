@@ -103,3 +103,8 @@ test('foldr has the recursor type of lists', () => {
   const pass = infer(graphOf(call('f', 'foldr', ['', '', ''])))
   assert.equal(vsig(pass, 'f'), '(a → b → b) → b → [a] → b')
 })
+
+test('showCompact prints idle-game numbers, truncated', async () => {
+  const { showCompact } = await import('../src/evaluator.js')
+  assert.deepEqual([999.9, 1000, 1234, 99999, 123456, 3.4e6, 5.67e9, -2500, 1e40].map(showCompact), ['999', '1K', '1.2K', '99.9K', '123K', '3.4M', '5.6B', '-2.5K', '10000000Dc'])
+})

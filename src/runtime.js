@@ -90,6 +90,11 @@ export function createGame(ev, program, { exactTime = false } = {}) {
       history = history.filter((h) => h.logLength <= count)
       return true
     },
+    /** Replace the model (e.g. edited by hand while debugging); remembered as the state at this point. */
+    setModel(next) {
+      model = next
+      history = [...history.filter((h) => h.logLength !== log.length), { model, time, logLength: log.length }]
+    },
     canRewind(count) {
       return history.some((h) => h.logLength === count)
     },

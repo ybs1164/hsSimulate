@@ -14,7 +14,7 @@
 //   buyClick             = purchase (Wallet 10) (over perClick (+ 1))
 //   buyAuto              = purchase (Wallet 25) (over rate (+ 1))
 //   handle               = caseMsg onClick buyClick buyAuto
-//   view m               = column [text ("Clicks: " ++ showFFloat 0 (clicks (wallet m))), …,
+//   view m               = column [text ("Clicks: " ++ showCompact (clicks (wallet m))), …,
 //                                  button "Click!" Click, …, progress (clicks (wallet m) / 25)]
 //   main                 = program initial view handle onTick
 //
@@ -56,7 +56,7 @@ const FUNCTIONS = {
   view: [['m'], [
     ref('m2', 'm'), ref('m3', 'm'),
     call('wl', T('Model', 'wallet'), 'wallet', [n('m')]), call('cl', T('Wallet', 'clicks'), 'clicks', [n('wl')]), ref('cl2', 'cl'),
-    call('s1', P('showFFloat'), 'showFFloat', ['0', n('cl')]), call('t1', P('append'), '(++)', ['"Clicks: "', n('s1')]), call('w1', P('wText'), 'text', [n('t1')]),
+    call('s1', P('showCompact'), 'showCompact', [n('cl')]), call('t1', P('append'), '(++)', ['"Clicks: "', n('s1')]), call('w1', P('wText'), 'text', [n('t1')]),
     call('pc', T('Model', 'perClick'), 'perClick', [n('m2')]), call('s2', P('show'), 'show', [n('pc')]), call('t2', P('append'), '(++)', ['"Per click: "', n('s2')]), call('w2', P('wText'), 'text', [n('t2')]),
     call('rt', T('Model', 'rate'), 'rate', [n('m3')]), call('s3', P('showFFloat'), 'showFFloat', ['0', n('rt')]), call('t3', P('append'), '(++)', ['"Per second: "', n('s3')]), call('w3', P('wText'), 'text', [n('t3')]),
     call('mClick', T('Msg', 'Click'), 'Click'), call('b1', P('wButton'), 'button', ['"Click!"', n('mClick')]),

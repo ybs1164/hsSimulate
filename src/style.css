@@ -266,3 +266,5 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .play-log li.rewindable{cursor:pointer}
 .play-log li.rewindable:hover{color:var(--accent-ink);text-decoration:underline}
 .tool-select{border:1.5px solid var(--line);border-radius:var(--radius-full);padding:7px 12px;font:600 11px 'DM Mono';color:var(--muted);background:var(--panel);cursor:pointer}
+.play-side [data-play="edit-model"]{float:right;margin-top:-26px}
+.play-model-editor textarea{width:100%;box-sizing:border-box;font:11px/1.5 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:8px}

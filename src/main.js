@@ -8,6 +8,7 @@ import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from '.
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, printDefinition } from './haskellPrint.js'
+import { ParseError, parseValue } from './valueParser.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
 import { renderWidget } from './player.js'
@@ -135,7 +136,7 @@ const derivedDefs = {}
 const PRELUDE = [
   ['Lists', [['listOf', '[ , , ]', ['x1', 'x2', 'x3']], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
-  ['Text', [['show', 'show', ['x']], ['showFFloat', 'showFFloat', ['digits', 'x']]]],
+  ['Text', [['show', 'show', ['x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
   ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']], ['mkSum', 'Sum', ['x']], ['getSum', 'getSum', ['s']], ['mkProduct', 'Product', ['x']], ['getProduct', 'getProduct', ['p']], ['mkEndo', 'Endo', ['f']], ['appEndo', 'appEndo', ['e', 'x']]]],
   ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
   ['Lattice', [['leq', 'leq', ['x', 'y']], ['join', '(\\/)', ['x', 'y']], ['meet', '(/\\)', ['x', 'y']]]],
@@ -1318,7 +1319,7 @@ function startGameIfProgram(id) {
   const { program, modelType, law } = info
   stopGame()
   const game = createGame(evaluator, program, { exactTime: law.ok })
-  play = { game, entry: id, modelType: modelType ? showQual([], modelType) : '?', speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
+  play = { game, entry: id, modelTypeObj: modelType, modelType: modelType ? showQual([], modelType) : '?', speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
   let offline = null
   try {
     const saved = JSON.parse(localStorage.getItem(GAME_KEY) || 'null')
@@ -1387,12 +1388,38 @@ function stopGame() {
 }
 
 function buildPlayPanel() {
-  playPanel.innerHTML = `<div class="play-bar"><b></b><span class="play-time"></span><button class="tool-button icon-only" data-play="toggle" title="Pause / resume"></button><button class="tool-button" data-play="step" title="Advance one second">+1s</button><select data-play="speed" title="Speed">${[1, 2, 10, 60].map((x) => `<option value="${x}">${x}×</option>`).join('')}</select><button class="tool-button" data-play="reset">Reset game</button><button class="tool-button icon-only" data-play="close" title="Back to the editor">×</button></div><div class="play-body"><div class="play-view"></div><aside class="play-side"><label class="play-model-label"></label><pre class="play-model"></pre><label>TIME</label><p class="play-law"></p><label class="play-log-label"></label><ol class="play-log"></ol></aside></div>`
+  playPanel.innerHTML = `<div class="play-bar"><b></b><span class="play-time"></span><button class="tool-button icon-only" data-play="toggle" title="Pause / resume"></button><button class="tool-button" data-play="step" title="Advance one second">+1s</button><select data-play="speed" title="Speed">${[1, 2, 10, 60].map((x) => `<option value="${x}">${x}×</option>`).join('')}</select><button class="tool-button" data-play="reset">Reset game</button><button class="tool-button icon-only" data-play="close" title="Back to the editor">×</button></div><div class="play-body"><div class="play-view"></div><aside class="play-side"><label class="play-model-label"></label><button class="law-check" data-play="edit-model" title="Edit the model in Haskell syntax">Edit</button><pre class="play-model"></pre><div class="play-model-editor" hidden><textarea spellcheck="false" rows="5"></textarea><p class="type-error"></p><button class="law-check" data-play="apply-model">Apply</button> <button class="law-check" data-play="cancel-model">Cancel</button></div><label>TIME</label><p class="play-law"></p><label class="play-log-label"></label><ol class="play-log"></ol></aside></div>`
   playPanel.querySelector('[data-play="toggle"]').onclick = () => { play.running = !play.running; play.last = null; renderPlay() }
   playPanel.querySelector('[data-play="step"]').onclick = () => { try { play.game.tick(1) } catch (error) { return gameError(error) } renderPlay() }
   playPanel.querySelector('[data-play="speed"]').onchange = (event) => { play.speed = Number(event.target.value) }
   playPanel.querySelector('[data-play="reset"]').onclick = () => { play.game.reset(); saveGame(); renderPlay() }
   playPanel.querySelector('[data-play="close"]').onclick = stopGame
+  // Editing the model: written in Haskell syntax (exactly what's shown),
+  // read back at the model's type by src/valueParser.js.
+  const editor = playPanel.querySelector('.play-model-editor')
+  playPanel.querySelector('[data-play="edit-model"]').onclick = () => {
+    play.running = false
+    play.editing = true
+    editor.hidden = false
+    editor.querySelector('textarea').value = showValue(play.game.model, types)
+    editor.querySelector('.type-error').textContent = ''
+    renderPlay()
+  }
+  playPanel.querySelector('[data-play="cancel-model"]').onclick = () => { play.editing = false; editor.hidden = true; renderPlay() }
+  playPanel.querySelector('[data-play="apply-model"]').onclick = () => {
+    try {
+      play.game.setModel(parseValue(editor.querySelector('textarea').value, play.modelTypeObj, types))
+    } catch (error) {
+      if (!(error instanceof ParseError)) throw error
+      editor.querySelector('.type-error').textContent = error.message
+      return
+    }
+    play.editing = false
+    editor.hidden = true
+    saveGame()
+    renderPlay()
+    showToast('Model updated (paused — press ▶ to continue)')
+  }
   playPanel.querySelector('.play-view').addEventListener('pointerdown', (event) => {
     const button = event.target.closest('.w-button')
     if (!button || !play) return
@@ -1421,6 +1448,7 @@ function renderPlay() {
   $('[data-play="speed"]').value = String(play.speed)
   $('.play-model-label').textContent = `MODEL :: ${play.modelType}`
   $('.play-model').textContent = showValue(game.model, types)
+  $('.play-model').hidden = Boolean(play.editing)
   const law = $('.play-law')
   law.className = `play-law ${play.law.ok ? 'ok' : ''}`
   law.textContent = play.law.ok ? '✓ step is a monoid action of (ℝ≥0, +): time away is applied in one step' : `step is not a monoid action (${play.law.counterexample || play.law.law}): time away is simulated in slices`
