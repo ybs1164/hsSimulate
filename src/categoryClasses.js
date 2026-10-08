@@ -56,6 +56,11 @@ for (const t of ['Bool', 'Int', 'Integer', 'Word', 'Natural', 'Float', 'Double',
 }
 for (const t of ['Float', 'Double']) declareInstance('VectorSpace', tcon(t))
 
+// Subscriptions: listening to two things is their monoid product; fmap relabels messages.
+declareInstance('Semigroup', app('Sub', $a))
+declareInstance('Monoid', app('Sub', $a))
+declareInstance('Functor', tcon('Sub'))
+
 for (const f of ['List', 'Maybe']) {
   declareInstance('Functor', tcon(f))
   declareInstance('Foldable', tcon(f))

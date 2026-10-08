@@ -16,7 +16,9 @@
 //   handle               = caseMsg onClick buyClick buyAuto
 //   view m               = column [text ("Clicks: " ++ showCompact (clicks (wallet m))), …,
 //                                  button "Click!" Click, …, progress (clicks (wallet m) / 25)]
-//   main                 = program initial view handle onTick
+//   keys k               = select (k == " ") (Just Click) Nothing       -- Space clicks too
+//   subs m               = onKey keys
+//   main                 = set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick))
 //
 // The node ids it uses are the app's own (`plus`, `prelude:wButton`,
 // `type:Model:wallet`, …), so the same project runs in tests and in the app.
@@ -67,9 +69,17 @@ const FUNCTIONS = {
     call('out', P('wColumn'), 'column', [n('list')]),
   ], 'out'],
   initial: [[], [call('w', T('Wallet', 'Wallet'), 'Wallet', ['0']), call('out', T('Model', 'Model'), 'Model', [n('w'), '1', '0'])], 'out'],
+  keys: [['k'], [
+    call('isSpace', 'eq', '(==)', [n('k'), '" "']), call('mClick', T('Msg', 'Click'), 'Click'), call('yes', P('just'), 'Just', [n('mClick')]), call('no', P('nothing'), 'Nothing'),
+    call('out', 'select', 'select', [n('isSpace'), n('yes'), n('no')]),
+  ], 'out'],
+  subs: [['m'], [call('ks', 'keys', 'keys', ['']), call('out', P('onKey'), 'onKey', [n('ks')])], 'out'],
   main: [[], [
     call('init', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('h', 'handle', 'handle', ['']), call('s', 'onTick', 'onTick', ['', '']),
-    call('out', P('program'), 'program', [n('init'), n('v'), n('h'), n('s')]),
+    call('prog', P('program'), 'program', [n('init'), n('v'), n('h'), n('s')]),
+    call('fast', P('setStepsPerSecond'), 'set stepsPerSecond', ['20', n('prog')]),
+    call('sb', 'subs', 'subs', ['']),
+    call('out', P('setSubscriptions'), 'set subscriptions', [n('sb'), n('fast')]),
   ], 'out'],
 }
 

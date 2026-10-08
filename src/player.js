@@ -50,7 +50,6 @@ body{margin:0;font-family:ui-monospace,'DM Mono',monospace;background:#f8f7fc;co
 .w-error{color:#c0335e}
 `
 
-const SLICE = 0.1
 
 /**
  * Play `data` = { title, definitions, functionBodies, types, entry,
@@ -67,9 +66,9 @@ export function startPlayer(data, root, { storage = globalThis.localStorage, now
     const saved = JSON.parse(storage?.getItem(key) || 'null')
     if (saved) {
       game.restore(saved)
-      const away = Math.min(7 * 24 * 3600, Math.max(0, (now() - saved.savedAt) / 1000))
+      const away = Math.min(game.maxOffline, Math.max(0, (now() - saved.savedAt) / 1000))
       if (away > 1) {
-        const r = game.advance(away, SLICE)
+        const r = game.advance(away)
         note = `Welcome back — ${Math.round(away)}s passed${r.exact ? ' (applied in one step)' : ''}`
       }
     }
@@ -103,6 +102,9 @@ export function startPlayer(data, root, { storage = globalThis.localStorage, now
     render()
     save()
   })
+  globalThis.addEventListener?.('keydown', (event) => {
+    try { if (game.keyPressed(event.key)) { event.preventDefault(); render(); save() } } catch (error) { if (!(error instanceof EvalError)) throw error; running = false }
+  })
   root.querySelector('[data-act="pause"]').onclick = (event) => { running = !running; event.target.textContent = running ? '⏸' : '▶' }
   root.querySelector('[data-act="reset"]').onclick = () => { game.reset(); save(); render() }
 
@@ -113,7 +115,8 @@ export function startPlayer(data, root, { storage = globalThis.localStorage, now
       acc += Math.min(1, (t - last) / 1000)
       let ticked = false
       try {
-        while (acc >= SLICE) { game.tick(SLICE); acc -= SLICE; ticked = true }
+        const slice = 1 / game.stepsPerSecond
+        while (acc >= slice) { game.tick(slice); acc -= slice; ticked = true }
       } catch (error) {
         if (!(error instanceof EvalError)) throw error
         running = false

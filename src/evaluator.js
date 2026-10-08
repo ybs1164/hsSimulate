@@ -132,6 +132,7 @@ export function concreteMempty(like) {
   if (!isData(like)) throw new EvalError(`mempty has no ${show(like)}-shaped value`)
   if (like.type === 'List') return nil
   if (like.type === 'Maybe') return nothing
+  if (like.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'None', ctorIndex: 0, args: [] }
   if (like.type === 'Sum') return { ...like, args: [now(0)] }
   if (like.type === 'Product') return { ...like, args: [now(1)] }
   return { ...like, args: like.args.map(() => now(MEMPTY)) }
@@ -291,6 +292,7 @@ export function createEvaluator(registry) {
     fmap: [2, (f, t) => {
       const v = force(t)
       if (isData(v) && v.type === 'Maybe') return v.ctorIndex === 0 ? nothing : just(delay(() => applyValue(f, [v.args[0]])))
+      if (isMempty(v) || (isData(v) && v.type === 'Sub')) return { kind: 'data', type: 'Sub', ctor: 'Map', ctorIndex: 4, args: [f, now(v)] }
       return builtins.map[1](f, now(v))
     }],
     foldMap: [2, (f, t) => {
@@ -312,7 +314,14 @@ export function createEvaluator(registry) {
     getProduct: [1, (s) => newtypeField(s, 'Product', 1)],
     mkEndo: [1, (f) => ({ kind: 'data', type: 'Endo', ctor: 'Endo', ctorIndex: 0, args: [f] })],
     // Games (runtime.js): a Program and its widgets are plain lazy data.
-    program: [4, (model, view, handle, step) => ({ kind: 'data', type: 'Program', ctor: 'Program', ctorIndex: 0, args: [model, view, handle, step] })],
+    // A Program carries its settings after the four functions: steps per
+    // second, the longest time away that counts (seconds), subscriptions.
+    program: [4, (model, view, handle, step) => ({ kind: 'data', type: 'Program', ctor: 'Program', ctorIndex: 0, args: [model, view, handle, step, now(10), now(7 * 24 * 3600), now(MEMPTY)] })],
+    setStepsPerSecond: [2, (n, p) => setProgramField(p, 4, n)],
+    setMaxOffline: [2, (s, p) => setProgramField(p, 5, s)],
+    setSubscriptions: [2, (f, p) => setProgramField(p, 6, f)],
+    every: [2, (seconds, msg) => ({ kind: 'data', type: 'Sub', ctor: 'Every', ctorIndex: 1, args: [seconds, msg] })],
+    onKey: [1, (f) => ({ kind: 'data', type: 'Sub', ctor: 'OnKey', ctorIndex: 2, args: [f] })],
     wText: [1, (s) => ({ kind: 'data', type: 'Widget', ctor: 'Text', ctorIndex: 0, args: [s] })],
     wButton: [2, (label, msg) => ({ kind: 'data', type: 'Widget', ctor: 'Button', ctorIndex: 1, args: [label, msg] })],
     wColumn: [1, (ws) => ({ kind: 'data', type: 'Widget', ctor: 'Column', ctorIndex: 2, args: [ws] })],
@@ -324,6 +333,15 @@ export function createEvaluator(registry) {
       if (!isData(v) || v.type !== 'Endo') throw new EvalError(`Expected an Endo, got ${show(v)}`)
       return applyValue(v.args[0], [x])
     }],
+  }
+
+  /** A Program with setting `index` replaced (record update). Programs from older saves get the defaults first. */
+  function setProgramField(p, index, value) {
+    const v = force(p)
+    if (!isData(v) || v.type !== 'Program') throw new EvalError(`Expected a Program, got ${show(v)}`)
+    const args = [...v.args, now(10), now(7 * 24 * 3600), now(MEMPTY)].slice(0, 7)
+    args[index] = value
+    return { ...v, args }
   }
 
   /** The field of a newtype value; MEMPTY of Sum/Product unwraps to its carrier's identity. */
@@ -379,6 +397,7 @@ export function createEvaluator(registry) {
     if (a.type === 'Maybe') return a.ctorIndex === 0 ? b : b.ctorIndex === 0 ? a : just(delay(() => mappend(a.args[0], b.args[0])))
     if (a.type === 'Sum') return { ...a, args: [delay(() => lift2((p, q) => p + q, a.args[0], b.args[0]))] }
     if (a.type === 'Product') return { ...a, args: [delay(() => lift2((p, q) => p * q, a.args[0], b.args[0]))] }
+    if (a.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'Batch', ctorIndex: 3, args: [now(a), now(b)] }
     if (a.type === 'Endo') {
       // End(a): (<>) is composition — the protected builtin `compose`.
       if (registry.nodes.compose?.builtin !== 'compose') throw new EvalError('Endo needs the compose builtin')

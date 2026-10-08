@@ -105,3 +105,21 @@ test('time travel: rewind to the state right after an earlier message', () => {
   game.dispatch(click)
   assert.equal(clicks(game), 13, 'and play continues from there')
 })
+
+test('program settings: the example runs at 20 steps per second and keeps the default offline cap', () => {
+  const game = createGame(ev, ev.run(nodes, 'main'))
+  assert.equal(game.stepsPerSecond, 20)
+  assert.equal(game.maxOffline, 7 * 24 * 3600)
+  game.restore({ model: { ...game.model, args: [game.model.args[0], 1, 1] } })
+  const r = game.advance(30 * 24 * 3600)
+  assert.equal(r.simulated, 7 * 24 * 3600, 'time away beyond maxOffline does not count')
+})
+
+test('subscriptions: onKey turns Space into Click; other keys do nothing', () => {
+  const game = createGame(ev, ev.run(nodes, 'main'))
+  assert.equal(game.subscriptions().keys.length, 1)
+  assert.equal(game.keyPressed(' '), 1)
+  assert.equal(game.keyPressed('a'), 0)
+  assert.equal(clicks(game), 1)
+  assert.equal(show(game.log[0]), 'Click')
+})

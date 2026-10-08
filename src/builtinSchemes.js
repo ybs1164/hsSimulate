@@ -39,6 +39,8 @@ const ap = (h, x) => tapp(h, x)
 const newtype = (name, x) => tapp(tcon(name), x)
 const e = tvar('e')
 const widget = (msg) => tapp(tcon('Widget'), msg)
+const sub = (msg) => tapp(tcon('Sub'), msg)
+const prog = (model, msg) => tapp(tapp(tcon('Program'), model), msg)
 
 export const builtinSchemes = {
   zero: scheme([], [], Int),
@@ -107,6 +109,15 @@ export const builtinSchemes = {
   // declarative widget tree over the message type, like Elm's `Html msg`.
   // The runtime (src/runtime.js) runs a Program when it is the entry point.
   program: scheme(['m', 'e'], [], tfun(m, tfun(tfun(m, widget(e)), tfun(tfun(e, tfun(m, m)), tfun(tfun(Double, tfun(m, m)), tapp(tapp(tcon('Program'), m), e)))))),
+  // A Program's settings, changed like record fields (lens-style `set`):
+  // how many `step` calls per second, the most time away that counts, and
+  // its subscriptions (Elm's): outside events turned into messages.
+  setStepsPerSecond: scheme(['m', 'e'], [], tfun(Int, tfun(prog(m, e), prog(m, e)))),
+  setMaxOffline: scheme(['m', 'e'], [], tfun(Double, tfun(prog(m, e), prog(m, e)))),
+  setSubscriptions: scheme(['m', 'e'], [], tfun(tfun(m, sub(e)), tfun(prog(m, e), prog(m, e)))),
+  // Sub e is a Monoid (<> listens to both, mempty to nothing) and a Functor.
+  every: scheme(['e'], [], tfun(Double, tfun(e, sub(e)))),
+  onKey: scheme(['e'], [], tfun(tfun(String, Maybe(e)), sub(e))),
   wText: scheme(['e'], [], tfun(String, widget(e))),
   wButton: scheme(['e'], [], tfun(String, tfun(e, widget(e)))),
   wColumn: scheme(['e'], [], tfun(tlist(widget(e)), widget(e))),

@@ -142,7 +142,7 @@ const PRELUDE = [
   ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
   ['Lattice', [['leq', 'leq', ['x', 'y']], ['join', '(\\/)', ['x', 'y']], ['meet', '(/\\)', ['x', 'y']]]],
   ['VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
-  ['Game', [['program', 'program', ['initial', 'view', 'handle', 'step']], ['wText', 'text', ['s']], ['wButton', 'button', ['label', 'msg']], ['wColumn', 'column', ['widgets']], ['wRow', 'row', ['widgets']], ['wProgress', 'progress', ['fraction']]]],
+  ['Game', [['program', 'program', ['initial', 'view', 'handle', 'step']], ['setStepsPerSecond', 'set stepsPerSecond', ['n', 'program']], ['setMaxOffline', 'set maxOffline', ['seconds', 'program']], ['setSubscriptions', 'set subscriptions', ['subscriptions', 'program']], ['every', 'every', ['seconds', 'msg']], ['onKey', 'onKey', ['handler']], ['wText', 'text', ['s']], ['wButton', 'button', ['label', 'msg']], ['wColumn', 'column', ['widgets']], ['wRow', 'row', ['widgets']], ['wProgress', 'progress', ['fraction']]]],
 ]
 const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).map(([builtin, label, params]) => [`prelude:${builtin}`, { id: `prelude:${builtin}`, type: 'function', builtin, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#5fa8e8' }]))
 const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] })
@@ -1388,7 +1388,6 @@ document.querySelector('#run').onclick = runEntry
 // with a timestamp; reopening it applies the time away — in one call if
 // `step` passes the monoid-action law, otherwise slice by slice.
 const GAME_KEY = 'hs-simulate:game'
-const SLICE = 0.1 // seconds of game time per step call while playing
 const playPanel = document.querySelector('#play-panel')
 let play = null // { game, entry, modelType, speed, running, last, acc, frame, saveTimer, law }
 
@@ -1423,8 +1422,8 @@ function startGameIfProgram(id) {
     const saved = JSON.parse(localStorage.getItem(GAME_KEY) || 'null')
     if (saved && saved.entry === id && saved.modelType === play.modelType) {
       game.restore(saved)
-      const away = Math.min(7 * 24 * 3600, Math.max(0, (Date.now() - saved.savedAt) / 1000))
-      if (away > 1) offline = { away, ...game.advance(away, SLICE) }
+      const away = Math.max(0, (Date.now() - saved.savedAt) / 1000) // capped by the program's maxOffline
+      if (away > 1) offline = { away: Math.min(away, game.maxOffline), ...game.advance(away) }
     }
   } catch (error) {
     if (!(error instanceof EvalError) && !(error instanceof SyntaxError)) throw error
@@ -1451,7 +1450,8 @@ function loop(now) {
     play.acc += Math.min(1, (now - play.last) / 1000) * play.speed
     let ticked = false
     try {
-      while (play.acc >= SLICE) { play.game.tick(SLICE); play.acc -= SLICE; ticked = true }
+      const slice = 1 / play.game.stepsPerSecond // the program's own tick rate
+      while (play.acc >= slice) { play.game.tick(slice); play.acc -= slice; ticked = true }
     } catch (error) {
       gameError(error)
     }
@@ -1566,6 +1566,15 @@ function renderPlay() {
   }))
 }
 window.addEventListener('beforeunload', saveGame)
+// Keys go to the game's onKey subscriptions while it's playing (not while typing in a field).
+window.addEventListener('keydown', (event) => {
+  if (!play || play.editing || event.target.closest?.('input, select, textarea')) return
+  try {
+    if (play.game.keyPressed(event.key)) { event.preventDefault(); renderPlay() }
+  } catch (error) {
+    gameError(error)
+  }
+})
 const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame] }
 document.querySelector('#template').onchange = (event) => {
   const [name, build] = TEMPLATES[event.target.value] || []

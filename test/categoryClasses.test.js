@@ -11,7 +11,7 @@ data Wallet = Wallet { clicks :: Double, gems :: Double } deriving stock (Eq, Sh
 data Modifier = Modifier { bonus :: Sum Double, mult :: Product Double } deriving (Semigroup, Monoid) via Generically Modifier
 `)
 const derived = Object.fromEntries(derivedDefinitions(types).map((d) => [d.label, d]))
-const BUILTINS = ['plus', 'minus', 'times', 'succ', 'negate', 'identity', 'compose', 'addZero', 'mulOne', 'eq', 'geq', 'listOf', 'nil', 'just', 'nothing', 'mappend', 'mempty', 'mconcat', 'fmap', 'foldMap', 'leq', 'join', 'meet', 'scale', 'mkSum', 'getSum', 'mkProduct', 'getProduct', 'mkEndo', 'appEndo']
+const BUILTINS = ['plus', 'minus', 'times', 'succ', 'negate', 'identity', 'compose', 'addZero', 'mulOne', 'eq', 'geq', 'listOf', 'nil', 'just', 'nothing', 'mappend', 'mempty', 'mconcat', 'fmap', 'foldMap', 'leq', 'join', 'meet', 'scale', 'mkSum', 'getSum', 'mkProduct', 'getProduct', 'mkEndo', 'appEndo', 'every', 'onKey', 'program', 'setSubscriptions', 'wText']
 const nodes = { ...Object.fromEntries(BUILTINS.map((b) => [b, { id: b, type: 'function', builtin: b, label: b, params: [], mounted: [] }])), ...Object.fromEntries(Object.values(derived).map((d) => [d.id, d])) }
 const registry = { nodes, functionBodies: {}, types }
 const ev = createEvaluator(registry)
@@ -126,4 +126,39 @@ test('the type checker resolves constructor classes and derived instances', () =
   } finally {
     setDynamicInstances([])
   }
+})
+
+test('Sub is a monoid and a functor: timers fire on game time, relabelled by fmap', async () => {
+  const { createGame } = await import('../src/runtime.js')
+  const extra = ['every', 'onKey', 'program', 'setSubscriptions', 'wText']
+  const reg = { nodes: { ...nodes, ...Object.fromEntries(extra.map((b) => [b, { id: b, builtin: b, label: b }])) }, functionBodies: {}, types }
+  const e2 = createEvaluator(reg)
+  // subs = fmap Sum (every 1 2 <> every 0.5 10) — messages are Sum Doubles; handle adds them up
+  const g = graphOf(
+    call('t1', 'every', ['1', '2']), call('t2', 'every', ['0.5', '10']), call('both', 'mappend', [{ node: 't1' }, { node: 't2' }]),
+    call('wrap', 'mkSum', ['']), call('subs', 'fmap', [{ node: 'wrap' }, { node: 'both' }]),
+  )
+  const subsValue = e2.run(g, 'subs')
+  const program = { kind: 'data', type: 'Program', ctor: 'Program', ctorIndex: 0, args: [0, { kind: 'closure', callee: 'wText', args: [null] }, { kind: 'closure', callee: 'plus', args: [null, null] }, { kind: 'closure', callee: 'identity', args: [null] }, 10, 0, { kind: 'closure', callee: 'identity', args: [null] }] }
+  // subscriptions m = subsValue (ignore m): use a constant via a data trick — set field 6 to a closure returning it
+  reg.nodes.constSubs = { id: 'constSubs', label: 'constSubs', custom: true }
+  reg.functionBodies.constSubs = { 'input-constSubs-0': { id: 'input-constSubs-0', type: 'parameter', label: 'm' }, v: { id: 'v', type: 'value', data: subsValue }, output: { id: 'output', type: 'output', source: 'v' } }
+  program.args[6] = { kind: 'closure', callee: 'constSubs', args: [null] }
+  // handle (Sum k) m = m + k
+  reg.nodes.addMsg = { id: 'addMsg', label: 'addMsg', custom: true }
+  reg.functionBodies.addMsg = {
+    'input-addMsg-0': { id: 'input-addMsg-0', type: 'parameter', label: 's' }, 'input-addMsg-1': { id: 'input-addMsg-1', type: 'parameter', label: 'm' },
+    gs: { id: 'gs', type: 'function', sourceFunctionId: 'getSum', params: [''], mounted: ['input-addMsg-0'] },
+    add: { id: 'add', type: 'function', sourceFunctionId: 'plus', params: ['', ''], mounted: ['input-addMsg-1', 'gs'] },
+    output: { id: 'output', type: 'output', source: 'add' },
+  }
+  program.args[2] = { kind: 'closure', callee: 'addMsg', args: [null, null] }
+  // step dt m = m
+  reg.nodes.still = { id: 'still', label: 'still', custom: true }
+  reg.functionBodies.still = { 'input-still-0': { id: 'input-still-0', type: 'parameter', label: 'dt' }, 'input-still-1': { id: 'input-still-1', type: 'parameter', label: 'm' }, output: { id: 'output', type: 'output', source: 'input-still-1' } }
+  program.args[3] = { kind: 'closure', callee: 'still', args: [null, null] }
+  const game = createGame(e2, program)
+  assert.equal(game.subscriptions().every.length, 2)
+  for (let i = 0; i < 20; i++) game.tick(0.1) // two seconds
+  assert.equal(game.model, 2 * 2 + 4 * 10, 'every 1 2 fired twice, every 0.5 10 fired four times')
 })

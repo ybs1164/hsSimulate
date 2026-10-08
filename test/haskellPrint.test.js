@@ -5,7 +5,7 @@ import { printDefinition } from '../src/haskellPrint.js'
 import { derivedDefinitions } from '../src/typeDecls.js'
 
 const ex = buildClickCounter()
-const labels = { plus: '(+)', minus: '(-)', select: 'select', apply: 'apply', divide: '(/)', 'prelude:scale': '(*^)', 'prelude:leq': 'leq', 'prelude:show': 'show', 'prelude:showFFloat': 'showFFloat', 'prelude:showCompact': 'showCompact', 'prelude:append': '(++)', 'prelude:wText': 'text', 'prelude:wButton': 'button', 'prelude:wColumn': 'column', 'prelude:wProgress': 'progress', 'prelude:listOf': '[ , , ]', 'prelude:program': 'program' }
+const labels = { plus: '(+)', minus: '(-)', select: 'select', apply: 'apply', divide: '(/)', 'prelude:scale': '(*^)', 'prelude:leq': 'leq', 'prelude:show': 'show', 'prelude:showFFloat': 'showFFloat', 'prelude:showCompact': 'showCompact', 'prelude:append': '(++)', 'prelude:wText': 'text', 'prelude:wButton': 'button', 'prelude:wColumn': 'column', 'prelude:wProgress': 'progress', 'prelude:listOf': '[ , , ]', 'prelude:program': 'program', eq: '(==)', 'prelude:just': 'Just', 'prelude:nothing': 'Nothing', 'prelude:onKey': 'onKey', 'prelude:setSubscriptions': 'set subscriptions', 'prelude:setStepsPerSecond': 'set stepsPerSecond' }
 const defs = { ...Object.fromEntries(Object.entries(labels).map(([id, label]) => [id, { id, label }])), ...Object.fromEntries(derivedDefinitions(ex.types).map((d) => [d.id, d])), ...ex.nodes }
 const print = (f) => printDefinition(f, defs, ex.functionBodies)
 
@@ -18,7 +18,8 @@ test('applications, sections and Haskell\'s subtract', () => {
 test('functions as values, zero-argument definitions', () => {
   assert.equal(print('handle'), 'handle msg = caseMsg onClick buyClick buyAuto msg')
   assert.equal(print('initial'), 'initial = Model (Wallet 0) 1 0')
-  assert.equal(print('main'), 'main = program initial view handle onTick')
+  assert.equal(print('main'), 'main = set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick))')
+  assert.equal(print('keys'), 'keys k = select (k == " ") (Just Click) Nothing')
 })
 
 test('a value used twice is shared with where; lists print as literals', () => {
