@@ -298,7 +298,7 @@ function createCustomFunction() {
     if (Object.values(nodes).some(node => node.label === label)) return window.alert(`이미 존재하는 함수 이름입니다: ${label}`)
     if (new Set(params).size !== params.length) return window.alert('매개변수 이름은 중복될 수 없습니다.')
     const id = `custom-${Date.now()}`
-    nodes[id] = { id, type: 'function', x: 300, y: 190, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
+    nodes[id] = { id, type: 'function', ...freePosition(nodes, 120 + params.length * SLOT_STRIDE), label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
     functionBodies[id] = createFunctionBody(id, params)
     state.selected = id
     dialog.remove()
@@ -457,11 +457,19 @@ function freePosition(graph, width) {
   })
   const inside = (x, y) => x - FN_LEFT >= view.left + 30 && x + width <= view.right - 30 && y - FN_H / 2 >= view.top + 30 && y + FN_H / 2 + 50 <= view.bottom - 30
   const stepX = width + 80, stepY = FN_H + 50
-  for (let ring = 0; ring < 14; ring++) {
-    for (let dy = -ring; dy <= ring; dy++) for (let dx = -ring; dx <= ring; dx++) {
-      if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue
-      const x = cx + dx * stepX, y = cy + dy * stepY
-      if (inside(x, y) && !overlaps(x, y)) return { x, y }
+  // Prefer a free spot on screen; zoomed in on a small body there may be
+  // none, so then take the nearest free spot anywhere (and bring it into
+  // view) — never stack a node on top of another.
+  for (const mustBeVisible of [true, false]) {
+    for (let ring = 0; ring < 14; ring++) {
+      for (let dy = -ring; dy <= ring; dy++) for (let dx = -ring; dx <= ring; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue
+        const x = cx + dx * stepX, y = cy + dy * stepY
+        if ((!mustBeVisible || inside(x, y)) && !overlaps(x, y)) {
+          if (!mustBeVisible) requestAnimationFrame(() => fitToView())
+          return { x, y }
+        }
+      }
     }
   }
   return { x: cx, y: cy }
