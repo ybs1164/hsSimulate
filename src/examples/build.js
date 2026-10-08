@@ -65,7 +65,7 @@ export function buildProject(typeSource, functions, entry = 'main') {
   const nodes = {}
   const functionBodies = {}
   Object.entries(functions).forEach(([name, [params, bodyNodes, source]], i) => {
-    nodes[name] = { id: name, type: 'function', label: name, params: [...params], mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true, x: 1060 + (i % 2) * 380, y: 190 + Math.floor(i / 2) * 230 }
+    nodes[name] = { id: name, type: 'function', label: name, params: [...params], mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true, x: 1060 + (i % 2) * 620, y: 190 + Math.floor(i / 2) * 230 }
     functionBodies[name] = body(name, params, bodyNodes, source)
   })
   return { types, nodes, functionBodies, entry, outputId: 0 }

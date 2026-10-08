@@ -693,7 +693,7 @@ function canConnect(source, target, index) {
     return false
   }
 }
-function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : `Number · ${node.annotation || 'literal'}` }
+function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : node.type === 'law' ? 'Law claim' : `Number · ${node.annotation || 'literal'}` }
 // The short text a node shows inside its chip / a slot's nested chip. A
 // reference shows what it refers to, so it always reads the same as its
 // original even after the original's value is edited.
@@ -705,6 +705,7 @@ function nodeDisplayText(node, graph = activeNodes()) {
   if (node.type === 'output') return node.value ?? 'Output'
   if (node.type === 'value') return showValue(node.data, types)
   if (node.type === 'text') return JSON.stringify(String(node.value ?? ''))
+  if (node.type === 'law') { const r = lawNodeResults.get(node.id); return `${!r ? '…' : r.ok ? '✓' : '✗'} ${node.law} ${nodes[node.target]?.label ?? '?'}` }
   return String(node.value ?? node.label)
 }
 // Another use of `n`'s value — the diagonal Δ : A → A × A. A node can only be
@@ -799,7 +800,7 @@ function drawReferenceLinks() {
   const graph = activeNodes()
   ctx.save()
   ctx.setLineDash([4 * state.zoom, 4 * state.zoom]); ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1
-  Object.values(graph).filter((n) => n.type === 'ref' && isVisible(n)).forEach((ref) => {
+  Object.values(graph).filter((n) => (n.type === 'ref' || n.type === 'law') && isVisible(n)).forEach((ref) => {
     const target = graph[ref.target]
     if (!target || !isVisible(target)) return
     const a = point(ref), b = point(target)
@@ -869,8 +870,8 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   const rect = valueBlockScreenRect(node), p = point(node)
   const isFunctionValued = node.type === 'curried'
   const typeColor = colorForType(resolvedValueQual(node, activeNodes(), pass).type, labelNamer)
-  const badgeColor = isFunctionValued ? ACCENT : typeColor
-  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : '#'
+  const badgeColor = node.type === 'law' ? (lawNodeResults.get(node.id)?.ok ? '#1f8f74' : '#c0335e') : isFunctionValued ? ACCENT : typeColor
+  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : node.type === 'law' ? '⚖' : '#'
   ctx.save()
   ctx.shadowColor = snapHighlight ? `${ACCENT}66` : selected ? `${ACCENT}40` : '#211d3414'
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
@@ -1109,7 +1110,13 @@ function invalidateStaleWires(node) {
   })
 }
 function escapeAttr(text) { return String(text).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;') }
+function renderLawInspector(n) {
+  const r = lawNodeResults.get(n.id)
+  const fn = nodes[n.target]
+  return `<div class="selected-node"><span class="selected-icon">⚖</span><div><b>${escapeAttr(n.law)}</b><small>Law claim on ${escapeAttr(fn?.label ?? '?')}</small></div><span class="live">${!r ? '' : r.ok ? 'HOLDS' : 'BROKEN'}</span></div><div class="property"><label>CLAIM</label><div class="connection-tag">${escapeAttr(fn?.label ?? '?')} is ${n.law === 'homomorphism' ? 'a monoid homomorphism' : n.law === 'action' ? 'a monoid action' : 'inflationary'}</div></div><div class="property"><label>RESULT</label><div class="connection-tag"><span class="law ${r?.ok ? 'ok' : 'bad'}">${!r ? 'not checked yet' : `${r.ok ? '✓' : '✗'} ${escapeAttr(r.law)}${r.ok ? '' : ` — ${escapeAttr(r.counterexample)}`}`}</span></div></div>${deleteButton(n)}<div class="inspector-note">Re-checked after every edit.</div>`
+}
 function renderValueInspector(n) {
+  if (n.type === 'law') return renderLawInspector(n)
   const q = resolvedValueQual(n)
   const isNumber = n.type === 'number'
   const defaultType = q.type.kind === 'var' ? pickDefault(q.preds, q.type.id) : null
@@ -1146,11 +1153,15 @@ function functionLawsPanel(n) {
   const rows = FUNCTION_LAWS.map((law) => {
     const r = results[law]
     const status = !r ? '' : r.ok ? `<span class="law ok">✓ ${escapeAttr(r.law)}</span>` : `<span class="law bad">✗ ${escapeAttr(r.law)} — <em>${escapeAttr(r.counterexample)}</em></span>`
-    return `<div class="law-row"><button class="law-check" data-law="${law}">${law}</button>${status}</div>`
+    return `<div class="law-row"><button class="law-check" data-law="${law}">${law}</button><button class="law-check" data-pin="${law}" title="Pin this claim on the canvas (re-checked after every edit)">📌</button>${status}</div>`
   })
   return `<div class="property"><label>LAWS</label>${rows.join('')}</div>`
 }
 function runFunctionLaw(n, law) {
+  lawResults.set(n.id, { ...(lawResults.get(n.id) || {}), [law]: computeFunctionLaw(n, law) })
+  updateInspector()
+}
+function computeFunctionLaw(n, law) {
   const entry = typePass(nodes).perNode.get(n.id)
   const arity = Object.values(functionBodies[n.id] || {}).filter((m) => m.type === 'parameter').length
   let fnType = entry?.paramTypes ? entry.paramTypes.reduceRight((acc, t) => tfun(t, acc), entry.resultType) : null
@@ -1165,8 +1176,26 @@ function runFunctionLaw(n, law) {
   const result = !fnType ? { law, ok: false, counterexample: 'no type' }
     : unresolved.length ? { law, ok: false, counterexample: `${showQual(entry.preds || [], fnType)} is polymorphic — use it at a concrete type to check its laws` }
     : checkFunctionLaw(law, { kind: 'closure', callee: n.id, args: Array(arity).fill(null) }, fnType, { ev: evaluator, types })
-  lawResults.set(n.id, { ...(lawResults.get(n.id) || {}), [law]: result })
-  updateInspector()
+  return result
+}
+// --- Law nodes ----------------------------------------------------------------
+// A claim pinned on the canvas next to a function — "this is a monoid
+// homomorphism / action / inflationary" — re-checked after every edit and
+// shown as ✓ or ✗. Results aren't saved; they're recomputed.
+const lawNodeResults = new Map() // law node id -> result
+function pinLaw(fn, law) {
+  const id = `law-${Date.now()}`
+  nodes[id] = { id, type: 'law', law, target: fn.id, label: law, x: functionBlockRight(fn) + 120, y: fn.y + 70 }
+  recheckLawNodes()
+  state.selected = id
+  updateInspector(); draw()
+}
+function recheckLawNodes() {
+  for (const n of Object.values(nodes)) {
+    if (n.type !== 'law') continue
+    const fn = nodes[n.target]
+    lawNodeResults.set(n.id, fn ? computeFunctionLaw(fn, n.law) : { law: n.law, ok: false, counterexample: 'the function is gone' })
+  }
 }
 // The custom function `id` as Haskell: its signature and its definition,
 // read back from the body graph (src/haskellPrint.js).
@@ -1194,7 +1223,7 @@ function deleteNode(id) {
   const blocker = deleteBlocker(n)
   if (blocker) return showToast(blocker)
   // References to a deleted node would dangle — they go with it.
-  Object.values(graph).filter((m) => m.type === 'ref' && m.target === id).forEach((ref) => deleteNode(ref.id))
+  Object.values(graph).filter((m) => (m.type === 'ref' || m.type === 'law') && m.target === id).forEach((ref) => deleteNode(ref.id))
   Object.values(graph).forEach((other) => {
     if (other.type === 'function') other.mounted?.forEach((mountedId, i) => { if (mountedId === id) { other.mounted[i] = null; other.params[i] = '' } })
     if (other.type === 'output' && other.source === id) { other.source = null; other.value = 'open' }
@@ -1235,7 +1264,8 @@ function updateInspector() {
   })
   const disconnectOutput = document.querySelector('#disconnect-output')
   if (disconnectOutput) disconnectOutput.onclick = () => { const source = activeNodes()[n.source]; if (source) source.connected = false; n.source = null; n.value = 'open'; updateInspector(); draw() }
-  document.querySelectorAll('.law-check').forEach((button) => { button.onclick = () => runFunctionLaw(n, button.dataset.law) })
+  document.querySelectorAll('.law-check[data-law]').forEach((button) => { button.onclick = () => runFunctionLaw(n, button.dataset.law) })
+  document.querySelectorAll('.law-check[data-pin]').forEach((button) => { button.onclick = () => pinLaw(n, button.dataset.pin) })
   const openBody = document.querySelector('#open-body')
   if (openBody) openBody.onclick = () => enterFunction(n.sourceFunctionId || n.id)
   const useAgainNode = document.querySelector('#use-again')
@@ -1325,7 +1355,7 @@ function hitNode(x, y) {
 // clobber a slot that already reads as meaningfully filled.
 const PRECISE_SLOT_RADIUS = 60
 function findSnapTarget(dragged) {
-  if (!dragged || dragged.type === 'output' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
+  if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
   let best = null, bestDist = SNAP_RADIUS
   Object.values(activeNodes()).filter(isFunction).forEach((target) => {
     if (target.id === dragged.id) return
@@ -1704,6 +1734,21 @@ window.addEventListener('keydown', (event) => {
     gameError(error)
   }
 })
+// Lay a template's custom functions out in a grid to the right of the
+// builtins (the template can't know where the builtins sit).
+function layoutCustomDefinitions() {
+  const builtins = Object.values(nodes).filter((n) => n.readonly && isFunction(n))
+  const customs = Object.values(nodes).filter((n) => n.custom && !n.lambda)
+  if (!customs.length) return
+  const left = Math.max(...builtins.map(functionBlockRight)) + 220
+  const top = Math.min(...builtins.map((n) => n.y))
+  const colWidth = Math.max(...customs.map(functionBlockWidth)) + 160
+  customs.forEach((n, i) => {
+    n.x = left + (i % 2) * colWidth + FN_LEFT
+    n.y = top + Math.floor(i / 2) * (FN_H + 110)
+  })
+  draw()
+}
 const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame] }
 document.querySelector('#template').onchange = (event) => {
   const [name, build] = TEMPLATES[event.target.value] || []
@@ -1712,6 +1757,7 @@ document.querySelector('#template').onchange = (event) => {
   stopGame()
   state.activeFunction = null
   loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
+  layoutCustomDefinitions()
   fitToView()
   showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
 }
@@ -1754,6 +1800,7 @@ function loadProject(project) {
   outputId = project.outputId
   if (state.activeFunction && !functionBodies[state.activeFunction]) state.activeFunction = null
   if (!activeNodes()[state.selected]) state.selected = state.activeFunction ? 'output' : 'add'
+  recheckLawNodes()
   renderFunctionLibrary(); updateInspector(); draw()
 }
 function restoreSnapshot(snapshot) { loadProject(parseProject(snapshot)) }
@@ -1767,7 +1814,7 @@ function flushCheckpoint() {
   clearTimeout(checkpointTimer)
   checkpointTimer = null
   const snapshot = currentSnapshot()
-  if (history.record(snapshot)) { persist(snapshot); renderFunctionLibrary() } // keep sidebar signatures current while a body is edited
+  if (history.record(snapshot)) { persist(snapshot); renderFunctionLibrary(); recheckLawNodes(); draw() } // keep sidebar signatures and pinned laws current
   updateHistoryButtons()
 }
 function persist(snapshot) {
