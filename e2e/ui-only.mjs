@@ -166,7 +166,10 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await send('Runtime.enable'); await send('Page.enable')
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
   for (let i = 0; i < 60; i++) { try { await fetch(`http://localhost:${PORT}/`); break } catch { await sleep(250) } }
-  await send('Page.navigate', { url: `http://localhost:${PORT}/` }); await sleep(5000)
+  await send('Page.navigate', { url: `http://localhost:${PORT}/` })
+  // Vite's first start (dependency optimisation) can take a while: wait for the app, not a fixed time.
+  for (let i = 0; i < 240 && !(await js(`!!document.querySelector('.add-type')`).catch(() => false)); i++) await sleep(250)
+  await sleep(1000)
   console.log('Building a game through the UI only:')
 
   await check('declare Model and Msg in the type editor', async () => {

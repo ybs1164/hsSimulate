@@ -43,7 +43,7 @@ npm run preview
 7. 좌측 `+` 버튼으로 함수 이름과 매개변수를 입력하면 커스텀 함수가 생성됩니다. 함수 목록에서 생성한 함수를 열고, 본체의 매개변수 노드 또는 다른 함수 호출 노드를 `Output`에 연결해 동작을 정의합니다.
 8. 선택한 노드는 `Delete`/`Backspace` 키 또는 Inspector의 `Delete node`로 지웁니다. 기초 함수, 함수의 `Output`·매개변수, 아직 호출되고 있는 커스텀 함수는 지울 수 없습니다.
 9. `↶`/`↷`(`Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`)로 실행 취소·다시 실행합니다. 프로젝트는 브라우저(localStorage)에 자동 저장되어 새로고침해도 유지되며, `Export`/`Import`로 JSON 파일로 내보내고 불러올 수 있습니다.
-10. 좌측 `TYPES`의 `+`로 타입을 만들면 **타입 편집기**가 열립니다. 타입은 그것을 이루는 생성자 함수들로 표시됩니다: 생성자마다 함수 블록이 있고, 필드는 블록 안에 `이름 :: 타입`으로 적습니다(모두 이름을 붙이면 레코드). 필드·생성자 추가/삭제, `data`/`newtype`, `deriving`(stock · 점별 anyclass · via Generically · newtype)을 고르면 생성자 시그니처와 유도 함수가 바로 갱신되고, 유효한 편집은 즉시 적용됩니다(실행 취소 가능). 다음 함수가 만들어져 타입 아래에 표시됩니다(클릭하면 캔버스에 호출 노드 추가).
+10. 좌측 `TYPES`의 `+`로 타입을 만들면 **타입 편집기**가 열립니다. 이름 옆 칸에 타입 매개변수를 적으면(`data Tree a = Leaf | Node (Tree a) a (Tree a)`) 유도 함수가 그 매개변수에 대해 다형이 되고, 유도 인스턴스는 하스켈처럼 `Eq a ⇒ Eq (Tree a)` 문맥을 가집니다. 타입은 그것을 이루는 생성자 함수들로 표시됩니다: 생성자마다 함수 블록이 있고, 필드는 블록 안에 `이름 :: 타입`으로 적습니다(모두 이름을 붙이면 레코드). 필드·생성자 추가/삭제, `data`/`newtype`, `deriving`(stock · 점별 anyclass · via Generically · newtype)을 고르면 생성자 시그니처와 유도 함수가 바로 갱신되고, 유효한 편집은 즉시 적용됩니다(실행 취소 가능). 다음 함수가 만들어져 타입 아래에 표시됩니다(클릭하면 캔버스에 호출 노드 추가).
     - 생성자(주입) `Model :: Double → Double → Model`, `Tick :: Double → Event`
     - 레코드 필드의 사영 `clicks :: Model → Double`과 lens식 갱신 `set clicks :: Double → Model → Model`, `over clicks :: (Double → Double) → Model → Model`
     - 분기 함수(쌍대짝) `caseEvent :: a → (Double → a) → (Int → a) → Event → a` — `maybe`/`either`/`bool`과 같은 모양
@@ -61,7 +61,9 @@ npm run preview
     - 함수 본체 위쪽의 **헤더 블록** `f x y =`(λ는 `\x y →`)이 좌변입니다: 블록 아래 이름 칸으로 함수 이름을, 슬롯 칸으로 매개변수 이름을 바꾸고, `‹ ›`로 순서를 바꾸고, `−`/`+`로 빼고 더합니다 — 본체와 모든 호출이 따라갑니다.
     - 여러 번 쓰인 값의 `where` 이름과, 중간 슬롯이 빈 호출이 만드는 람다 `\x -> …`의 변수 이름은 그 노드의 인스펙터에서 정합니다.
     - **타입 시그니처**도 그래프입니다: 본체를 편집할 때 사이드바 `TYPE NODES`의 `:: Declare the type`이 지금 타입을 타입 노드로 그려 `f ::` 시그니처 블록에 꽂습니다. 타입은 귀납적 항입니다 — `→`(지수), `[ ]`·`Maybe`(함자), `( , )`(곱), 타입 변수, `f a`, 그리고 문맥 슬롯의 클래스 제약 `Ring •`. 노드를 끌어 바꾸면 본체가 그 타입을 갖는지(추론된 타입의 인스턴스인지) 바로 검사해 ✓/✗로 보여 주고, 맞는 시그니처는 호출하는 쪽이 보는 함수의 타입이 됩니다.
-    - 기초·Prelude·타입에서 유도된 함수는 호출 노드를 더블클릭하거나 `Open definition →`으로 **읽기 전용 정의 그래프**를 엽니다(`src/definitionViews.js`). 더 기본적인 함수로 쓸 수 있는 것은 실제 정의(`map`·`length`·`(++)`·`(!?)`·`mconcat`은 `foldr`로, 필드 사영·갱신은 `caseT`로, 재귀자 `foldT`는 `caseT`와 재귀로, `red = rgb 1 0 0` …)가, 나머지는 생성자·분기 함수·클래스 메서드·런타임 원시 함수임을 밝힌 원시 노드가 그려지며, 타입도 타입 노드 그래프로 표시됩니다.
+    - 기초·Prelude·타입에서 유도된 함수는 호출 노드를 더블클릭하거나 `Open definition →`으로 **정의 그래프**를 엽니다(`src/definitionViews.js`). 더 기본적인 함수로 쓸 수 있는 것은 실제 정의가 그려집니다: `map`·`length`·`(++)`·`(!?)`·`mconcat`은 `foldr`로, 필드 사영·갱신은 `caseT`로, 재귀자 `foldT`는 `caseT`와 재귀로, `red = rgb 1 0 0`, 리스트 리터럴 `[x1, x2, x3] = x1 : x2 : x3 : []`(호출의 슬롯 수만큼). Prelude 타입의 함수는 그 생성자·분기 함수로 씁니다: `text s = Text s`, `maybe d f m = caseMaybe d f m`, `program i v h s = Program i v h s 10 604800 (\model -> mempty)`, `set stepsPerSecond`는 `caseProgram`으로, `getSum`·`appEndo`는 `caseSum`·`caseEndo`로. 나머지는 생성자·분기 함수·클래스 메서드·런타임 원시 함수임을 밝힌 원시 노드가 그려지며, 타입도 타입 노드 그래프로 표시됩니다.
+    - **라이브러리 정의 편집.** 그래프로 쓰인 정의는 경로 표시줄이나 인스펙터의 `✎ Edit definition`으로 가져와 고칠 수 있습니다. 고친 본체는 그 함수의 id(`prelude:…`, `type:…`, `instance:…`)로 프로젝트에 저장되고, 그 함수를 부르는 모든 곳이 내장 구현 대신 이 그래프를 실행합니다(경로에 `· edited`, 사이드바에 `✎`). 타입은 라이브러리의 것 그대로입니다 — 시그니처 그래프는 잠기고 본체가 그 타입을 갖는지 검사하므로, 부르는 쪽이 깨지지 않습니다. `↺ Original`로 편집을 버리고 내장 정의로 돌아갑니다(실행 취소 가능). 원시 함수(생성자, 분기 함수 `caseT`, `foldr`, 숫자·문자열 원시 연산)와 CLAUDE.md가 보호하는 기초 함수는 더 쪼갤 정의가 없어 편집할 수 없습니다.
+    - **인스턴스 메서드.** 선언한 타입의 `deriving`이 주는 클래스 메서드는 각각 `(+) @Wallet`처럼 그 타입에서의 정의를 가집니다(`instance:Wallet:plus`). 대수 클래스는 분기 함수를 통해 점별로(`(+) @V2 x y = caseV2 (… V2 (x1 + x2) (y1 + y2) …) x`), `(==)`는 구조적으로(합 타입 포함), `(>=)`는 사전순으로 쓰여 있습니다. `(+)` 같은 클래스 메서드 호출의 인스펙터 `INSTANCES`나 타입 사이드바에서 열어 편집하면, 그 타입의 값에 쓰이는 메서드가 — 다른 레코드의 필드로 점별 계산될 때도 — 편집한 그래프를 실행하고, 편집하는 동안 그 타입의 법칙 검사가 실시간으로 표시됩니다.
 20. 그 밖에: 검색창(입력하면 사이드바를 거르고 Enter로 추가, `Ctrl/⌘+K`), Shift+클릭 다중 선택(함께 끌기·삭제), `Ctrl/⌘+C`/`V` 복사·붙여넣기(꽂힌 하위 식까지), 튜플 `(a, b)`와 `fst`/`snd`, 순수 난수(`mkStdGen`, `randomR`, `randomRInt` — 생성기를 모델에 보관), gloss식 그림(`circle`, `rectangleSolid`, `translate`, `color`, `<>`로 겹치기)과 `drawing`/`heading`/`spacer`/`withColor` 위젯, 함수 옆에 고정하는 법칙 노드(📌, 편집할 때마다 ✓/✗ 재검사). 템플릿에 주사위 예제(난수·그림)가 추가되었습니다.
 
 ## 캔버스 조작
@@ -91,13 +93,14 @@ npm run preview
 - `src/literals.js`: 슬롯 인라인 리터럴 파서(타입 패스와 실행기가 공유)
 - `src/categoryClasses.js`: Semigroup/Monoid/PartialOrd/Lattice/VectorSpace/Functor/Foldable 선언과 인스턴스, 곱으로 올라가는 클래스 목록
 - `src/dataTypes.js`: 내장 유도 타입(`[a]`, `Maybe a`, `Char`, `()`)의 인스턴스와 런타임 표현
-- `src/typeDecls.js`: 하스켈 `data`/`newtype` 선언 파서·검사기와, 선언에서 유도되는 생성자·사영·갱신·분기 함수와 `deriving` 인스턴스
+- `src/typeDecls.js`: 하스켈 `data`/`newtype` 선언(타입 매개변수 포함) 파서·검사기와, 선언에서 유도되는 생성자·사영·갱신·분기 함수, `deriving` 인스턴스와 그 메서드 정의(`(+) @T`)
 - `src/classEnv.js`: 클래스 환경과 제약 해소기(문맥 있는 인스턴스, entailment, context reduction, 디폴팅)
 - `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소기를 다시 내보내는 진입점(하스켈 Prelude처럼)
 - `src/laws.js`: 클래스 법칙과 함수 법칙(준동형·작용·팽창)을 표본으로 검사하는 법칙 검사기
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임(메시지·시간·방치 보상·되감기)
 - `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력하는 프린터(토큰마다 원래 노드를 기억)
-- `src/definitionViews.js`: 기초·Prelude·유도 함수를 읽기 전용 정의 그래프로 만드는 모듈
+- `src/definitionViews.js`: 기초·Prelude·유도·인스턴스 함수의 정의 그래프, 그리고 그것을 편집 가능한 정의로 가져오기
+- `src/library.js`: Prelude 함수 표와, 하스켈로 선언한 Prelude 타입(Maybe, Color, Picture, Widget, Sub, Program, Sum, Product, Endo)의 생성자·분기 함수
 - `src/typeGraph.js`: 타입 시그니처 그래프(타입 노드)를 타입 스킴으로 읽고, 본체에 대해 검사하고, 타입을 노드로 그리는 모듈
 - `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임, 주사위)와 그 빌더
 - `src/player.js`: 위젯 렌더러와 내보낸 게임의 독립 플레이어
