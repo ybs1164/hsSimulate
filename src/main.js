@@ -9,6 +9,12 @@ import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, printDefinition } from './haskellPrint.js'
 import { buildClickCounter } from './examples/clickCounter.js'
+import { buildBlankGame } from './examples/blankGame.js'
+import { renderWidget } from './player.js'
+import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
+
+// The player modules' source text, for bundling into an exported game (Vite inlines these).
+const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 
 const app = document.querySelector('#app')
@@ -38,7 +44,7 @@ app.innerHTML = `
         <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong>GHC 9.6.3 <i>●</i></strong></div></div>
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><button class="tool-button" id="example" title="Load the click-counter example (undoable)">✦ <span>Example</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
         <div class="canvas-wrap"><div id="play-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Unfold every plugged-in expression onto the canvas">⤢</button><button id="fold-all" title="Fold every expression back into its slot">⤡</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
@@ -1287,21 +1293,29 @@ const SLICE = 0.1 // seconds of game time per step call while playing
 const playPanel = document.querySelector('#play-panel')
 let play = null // { game, entry, modelType, speed, running, last, acc, frame, saveTimer, law }
 
-function startGameIfProgram(id) {
+// The Program the function `id` evaluates to (or null), its model type, and
+// whether its `step` is an action of (ℝ≥0, +) — then any span of time is one call.
+function programInfo(id) {
   let program
   try {
     program = evaluator.run(nodes, id)
   } catch (error) {
-    if (error instanceof EvalError) return false
+    if (error instanceof EvalError) return null
     throw error
   }
-  if (!isProgram(program)) return false
+  if (!isProgram(program)) return null
   const programType = valueTypeOfEntry(typePass(nodes).perNode.get(id))
   const modelType = programType?.kind === 'app' && programType.fn.kind === 'app' ? programType.fn.arg : null
-  // Is `step` an action of (ℝ≥0, +) on the model? Then any span of time is one call.
   const law = modelType && !ftv(modelType).size
     ? checkFunctionLaw('action', program.args[3], tfun(tcon('Double'), tfun(modelType, modelType)), { ev: evaluator, types })
     : { ok: false, counterexample: 'the model type is not concrete' }
+  return { program, modelType, law }
+}
+
+function startGameIfProgram(id) {
+  const info = programInfo(id)
+  if (!info) return false
+  const { program, modelType, law } = info
   stopGame()
   const game = createGame(evaluator, program, { exactTime: law.ok })
   play = { game, entry: id, modelType: modelType ? showQual([], modelType) : '?', speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
@@ -1372,27 +1386,6 @@ function stopGame() {
   playPanel.innerHTML = ''
 }
 
-// Widgets render to plain DOM. Buttons carry the index of their message in
-// `play.msgs`; one pointerdown listener on the (persistent) view container
-// dispatches it — the view is rebuilt on every tick, so a per-button click
-// handler could lose a click whose press and release straddle a rebuild.
-function renderWidget(w, msgs) {
-  if (w.kind === 'text') return Object.assign(document.createElement('p'), { className: 'w-text', textContent: w.text })
-  if (w.kind === 'button') {
-    const b = Object.assign(document.createElement('button'), { className: 'w-button', textContent: w.label, type: 'button' })
-    b.dataset.msg = msgs.push(w.msg) - 1
-    return b
-  }
-  if (w.kind === 'progress') {
-    const bar = Object.assign(document.createElement('div'), { className: 'w-progress' })
-    bar.append(Object.assign(document.createElement('i'), { style: `width:${(w.value * 100).toFixed(1)}%` }))
-    return bar
-  }
-  const box = Object.assign(document.createElement('div'), { className: `w-${w.kind}` })
-  box.append(...w.children.map((c) => renderWidget(c, msgs)))
-  return box
-}
-
 function buildPlayPanel() {
   playPanel.innerHTML = `<div class="play-bar"><b></b><span class="play-time"></span><button class="tool-button icon-only" data-play="toggle" title="Pause / resume"></button><button class="tool-button" data-play="step" title="Advance one second">+1s</button><select data-play="speed" title="Speed">${[1, 2, 10, 60].map((x) => `<option value="${x}">${x}×</option>`).join('')}</select><button class="tool-button" data-play="reset">Reset game</button><button class="tool-button icon-only" data-play="close" title="Back to the editor">×</button></div><div class="play-body"><div class="play-view"></div><aside class="play-side"><label class="play-model-label"></label><pre class="play-model"></pre><label>TIME</label><p class="play-law"></p><label class="play-log-label"></label><ol class="play-log"></ol></aside></div>`
   playPanel.querySelector('[data-play="toggle"]').onclick = () => { play.running = !play.running; play.last = null; renderPlay() }
@@ -1447,13 +1440,29 @@ function renderPlay() {
   }))
 }
 window.addEventListener('beforeunload', saveGame)
-document.querySelector('#example').onclick = () => {
+const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame] }
+document.querySelector('#template').onchange = (event) => {
+  const [name, build] = TEMPLATES[event.target.value] || []
+  event.target.value = ''
+  if (!build) return
   stopGame()
   state.activeFunction = null
-  const example = buildClickCounter()
-  loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(example))), builtinNodes, builtinBodies))
+  loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
   fitToView()
-  showToast('Loaded the click-counter example — Run graph to play it (undo to go back)')
+  showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
+}
+// Download the entry point's game as one HTML file that runs without the
+// editor: the player modules plus every definition, body and type it needs.
+document.querySelector('#export-game').onclick = () => {
+  const info = entryId && nodes[entryId] ? programInfo(entryId) : null
+  if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
+  const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
+  const data = { title, definitions: { ...preludeDefs, ...derivedDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok }
+  const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
+  const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
+  link.click()
+  URL.revokeObjectURL(url)
+  showToast(`Exported ${link.download} — open it in any browser to play`)
 }
 // --- Toasts ---------------------------------------------------------------
 let toastTimer = null

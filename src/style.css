@@ -265,3 +265,4 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .haskell{white-space:pre-wrap;word-break:break-word;font:11px/1.6 'DM Mono'}
 .play-log li.rewindable{cursor:pointer}
 .play-log li.rewindable:hover{color:var(--accent-ink);text-decoration:underline}
+.tool-select{border:1.5px solid var(--line);border-radius:var(--radius-full);padding:7px 12px;font:600 11px 'DM Mono';color:var(--muted);background:var(--panel);cursor:pointer}
