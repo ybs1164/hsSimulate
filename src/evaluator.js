@@ -15,7 +15,7 @@
 //   forced (`run` returns them that way), so they can be stored on a node
 //   and survive save/load.
 import { parseLiteral } from './literals.js'
-import { cons, just, nil, nothing } from './dataTypes.js'
+import { cons, just, nil, nothing, pair, stdGen } from './dataTypes.js'
 
 export class EvalError extends Error {}
 
@@ -72,6 +72,7 @@ export function showValue(v, types = {}, asArg = false) {
   if (isClosure(v)) return `ƒ ${v.callee}`
   if (isMempty(v)) return 'mempty'
   if (typeof v === 'string') return `'${v}'` // a Char
+  if (isData(v) && v.type === '(,)') return `(${showValue(v.args[0], types)},${showValue(v.args[1], types)})`
   if (isData(v) && v.type === 'List') {
     const items = []
     for (let l = v; l.ctorIndex === 1; l = l.args[1]) items.push(l.args[0])
@@ -190,6 +191,15 @@ export function showCompact(x) {
   return `${x < 0 ? '-' : ''}${v >= 100 ? Math.trunc(v) : String(v)}${COMPACT_SUFFIXES[e]}`
 }
 
+/** One step of mulberry32: a 32-bit state in, [a uniform number in [0, 1), the next state] out. */
+function mulberry32(state) {
+  const next = (state + 0x6d2b79f5) | 0
+  let t = next
+  t = Math.imul(t ^ (t >>> 15), t | 1)
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+  return [((t ^ (t >>> 14)) >>> 0) / 4294967296, next]
+}
+
 /** Haskell's `round`: halves go to the even neighbour. */
 function roundHalfEven(x) {
   const r = Math.round(x)
@@ -266,6 +276,20 @@ export function createEvaluator(registry) {
       if (n < 0) return nothing
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1]), n--) if (n === 0) return just(l.args[0])
       return nothing
+    }],
+    pair: [2, (a, b) => pair(a, b)],
+    fst: [1, (p) => force(force(p).args[0])],
+    snd: [1, (p) => force(force(p).args[1])],
+    mkStdGen: [1, (n) => stdGen(num(n) | 0)],
+    randomR: [2, (range, g) => {
+      const [lo, hi] = force(range).args.map(num)
+      const [u, next] = mulberry32(num(force(g).args[0]))
+      return pair(lo + u * (hi - lo), stdGen(next))
+    }],
+    randomRInt: [2, (range, g) => {
+      const [lo, hi] = force(range).args.map(num)
+      const [u, next] = mulberry32(num(force(g).args[0]))
+      return pair(lo + Math.floor(u * (hi - lo + 1)), stdGen(next))
     }],
     nothing: [0, () => nothing],
     just: [1, (x) => just(x)],

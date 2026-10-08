@@ -21,7 +21,7 @@
 // OrderedField -> EuclideanRing, `isNaN` IEEEFloat. `geq`/`eq` use the
 // auxiliary Ord/Eq classes, and `select` is the polymorphic `if` that the
 // pinned `ifThenElse` deliberately is not.
-import { pred, scheme, tapp, tcon, tfun, tlist, tvar } from './typeSystem.js'
+import { pred, scheme, tapp, tcon, tfun, tlist, ttuple, tvar } from './typeSystem.js'
 
 const a = tvar('a')
 const b = tvar('b')
@@ -86,6 +86,17 @@ export const builtinSchemes = {
   showFFloat: scheme(['a'], [pred('IEEEFloat', a)], tfun(Int, tfun(a, String))), // Haskell's RealFloat a
   // Big numbers the way idle games show them: 999, 1.2K, 3.4M, 5.6B, 7.8T, 1.2Qa …
   showCompact: scheme(['a'], [pred('IEEEFloat', a)], tfun(a, String)),
+
+  // Pairs — the categorical product (a, b) with its projections.
+  pair: scheme(['a', 'b'], [], tfun(a, tfun(b, ttuple(a, b)))),
+  fst: scheme(['a', 'b'], [], tfun(ttuple(a, b), a)),
+  snd: scheme(['a', 'b'], [], tfun(ttuple(a, b), b)),
+  // Pure random numbers, System.Random style: the generator is a value you
+  // keep (in the model) and thread through. randomR is specialised to
+  // Double and randomRInt to Int, since the evaluator is untyped.
+  mkStdGen: scheme([], [], tfun(Int, tcon('StdGen'))),
+  randomR: scheme([], [], tfun(ttuple(Double, Double), tfun(tcon('StdGen'), ttuple(Double, tcon('StdGen'))))),
+  randomRInt: scheme([], [], tfun(ttuple(Int, Int), tfun(tcon('StdGen'), ttuple(Int, tcon('StdGen'))))),
 
   // Category classes (src/categoryClasses.js), Haskell names.
   mappend: scheme(['a'], [pred('Semigroup', a)], tfun(a, tfun(a, a))),

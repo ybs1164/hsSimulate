@@ -8,7 +8,7 @@
 // Type-directed: the type decides what's acceptable (a constructor of that
 // type, every field of a record, a number for a numeric type …), and every
 // error says where. Functions, Endo and widgets have no written form.
-import { cons, just, nil, nothing } from './dataTypes.js'
+import { cons, just, nil, nothing, pair, stdGen } from './dataTypes.js'
 import { showType } from './typeSystem.js'
 
 export class ParseError extends Error {}
@@ -50,6 +50,22 @@ export function parseValue(text, type, types = {}) {
   function value(t, atomic = false) {
     const tok = peek()
     if (!tok) throw new ParseError(`Expected a ${showType(t)} at the end`)
+    const isTuple = t.kind === 'app' && t.fn.kind === 'app' && t.fn.fn.kind === 'con' && t.fn.fn.name === '(,)'
+    if (isTuple) {
+      expect('(')
+      const a = value(t.fn.arg)
+      expect(',')
+      const b = value(t.arg)
+      expect(')')
+      return pair(a, b)
+    }
+    if (t.kind === 'con' && t.name === 'StdGen') {
+      if (tok.text !== 'StdGen') throw new ParseError(`Expected StdGen <seed> ${where()}`)
+      if (atomic) throw new ParseError(`Put parentheses around StdGen … ${where()}`)
+      i++
+      if (peek()?.kind !== 'num') throw new ParseError(`Expected a seed number ${where()}`)
+      return stdGen(Number(tokens[i++].text) | 0)
+    }
     if (tok.text === '(' && !(t.kind === 'con' && t.name === '()')) {
       i++
       const v = value(t)

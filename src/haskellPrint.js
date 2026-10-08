@@ -111,7 +111,8 @@ function printBody(fnId, definitions, functionBodies) {
       return atom(x)
     })
     let e
-    if (label === '[ , , ]') e = atom(`[${applied.map((a) => a.text).join(', ')}]`)
+    if (label === '(,)' && applied.length === 2) e = atom(`(${applied[0].text}, ${applied[1].text})`)
+    else if (label === '[ , , ]') e = atom(`[${applied.map((a) => a.text).join(', ')}]`)
     else if (OPERATORS[label]) {
       const op = OPERATORS[label]
       const [a, b] = applied

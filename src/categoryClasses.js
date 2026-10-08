@@ -14,7 +14,7 @@
 // (<>) and mempty are composition and the identity — the protected
 // builtins `compose` and `identity`.
 import { declareClass, declareInstance } from './classEnv.js'
-import { pred, tapp, tcon, tlist, tvar } from './typeSystem.js'
+import { pred, tapp, tcon, tlist, ttuple, tvar } from './typeSystem.js'
 
 declareClass('Semigroup', [])
 declareClass('Monoid', ['Semigroup'])
@@ -41,6 +41,10 @@ declareInstance('Monoid', app('Product', $a), [pred('MulMonoid', $a)])
 // Maybe adjoins an identity to a semigroup (Nothing).
 declareInstance('Semigroup', app('Maybe', $a), [pred('Semigroup', $a)])
 declareInstance('Monoid', app('Maybe', $a), [pred('Semigroup', $a)])
+// A product of monoids is a monoid, componentwise.
+const $b = tvar('$b')
+declareInstance('Semigroup', ttuple($a, $b), [pred('Semigroup', $a), pred('Semigroup', $b)])
+declareInstance('Monoid', ttuple($a, $b), [pred('Monoid', $a), pred('Monoid', $b)])
 // The terminal object is the trivial monoid.
 declareInstance('Semigroup', tcon('()'))
 declareInstance('Monoid', tcon('()'))

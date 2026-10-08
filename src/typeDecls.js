@@ -23,7 +23,7 @@
 //
 // and registers the instances its `deriving` clauses ask for.
 import { classClosure, entails, isClass, productLiftable, withDynamicInstances } from './prelude.js'
-import { constructorArity, pred, scheme, showType, tapp, tcon, tfun, tlist, tvar, wellKinded } from './typeSystem.js'
+import { constructorArity, pred, scheme, showType, tapp, tcon, tfun, tlist, ttuple, tvar, wellKinded } from './typeSystem.js'
 
 export class DeclError extends Error {}
 
@@ -65,6 +65,7 @@ function parser(tokens) {
       next()
       if (peek() === ')') { next(); return { unit: true } }
       const inner = type()
+      if (peek() === ',') { next(); const second = type(); expect(')'); return { tuple: [inner, second] } }
       expect(')')
       return inner
     }
@@ -168,10 +169,11 @@ export function parseDecls(text) {
 // ---- Resolution and checking -------------------------------------------------
 
 /** Built-in type names a field may mention (beyond the declared ones). */
-export const builtinTypeNames = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational', 'Bool', 'Char', 'String', ...Object.keys(constructorArity)]
+export const builtinTypeNames = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational', 'Bool', 'Char', 'String', 'StdGen', ...Object.keys(constructorArity)]
 
 function resolveType(t, known) {
   if (t.unit) return tcon('()')
+  if (t.tuple) return ttuple(resolveType(t.tuple[0], known), resolveType(t.tuple[1], known))
   if (t.list) return tlist(resolveType(t.list, known))
   if (t.fun) return tfun(resolveType(t.fun[0], known), resolveType(t.fun[1], known))
   if (t.con === 'String' && !t.args.length) return tlist(tcon('Char'))
@@ -215,6 +217,7 @@ export function declareTypes(types, text, { replacing = null, functionLabels = [
 
 function printSyntax(t, asArg = false) {
   if (t.unit) return '()'
+  if (t.tuple) return `(${printSyntax(t.tuple[0])}, ${printSyntax(t.tuple[1])})`
   if (t.list) return `[${printSyntax(t.list)}]`
   if (t.fun) return `(${printSyntax(t.fun[0])} -> ${printSyntax(t.fun[1])})`
   const s = [t.con, ...t.args.map((a) => printSyntax(a, true))].join(' ')

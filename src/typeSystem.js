@@ -49,7 +49,12 @@ export function tlist(elem) {
 }
 
 /** How many type arguments each constructor takes (its kind is `*` with that many `* ->` in front). */
-export const constructorArity = { List: 1, Maybe: 1, Endo: 1, Sum: 1, Product: 1, Widget: 1, Program: 2, Sub: 1 }
+export const constructorArity = { List: 1, Maybe: 1, Endo: 1, Sum: 1, Product: 1, Widget: 1, Program: 2, Sub: 1, '(,)': 2 }
+
+/** The pair type `(a, b)` — the categorical product. */
+export function ttuple(a, b) {
+  return tapp(tapp(tcon('(,)'), a), b)
+}
 
 /**
  * How many more arguments `type` still needs before it is a proper type of
@@ -211,6 +216,7 @@ export function showType(type, namer = createNamer()) {
     if (t.kind === 'var') return namer(t.id)
     if (t.kind === 'con') return t.name === 'List' ? '[]' : t.name
     if (t.kind === 'app') {
+      if (t.fn.kind === 'app' && t.fn.fn.kind === 'con' && t.fn.fn.name === '(,)') return `(${go(t.fn.arg, false, false)}, ${go(t.arg, false, false)})`
       if (t.fn.kind === 'con' && t.fn.name === 'List') return t.arg.kind === 'con' && t.arg.name === 'Char' ? 'String' : `[${go(t.arg, false, false)}]`
       const rendered = `${go(t.fn, false, false)} ${go(t.arg, false, true)}`
       return asArg ? `(${rendered})` : rendered
