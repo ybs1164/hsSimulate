@@ -11,8 +11,19 @@
 //   { kind: 'var', id }        -- a type variable, e.g. `a`
 //   { kind: 'con', name }      -- a concrete type constructor, e.g. Int, Bool
 //   { kind: 'fun', from, to }  -- a function arrow, e.g. Int -> Bool
+//   { kind: 'app', fn, arg }   -- a type constructor applied to an argument,
+//                                 curried like THIH's `TAp`: `Maybe Int` is
+//                                 app(Maybe, Int). The head may itself be a
+//                                 variable (`f a`), which is what lets a
+//                                 constructor class like Functor quantify
+//                                 over `f :: * -> *`.
 // `Scheme` is `{ vars: string[], type: Type }`, i.e. `forall vars. type`.
 // `Subst` is a `Map<varId, Type>`.
+//
+// Kinds are kept to what this app needs: every constructor has a fixed arity
+// (`List`, `Maybe`, … :: * -> *, everything else :: *), checked by
+// `wellKinded`; type variables are assumed to be used at a consistent kind
+// rather than kind-inferred.
 
 let nextVarId = 0
 
@@ -26,6 +37,44 @@ export function tcon(name) {
 
 export function tfun(from, to) {
   return { kind: 'fun', from, to }
+}
+
+export function tapp(fn, arg) {
+  return { kind: 'app', fn, arg }
+}
+
+/** Haskell's list type `[a]` — internally the constructor `List` applied to `a`. */
+export function tlist(elem) {
+  return tapp(tcon('List'), elem)
+}
+
+/** How many type arguments each constructor takes (its kind is `*` with that many `* ->` in front). */
+export const constructorArity = { List: 1, Maybe: 1, Endo: 1, Sum: 1, Product: 1 }
+
+/**
+ * How many more arguments `type` still needs before it is a proper type of
+ * kind `*`, or null if that depends on a variable's kind. Throws if a
+ * constructor is over-applied or a function/argument isn't of kind `*`.
+ */
+export function kindArity(type) {
+  if (type.kind === 'var') return null
+  if (type.kind === 'con') return constructorArity[type.name] || 0
+  if (type.kind === 'fun') {
+    if (![0, null].includes(kindArity(type.from)) || ![0, null].includes(kindArity(type.to))) throw new Error(`Ill-kinded: ${showType(type)}`)
+    return 0
+  }
+  const head = kindArity(type.fn)
+  if (head === 0 || ![0, null].includes(kindArity(type.arg))) throw new Error(`Ill-kinded: ${showType(type)}`)
+  return head === null ? null : head - 1
+}
+
+/** Is `type` a proper type of kind `*` (or possibly so, when that hinges on a variable)? */
+export function wellKinded(type) {
+  try {
+    return [0, null].includes(kindArity(type))
+  } catch {
+    return false
+  }
 }
 
 /** A fresh, globally-unique type variable (never resolves to a fixed name like builtin schemes' `a`/`b`). */
@@ -57,6 +106,7 @@ export function applySubst(subst, type) {
     return bound ? applySubst(subst, bound) : type
   }
   if (type.kind === 'fun') return tfun(applySubst(subst, type.from), applySubst(subst, type.to))
+  if (type.kind === 'app') return tapp(applySubst(subst, type.fn), applySubst(subst, type.arg))
   return type
 }
 
@@ -64,6 +114,7 @@ export function applySubst(subst, type) {
 export function ftv(type) {
   if (type.kind === 'var') return new Set([type.id])
   if (type.kind === 'fun') return new Set([...ftv(type.from), ...ftv(type.to)])
+  if (type.kind === 'app') return new Set([...ftv(type.fn), ...ftv(type.arg)])
   return new Set()
 }
 
@@ -98,6 +149,10 @@ export function unify(t1, t2, subst = new Map()) {
   if (a.kind === 'fun' && b.kind === 'fun') {
     const s1 = unify(a.from, b.from, subst)
     return unify(a.to, b.to, s1)
+  }
+  if (a.kind === 'app' && b.kind === 'app') {
+    const s1 = unify(a.fn, b.fn, subst)
+    return unify(a.arg, b.arg, s1)
   }
   throw new UnifyError(a, b)
 }
@@ -145,15 +200,25 @@ export function createNamer() {
   }
 }
 
-/** GHC-style pretty printer. See createNamer() for how variable letters are assigned. */
+/**
+ * GHC-style pretty printer: `Maybe (List a)` prints as `Maybe [a]`, `[Char]`
+ * as `String` (Haskell's `type String = [Char]`). See createNamer() for how
+ * variable letters are assigned.
+ */
 export function showType(type, namer = createNamer()) {
-  const go = (t, asDomain) => {
+  // `asDomain`: left of an arrow; `asArg`: argument of a type application.
+  const go = (t, asDomain, asArg) => {
     if (t.kind === 'var') return namer(t.id)
-    if (t.kind === 'con') return t.name
-    const rendered = `${go(t.from, true)} → ${go(t.to, false)}`
-    return asDomain ? `(${rendered})` : rendered
+    if (t.kind === 'con') return t.name === 'List' ? '[]' : t.name
+    if (t.kind === 'app') {
+      if (t.fn.kind === 'con' && t.fn.name === 'List') return t.arg.kind === 'con' && t.arg.name === 'Char' ? 'String' : `[${go(t.arg, false, false)}]`
+      const rendered = `${go(t.fn, false, false)} ${go(t.arg, false, true)}`
+      return asArg ? `(${rendered})` : rendered
+    }
+    const rendered = `${go(t.from, true, false)} → ${go(t.to, false, false)}`
+    return asDomain || asArg ? `(${rendered})` : rendered
   }
-  return go(type, false)
+  return go(type, false, false)
 }
 
 /**

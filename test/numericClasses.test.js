@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { pred, tcon, tfun, tvar } from '../src/typeSystem.js'
-import { classClosure, instancesOf, literalClass, numericTypes, pickDefault, reduce } from '../src/numericClasses.js'
+import { pred, tapp, tcon, tfun, tvar } from '../src/typeSystem.js'
+import { classClosure, entails, instancesOf, listInstances, literalClass, numericTypes, pickDefault, reduce, setDynamicInstances, superclassesOf } from '../src/prelude.js'
 
 const a = tvar('a')
 const has = (type, cls) => instancesOf(type).includes(cls)
@@ -113,3 +113,27 @@ for (const [type, m] of Object.entries(models)) {
     }
   })
 }
+
+// ---- Instances with contexts (THIH): `instance Show a => Show (Maybe a)`.
+
+
+
+test('an instance context becomes new obligations', () => {
+  const Maybe = (t) => tapp(tcon('Maybe'), t)
+  setDynamicInstances([{ cls: 'Show', head: Maybe(tvar('$a')), context: [pred('Show', tvar('$a'))] }])
+  try {
+    assert.ok(entails([], pred('Show', Maybe(tcon('Int')))))
+    assert.ok(entails([], pred('Show', Maybe(Maybe(tcon('Bool'))))))
+    assert.ok(!entails([], pred('Show', Maybe(tfun(a, a)))))
+    assert.deepEqual(reduce([pred('Show', Maybe(a))]), [pred('Show', a)])
+    assert.throws(() => reduce([pred('Show', Maybe(tfun(a, a)))]))
+  } finally {
+    setDynamicInstances([])
+  }
+})
+
+test('every instance also satisfies its class\'s superclasses (given its context)', () => {
+  for (const inst of listInstances()) {
+    for (const sup of superclassesOf(inst.cls)) assert.ok(entails(inst.context, pred(sup, inst.head)), `${inst.cls} instance lacks ${sup}`)
+  }
+})

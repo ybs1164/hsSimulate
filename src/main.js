@@ -1,7 +1,7 @@
 import './style.css'
 import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
-import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes } from './numericClasses.js'
+import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes } from './prelude.js'
 import { createEvaluator, EvalError, isClosure } from './evaluator.js'
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject } from './project.js'
 
@@ -240,6 +240,7 @@ function colorForType(type, namer) {
   if (!type) return '#9691a8'
   if (type.kind === 'fun') return FN_TYPE_COLOR
   if (type.kind === 'con') return TYPE_COLORS[type.name] || '#9691a8'
+  if (type.kind === 'app') return colorForType(type.fn, namer) // `Maybe Int` reads as its head, `Maybe`
   return VAR_PALETTE[namer(type.id).charCodeAt(0) % VAR_PALETTE.length]
 }
 // Still worth flagging that a slot wants a function specifically — not as a

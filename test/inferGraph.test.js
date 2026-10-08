@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
-import { reduce } from '../src/numericClasses.js'
+import { reduce } from '../src/prelude.js'
 import { showQual } from '../src/typeSystem.js'
 
 const fn = (id, builtin, mounted) => ({ id, type: 'function', builtin, params: mounted.map(() => ''), mounted })

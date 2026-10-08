@@ -19,7 +19,7 @@
 //   whatever's left free, then let each call site instantiate it fresh.
 import { applySubst, freshVar, ftv, generalize, instantiate, pred, tcon, tfun, unify, scheme } from './typeSystem.js'
 import { builtinSchemes } from './builtinSchemes.js'
-import { literalClass, reduce } from './numericClasses.js'
+import { literalClass, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
 
 const Int = tcon('Int')
@@ -297,7 +297,9 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
     if (entry.paramTypes) entry.invalidSlots = [...(invalidHere.get(id) || [])]
     const ownTypes = entry.paramTypes ? [...entry.paramTypes, entry.resultType] : [entry.valueType]
     const ownVars = new Set(ownTypes.flatMap((t) => [...ftv(t)]))
-    entry.preds = reducedPreds.filter((p) => p.type.kind === 'var' && ownVars.has(p.type.id))
+    // Reduced preds are in head-normal form (`Ring a`, or `Show (f a)` under a
+    // constructor class), so "mentions one of this node's variables" is the test.
+    entry.preds = reducedPreds.filter((p) => [...ftv(p.type)].some((v) => ownVars.has(v)))
   })
   return { perNode, subst: ctx.subst, preds: resolvedPreds }
 }
