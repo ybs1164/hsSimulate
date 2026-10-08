@@ -15,11 +15,15 @@
 - `src/dataTypes.js`: 내장 유도 타입(리스트, Maybe, Char, ())의 인스턴스와 런타임 표현.
 - `src/laws.js`: 클래스·함수 법칙 검사기.
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.
-- `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력.
-- `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임)와 빌더.
+- `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력(토큰마다 원래 노드를 가리킴).
+- `src/definitionViews.js`: 기초·Prelude·유도 함수의 읽기 전용 정의 그래프.
+- `src/typeGraph.js`: 타입 시그니처를 타입 노드 그래프로 읽기·검사·그리기.
+- `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임, 주사위)와 빌더.
 - `src/player.js`: 위젯 렌더러와 독립 플레이어.
 - `src/exportHtml.js`: 독립 HTML 내보내기(번들러).
 - `src/valueParser.js`: 하스켈 값 파서.
+- `src/signature.js`: 함수 시그니처 편집(정의·본체·호출 동기화).
+- `e2e/ui-only.mjs`: UI만으로 게임을 만드는 브라우저 e2e 테스트.
 - `src/project.js`: 프로젝트 직렬화·불러오기·실행 취소 기록.
 - `src/style.css`: 레이아웃과 반응형 스타일.
 

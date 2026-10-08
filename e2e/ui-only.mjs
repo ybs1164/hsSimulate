@@ -289,6 +289,76 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     return def.split('\n')[1]
   })
 
+  console.log('The definition is the graph:')
+  const definitionText = () => js(`[...document.querySelectorAll('.property.definition .haskell')].pop()?.textContent ?? ''`)
+  const clickToken = (text) => js(`[...document.querySelectorAll('.property.definition .haskell .tok')].reverse().find((t) => t.textContent === ${JSON.stringify(text)}).click()`).then(() => sleep(300))
+  await check('the header renames the function and its parameters, and reorders them; every call follows', async () => {
+    await openBody('handle')
+    const handleId = Object.values((await project()).nodes).find((n) => n.label === 'handle' && n.custom).id
+    await setField('.header-name', 'update'); await sleep(250)
+    await setField('.param-slot[data-function-id="header"][data-index="0"] .binder-name', 'message'); await sleep(250)
+    const renamed = (await definitionText()).split('\n')[1]
+    await js(`document.querySelector('.param-slot[data-function-id="header"][data-index="0"] .binder-move').click()`); await sleep(250)
+    const moved = (await definitionText()).split('\n')[1]
+    const calls = Object.values((await project()).functionBodies).flatMap((b) => Object.values(b)).filter((n) => n.sourceFunctionId === handleId)
+    await js(`document.querySelector('.param-slot[data-function-id="header"][data-index="1"] .binder-move').click()`); await sleep(250)
+    await setField('.header-name', 'handle'); await sleep(250)
+    expect(renamed === 'update message m = over count (1 +) m', renamed)
+    expect(moved === 'update m message = over count (1 +) m', moved)
+    expect(calls.length && calls.every((c) => c.label === 'update'), 'calls should follow the rename')
+    await back()
+    return moved
+  })
+  await check('a DEFINITION token selects the node it was read from', async () => {
+    await openBody('view')
+    await clickToken('showFFloat')
+    const selected = await js(`document.querySelector('.selected-node b').textContent`)
+    const linked = await js(`[...document.querySelectorAll('.property.definition .tok.linked')].map((t) => t.textContent).join('')`)
+    expect(selected === 'showFFloat' && linked === 'showFFloat0', `${selected} / ${linked}`) // the call, and the literal typed into its slot
+    return selected
+  })
+  await check('a value used twice is shared under the where-name given on its node', async () => {
+    await clickToken('count')
+    await js(`document.querySelector('#use-again').click()`); await sleep(300)
+    await setField('.where-name', 'n'); await sleep(300)
+    const text = await definitionText()
+    await key('Delete', 'Delete', 46) // the reference (selected) goes again
+    expect(text.includes('showFFloat 0 n') && text.endsWith('where\n    n = count m'), text)
+    return text.split('\n').slice(-2).join(' ').trim()
+  })
+  await check('a Prelude call opens its definition as a read-only graph', async () => {
+    await clickToken('++')
+    await js(`document.querySelector('#open-definition').click()`); await sleep(700)
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    const text = await definitionText()
+    const locked = await js(`[...document.querySelectorAll('#port-editor input')].every((e) => e.disabled || e.readOnly)`)
+    await back(); await back()
+    expect(crumb.endsWith('read-only') && text.includes('foldr (:) ys xs') && locked, `${crumb} / ${text} / locked ${locked}`)
+    return text.split('\n')[1]
+  })
+  await check('the type is declared as a graph of type nodes and checked against the body', async () => {
+    await openBody('handle')
+    await js(`document.querySelector('#tnode-library [data-pin]').click()`); await sleep(500)
+    const ok = await js(`document.querySelector('.inspector .law')?.textContent ?? ''`)
+    const { graph } = await activeGraph()
+    const inner = graph[graph.signature.mounted[0]].mounted[1] // a → (Model → Model): the inner arrow
+    // pull the first Model out of the inner arrow, plug Bool in instead
+    const chip = JSON.parse(await js(`JSON.stringify(document.querySelector('.param-slot[data-function-id="${inner}"][data-index="0"] .param-chip').getBoundingClientRect())`))
+    await drag({ x: chip.x + chip.width / 2, y: chip.y + chip.height / 2 }, { x: chip.x + chip.width / 2, y: chip.y + 260 })
+    const before = new Set(Object.keys((await activeGraph()).graph))
+    await js(`[...document.querySelectorAll('#tnode-library .tnode-item')].find((e) => e.textContent === 'Bool').click()`); await sleep(300)
+    const bool = Object.keys((await activeGraph()).graph).find((k) => !before.has(k))
+    await plug(bool, inner, 0)
+    await clickToken('::')
+    const bad = await js(`document.querySelector('.inspector .law')?.textContent ?? ''`)
+    const text = await definitionText()
+    await js(`document.querySelector('#remove-signature').click()`); await sleep(300)
+    const gone = !(await activeGraph()).graph.signature
+    await back()
+    expect(ok.startsWith('✓') && bad.startsWith('✗') && text.split('\n')[0].includes('-> Bool -> Model') && text.includes('-- ✗') && gone, `${ok} / ${bad} / ${text}`)
+    return text.split('\n')[0]
+  })
+
   console.log(errors.length ? `Page errors:\n  ${errors.join('\n  ')}` : 'No page errors.')
   if (errors.length) failures++
   console.log(failures ? `${failures} check(s) failed` : 'All checks passed')

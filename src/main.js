@@ -1,8 +1,8 @@
 import './style.css'
-import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
+import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred, constructorArity } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
-import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances, productLiftable } from './prelude.js'
+import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances, productLiftable, classNames } from './prelude.js'
 import { createEvaluator, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource } from './typeDecls.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
@@ -10,6 +10,7 @@ import { createGame, isProgram } from './runtime.js'
 import { asciiType, identifier, printDefinitionTokens, printLambdaText } from './haskellPrint.js'
 import { parseLiteral } from './literals.js'
 import { buildDefinitionView, viewIdOf } from './definitionViews.js'
+import { makeSignatureNode, makeTypeNode, readSignature, typeNodeLabel, typeNodes, typeSlotName } from './typeGraph.js'
 import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
 import { buildClickCounter } from './examples/clickCounter.js'
@@ -41,6 +42,8 @@ app.innerHTML = `
           <div id="type-library"></div>
           <div class="library-title types-title"><span>PRELUDE</span></div>
           <div id="prelude-library"></div>
+          <div class="library-title types-title" id="tnode-title" hidden><span>TYPE NODES</span></div>
+          <div id="tnode-library" hidden></div>
           <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>Numbers</b><small>Int · Float</small></span></button>
           <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String = [Char]</small></span></button>
           <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>Lists</b><small>[a, b, c]</small></span></button>
@@ -179,6 +182,8 @@ function ensureView(defId) {
     const view = buildDefinitionView(def, (id) => definitions[id])
     Object.assign(viewDefs, view.defs)
     Object.assign(viewBodies, view.bodies)
+    const sch = view.defs[viewId].scheme
+    if (sch) addSignatureGraph(view.bodies[viewId], sch.preds, sch.type)
   }
   return viewId
 }
@@ -206,18 +211,20 @@ function layoutView(viewId) {
   if (root && root.type !== 'parameter') {
     setRightEdge(root, left); root.y = output.y
     layoutTree(root)
-    const tree = Object.values(body).filter((n) => n.type !== 'output' && n.type !== 'header' && n.type !== 'parameter' && isVisible(n))
+    const tree = Object.values(body).filter((n) => n.type !== 'output' && n.type !== 'header' && n.type !== 'parameter' && !isTypeLevel(n) && isVisible(n))
     left = Math.min(...tree.map((n) => (isBlock(n) ? functionBlockLeft(n) : n.x - chipHalfWidth(n))))
   }
   const params = Object.values(body).filter((n) => n.type === 'parameter' && !n.mountedTo)
+  const typeLevel = (n) => isTypeLevel(n)
   params.forEach((n, i) => { setRightEdge(n, left - 110); n.y = output.y + (i - (params.length - 1) / 2) * (CHIP_H + 50) })
-  const all = Object.values(body).filter((n) => n.type !== 'header' && isVisible(n))
+  const all = Object.values(body).filter((n) => n.type !== 'header' && !typeLevel(n) && isVisible(n))
   const top = Math.min(...all.map((n) => n.y))
   const minX = Math.min(...all.map((n) => (isBlock(n) ? functionBlockLeft(n) : n.x - chipHalfWidth(n))))
   delete body.header
   ensureHeader(viewId)
   body.header.x = minX + FN_LEFT
   body.header.y = top - FN_H - 110
+  layoutSignature(body)
 }
 const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
@@ -233,6 +240,7 @@ function renderFunctionLibrary() {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
   })
   renderTypeLibrary()
+  renderTypeNodeLibrary()
   applySearch()
 }
 // A λ (anonymous function), by lambda lifting: a hidden custom function
@@ -612,7 +620,7 @@ function functionBlockRight(node) {
 }
 // Drawn as a block with slots (rather than a value chip): a function node,
 // and a function body's definition header (`f x y =`, its slots the binders).
-function isBlock(n) { return n.type === 'function' || n.type === 'header' }
+function isBlock(n) { return n.type === 'function' || n.type === 'header' || n.type === 'signature' || (n.type === 'tnode' && n.params?.length > 0) }
 function slotCount(n) { return n.type === 'header' ? headerParams(n).length : n.params.length }
 function functionBlockWidth(node) { return functionBlockRight(node) - functionBlockLeft(node) }
 function functionBlockScreenRect(node) {
@@ -761,6 +769,7 @@ function resolvedValueQual(node, graph = activeNodes(), pass = typePass(graph)) 
   return { preds: entry?.preds || [], type: valueTypeOfEntry(entry) }
 }
 function canConnect(source, target, index) {
+  if (isTypeLevel(source) || isTypeLevel(target)) return typeSlotAccepts(target, index, source)
   const pass = typePass()
   const expected = pass.perNode.get(target.id)?.paramTypes?.[index]
   if (!expected) return false
@@ -785,6 +794,7 @@ function nodeDisplayText(node, graph = activeNodes()) {
   if (!node) return '?'
   if (node.type === 'ref') return `↪ ${nodeDisplayText(graph[node.target], graph)}`
   if (node.type === 'function') return `ƒ ${node.label}`
+  if (node.type === 'tnode') return typeNodeLabel(node)
   if (node.type === 'curried') return node.value || 'ƒ'
   if (node.type === 'output') return node.value ?? 'Output'
   if (node.type === 'value') return showValue(node.data, types)
@@ -812,7 +822,7 @@ function isVisible(n) { return !n.lambda && (!n.mountedTo || n.unfolded) } // a 
 function slotHost(n) {
   const [hostId, index] = String(n.mountedTo || '').split(':')
   const host = activeNodes()[hostId]
-  return host && host.type === 'function' ? { host, index: Number(index) } : null
+  return host && isSlotted(host) ? { host, index: Number(index) } : null
 }
 function drawUnfoldedLinks() {
   ctx.save()
@@ -838,7 +848,7 @@ function setUnfolded(n, unfolded) {
 function setAllUnfolded(unfolded) {
   const graph = activeNodes()
   Object.values(graph).forEach((n) => { if (n.mountedTo) n.unfolded = unfolded })
-  if (unfolded) Object.values(graph).filter((n) => !n.mountedTo && n.type === 'function').forEach(layoutTree)
+  if (unfolded) Object.values(graph).filter((n) => !n.mountedTo && isSlotted(n)).forEach(layoutTree)
   draw(); fitToView()
 }
 const TREE_ROW = FN_H + 70
@@ -910,6 +920,7 @@ function draw() {
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
     if (n.type === 'function') drawFunctionBlock(n, pass, selected)
     else if (n.type === 'header') drawHeaderBlock(n, selected)
+    else if (isTypeLevel(n) && isBlock(n)) drawTypeBlock(n, pass, selected)
     else drawValueChip(n, pass, selected, snapHighlight)
   })
   drawLinkHighlights()
@@ -1076,6 +1087,209 @@ function renderHeaderEditor(header) {
 }
 // Labels of functions defined outside `nodes` — a custom function can't take them.
 function takenLabels() { return [...Object.values(preludeDefs), ...Object.values(derivedDefs)].map((d) => d.label) }
+// --- The signature, as a graph of type nodes (src/typeGraph.js) ---------------
+// A type node is drawn like everything else: a constructor that takes
+// arguments (`→`, `[ ]`, `Maybe`, `( , )`, a constraint) is a block with a
+// slot per argument, a constant type or a type variable is a chip. The
+// signature block `f ::` takes the type in its first slot and constraints in
+// the rest. Types only plug into type slots and values only into value slots.
+const TYPE_NODE_COLOR = '#5a6ea8'
+const TYPE_VAR_COLOR = '#8b7cf2'
+function isTypeLevel(n) { return n?.type === 'tnode' || n?.type === 'signature' }
+function isSlotted(n) { return n.type === 'function' || n.type === 'signature' || (n.type === 'tnode' && n.params?.length > 0) }
+// Can type node `source` go into slot `index` of `target`? Constraints go
+// only into a signature's context slots, everything else anywhere a type goes.
+function typeSlotAccepts(target, index, source) {
+  if (source.type !== 'tnode' || !isTypeLevel(target)) return false
+  const wantsConstraint = target.type === 'signature' && index > 0
+  return wantsConstraint === (source.tkind === 'class')
+}
+function describeTypeNode(n) {
+  if (n.type === 'signature') return 'type signature'
+  if (n.tkind === 'var') return 'type variable'
+  if (n.tkind === 'class') return 'class constraint'
+  if (n.tkind === 'arrow') return 'function type'
+  if (n.tkind === 'app') return 'type application'
+  const arity = n.params.length
+  return arity ? `type constructor · ${Array(arity).fill('*').join(' → ')} → *` : 'type'
+}
+// The type the subtree under type node `id` denotes, as text.
+function typeNodeText(graph, id) {
+  const read = readSignature({ ...graph, signature: { type: 'signature', mounted: [id] } })
+  return read.errors.length ? `incomplete — ${read.errors[0]}` : showQual([], read.scheme.type, read.varNames)
+}
+function drawTypeBlock(node, pass, selected) {
+  const rect = functionBlockScreenRect(node), p = point(node)
+  const status = node.type === 'signature' ? signatureStatus(pass) : null
+  ctx.save()
+  ctx.shadowColor = selected ? `${ACCENT}40` : '#211d3414'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
+  roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (FN_H / 2) * state.zoom)
+  ctx.fillStyle = node.type === 'signature' ? '#f6f5ff' : '#fff'; ctx.fill()
+  ctx.shadowColor = 'transparent'; ctx.lineWidth = selected || status?.bad ? 3 : 2
+  ctx.strokeStyle = status?.bad ? '#e0537d' : selected ? ACCENT : node.type === 'signature' ? '#b3a9e6' : '#c3cbe6'; ctx.stroke()
+  ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = node.type === 'signature' ? '#211d34' : TYPE_NODE_COLOR; ctx.fill()
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+  ctx.font = `700 ${(node.type === 'signature' ? 18 : 16) * state.zoom}px ui-monospace, monospace`
+  ctx.fillText(node.type === 'signature' ? '::' : node.tkind === 'arrow' ? '→' : node.tkind === 'class' ? '⇒' : 'T', p.x, p.y + 1)
+  const baseY = rect.top + rect.height
+  const name = node.type === 'signature' ? `${definitions[state.activeFunction]?.lambda ? 'λ' : definitions[state.activeFunction]?.label ?? '?'} ::` : node.tkind === 'arrow' ? 'from → to' : node.tkind === 'app' ? 'f a' : typeNodeLabel(node)
+  ctx.fillStyle = '#2b2640'; ctx.font = `600 ${13 * state.zoom}px ui-monospace, monospace`; ctx.fillText(name, p.x, baseY + 20 * state.zoom)
+  ctx.font = `${11 * state.zoom}px ui-monospace, monospace`
+  ctx.fillStyle = status?.bad ? '#c0335e' : status ? '#1f8f74' : '#9691a8'
+  const sub = status ? status.text : describeTypeNode(node)
+  ctx.fillText(sub.length > 70 ? `${sub.slice(0, 69)}…` : sub, p.x, baseY + 37 * state.zoom)
+  ctx.restore()
+}
+// What the body says about the declared type: from the type pass over it.
+function signatureStatus(pass) {
+  const s = pass?.signature
+  if (!s) return null
+  if (s.errors.length) return { bad: true, text: `✗ ${s.errors[0]}` }
+  if (s.mismatch) return { bad: true, text: `✗ ${s.mismatch}` }
+  return { bad: false, text: '✓ the body has this type' }
+}
+// The type `fnId`'s body gives, ignoring any signature drawn in it.
+function inferredScheme(fnId) {
+  const body = allBodies[fnId]
+  if (!body) return null
+  const bare = Object.fromEntries(Object.entries(body).filter(([, n]) => !isTypeLevel(n)))
+  const bodies = new Proxy({}, { get: (_, id) => (id === fnId ? bare : allBodies[id]) })
+  const def = definitions[fnId]
+  const entry = inferGraph(definitions, bodies, { [fnId]: { ...def, scheme: undefined } }).perNode.get(fnId)
+  if (!entry?.paramTypes) return null
+  return { preds: entry.preds || [], type: entry.paramTypes.reduceRight((acc, t) => tfun(t, acc), entry.resultType) }
+}
+let typeNodeCount = 0
+const newTypeNodeId = () => `tnode-${Date.now()}-${++typeNodeCount}`
+// Remove the signature of `body` and every type node under it.
+function removeSignatureGraph(body) {
+  const doomed = new Set()
+  const visit = (id) => { const n = body[id]; if (!n || doomed.has(id) || !isTypeLevel(n)) return; doomed.add(id); (n.mounted || []).forEach(visit) }
+  visit('signature')
+  doomed.forEach((id) => delete body[id])
+}
+// Draw `preds ⇒ type` into `body` as its signature (replacing one already there).
+function addSignatureGraph(body, preds, type) {
+  removeSignatureGraph(body)
+  const drawn = typeNodes(preds, type, newTypeNodeId)
+  Object.assign(body, drawn.nodes)
+  body.signature = makeSignatureNode(drawn.context.length)
+  ;[drawn.root, ...drawn.context].forEach((kid, i) => {
+    body.signature.mounted[i] = kid
+    body.signature.params[i] = drawn.nodes[kid].label
+    Object.assign(drawn.nodes[kid], { mountedTo: `signature:${i}`, connected: true, unfolded: true })
+  })
+}
+// Lay the signature out above the header: the block, its type tree to the left.
+function layoutSignature(body) {
+  const sig = body.signature
+  const header = body.header
+  if (!sig) return
+  const anchorY = header ? header.y : Math.min(...Object.values(body).map((n) => n.y))
+  sig.y = anchorY - Math.max(treeHeight(sig) / 2 + FN_H / 2 + 40, FN_H + 110)
+  setRightEdge(sig, header ? functionBlockRight(header) : sig.x)
+  layoutTree(sig)
+}
+// "Pin" the type the body has now as its signature, drawn as type nodes.
+function pinSignature(fnId) {
+  const inferred = inferredScheme(fnId)
+  if (!inferred) return showToast('This body has no type yet — connect its Output first')
+  addSignatureGraph(allBodies[fnId], inferred.preds, inferred.type)
+  layoutSignature(allBodies[fnId])
+  state.selected = 'signature'
+  updateInspector(); fitToView()
+}
+// The palette of type nodes, shown while editing a body.
+const TYPE_PALETTE = [
+  ['arrow', '->', '→', 'a function type: from → to'], ['var', 'a', 'a', 'a type variable'], ['app', 'app', 'f a', 'a type variable applied: f a'], ['class', 'Eq', '⇒', 'a class constraint (for the signature\'s context)'],
+  ['con', 'List', '[ ]', 'list'], ['con', 'Maybe', 'Maybe', 'optional'], ['con', '(,)', '( , )', 'pair (product)'], ['string', 'String', 'String', 'String = [Char]'],
+  ...['Int', 'Integer', 'Double', 'Float', 'Natural', 'Word', 'Rational', 'Bool', 'Char', 'StdGen', 'Picture', 'Color', 'Widget', 'Sub', 'Program', 'Sum', 'Product', 'Endo'].map((name) => ['con', name, name, constructorArity[name] ? `type constructor (${constructorArity[name]} argument${constructorArity[name] > 1 ? 's' : ''})` : 'type']),
+]
+function renderTypeNodeLibrary() {
+  const show = Boolean(state.activeFunction) && !viewingReadonly()
+  const title = document.querySelector('#tnode-title')
+  const library = document.querySelector('#tnode-library')
+  title.hidden = library.hidden = !show
+  if (!show) return
+  const body = activeNodes()
+  const entries = [...TYPE_PALETTE, ...Object.keys(types).map((name) => ['con', name, name, 'a declared type'])]
+  library.innerHTML = `${body.signature ? '' : '<button class="tnode-item signature-item" data-pin="1" title="Declare this function\'s type: draws the type it has now as a graph you can edit">:: Declare the type</button>'}<div class="tnode-grid">${entries.map(([tkind, name, text, title]) => `<button class="tnode-item" data-tkind="${tkind}" data-name="${escapeAttr(name)}" title="${escapeAttr(title)}">${escapeAttr(text)}</button>`).join('')}</div>`
+  library.querySelector('[data-pin]')?.addEventListener('click', () => pinSignature(state.activeFunction))
+  library.querySelectorAll('.tnode-item[data-tkind]').forEach((item) => { item.onclick = () => addTypeNode(item.dataset.tkind, item.dataset.name) })
+}
+function addTypeNode(tkind, name) {
+  if (viewingReadonly() || !state.activeFunction) return
+  const graph = activeNodes()
+  let node
+  if (tkind === 'string') {
+    node = makeTypeNode(newTypeNodeId(), 'con', 'List')
+    const char = makeTypeNode(newTypeNodeId(), 'con', 'Char', { mountedTo: `${node.id}:0`, connected: true })
+    node.mounted[0] = char.id; node.params[0] = char.label
+    graph[char.id] = char
+  } else if (tkind === 'var') {
+    const used = new Set(Object.values(graph).filter((n) => n.tkind === 'var').map((n) => n.name))
+    node = makeTypeNode(newTypeNodeId(), 'var', 'abcdefghijklmnopqrstuvwxyz'.split('').find((c) => !used.has(c)) || 'a')
+  } else node = makeTypeNode(newTypeNodeId(), tkind, name)
+  Object.assign(node, freePosition(graph, node.params.length ? 120 + node.params.length * SLOT_STRIDE : CHIP_W))
+  graph[node.id] = node
+  state.selected = node.id
+  updateInspector(); draw()
+}
+function renderTypeInspector(n, pass) {
+  const graph = activeNodes()
+  const icon = n.type === 'signature' ? '::' : n.tkind === 'arrow' ? '→' : n.tkind === 'class' ? '⇒' : 'T'
+  const title = n.type === 'signature' ? `${definitions[state.activeFunction]?.label ?? 'λ'} ::` : typeNodeLabel(n)
+  const rows = []
+  if (n.tkind === 'var') rows.push(`<div class="property"><label>NAME</label><input class="tvar-name" value="${escapeAttr(n.name)}" spellcheck="false" title="Every type variable with this name is the same variable" /></div>`)
+  if (n.tkind === 'class') rows.push(`<div class="property"><label>CLASS</label><select class="tclass-name">${classNames().map((c) => `<option ${c === n.name ? 'selected' : ''}>${escapeAttr(c)}</option>`).join('')}</select></div>`)
+  if (n.type === 'tnode' && n.tkind !== 'class') rows.push(`<div class="property"><label>DENOTES</label><code>${escapeAttr(typeNodeText(graph, n.id))}</code></div>`)
+  if (n.type === 'signature') {
+    const status = signatureStatus(pass)
+    const inferred = inferredScheme(state.activeFunction)
+    rows.push(`<div class="property"><label>STATUS</label><div class="connection-tag"><span class="law ${status?.bad ? 'bad' : 'ok'}">${escapeAttr(status?.text ?? '')}</span></div></div>`)
+    if (inferred) rows.push(`<div class="property"><label>THE BODY'S OWN TYPE</label><code>${escapeAttr(showQual(inferred.preds, inferred.type))}</code></div>`)
+    rows.push('<button class="use-again" id="repin-signature">↺ Redraw from the body\'s own type</button><button class="delete-node" id="remove-signature">Remove the signature</button>')
+  }
+  return `<div class="selected-node"><span class="selected-icon">${escapeAttr(icon)}</span><div><b>${escapeAttr(title)}</b><small>${escapeAttr(describeTypeNode(n))}</small></div><span class="live">TYPE</span></div>${rows.join('')}${n.type === 'tnode' ? deleteButton(n) : ''}<div class="inspector-note">${n.type === 'signature' ? 'Plug a type into the first slot, constraints into the others (+ adds one). A signature the body has is the function\'s type.' : 'Drag it into a type slot — of a constructor, an arrow, or the signature.'}</div>`
+}
+function wireTypeInspector(n) {
+  const graph = activeNodes()
+  const refresh = () => { renderFunctionLibrary(); updateInspector(); draw() }
+  const varName = inspector.querySelector('.tvar-name')
+  if (varName) varName.onchange = () => {
+    const name = varName.value.trim()
+    if (!/^[a-z][A-Za-z0-9_']*$/.test(name)) showToast(`"${name}" can't be a type variable (lowercase identifier)`)
+    else { n.name = name; n.label = name; Object.values(graph).forEach((m) => { if (m.mounted) m.mounted.forEach((id, i) => { if (id === n.id) m.params[i] = name }) }) }
+    refresh()
+  }
+  const className = inspector.querySelector('.tclass-name')
+  if (className) className.onchange = () => { n.name = className.value; n.label = className.value; refresh() }
+  const repin = inspector.querySelector('#repin-signature')
+  if (repin) repin.onclick = () => pinSignature(state.activeFunction)
+  const remove = inspector.querySelector('#remove-signature')
+  if (remove) remove.onclick = () => { removeSignatureGraph(graph); state.selected = 'output'; refresh() }
+}
+// The signature as linked tokens: `(Ring a, Eq b) => a -> [a]`, each piece pointing at its type node.
+function signatureTokens(graph, scope) {
+  const at = (id, text) => ({ text, id, scope, role: 'type' })
+  const sig = graph.signature
+  const go = (id, asDomain, asArg) => {
+    const n = graph[id]
+    if (!n || n.type !== 'tnode') return [{ text: '_' }]
+    const kids = n.mounted || []
+    if (n.tkind === 'var' || (n.tkind === 'con' && kids.every((k) => !k))) return [at(id, n.tkind === 'con' && n.name === 'List' ? '[]' : n.name)]
+    let out
+    if (n.tkind === 'arrow') out = [...go(kids[0], true, false), { text: ' ' }, at(id, '->'), { text: ' ' }, ...go(kids[1], false, false)]
+    else if (n.tkind === 'con' && n.name === 'List') return [at(id, '['), ...go(kids[0], false, false), at(id, ']')]
+    else if (n.tkind === 'con' && n.name === '(,)') return [at(id, '('), ...go(kids[0], false, false), at(id, ', '), ...go(kids[1], false, false), at(id, ')')]
+    else if (n.tkind === 'app') out = [...go(kids[0], false, false), { text: ' ' }, ...go(kids[1], false, true)]
+    else out = [at(id, n.name), ...kids.flatMap((k) => [{ text: ' ' }, ...go(k, false, true)])]
+    return (n.tkind === 'arrow' && (asDomain || asArg)) || (n.tkind !== 'arrow' && asArg) ? [{ text: '(' }, ...out, { text: ')' }] : out
+  }
+  const context = (sig.mounted || []).slice(1).filter((id) => graph[id]?.tkind === 'class').map((id) => [at(id, graph[id].name), { text: ' ' }, ...go(graph[id].mounted?.[0], false, true)])
+  const head = !context.length ? [] : context.length === 1 ? [...context[0], { text: ' => ' }] : [{ text: '(' }, ...context.flatMap((c, i) => (i ? [{ text: ', ' }, ...c] : c)), { text: ') => ' }]
+  return [...head, ...go(sig.mounted?.[0], false, false)]
+}
 // Value/boolean/output/curried chips share the function block's exact
 // stadium silhouette above (white fill, neutral outline, flat offset
 // shadow) — a value is just a function with every hole already filled, so
@@ -1089,8 +1303,8 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   const rect = valueBlockScreenRect(node), p = point(node)
   const isFunctionValued = node.type === 'curried'
   const typeColor = colorForType(resolvedValueQual(node, activeNodes(), pass).type, labelNamer)
-  const badgeColor = node.type === 'law' ? (lawNodeResults.get(node.id)?.ok ? '#1f8f74' : '#c0335e') : isFunctionValued ? ACCENT : typeColor
-  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : node.type === 'law' ? '⚖' : '#'
+  const badgeColor = node.type === 'tnode' ? (node.tkind === 'var' ? TYPE_VAR_COLOR : TYPE_NODE_COLOR) : node.type === 'law' ? (lawNodeResults.get(node.id)?.ok ? '#1f8f74' : '#c0335e') : isFunctionValued ? ACCENT : typeColor
+  const glyph = node.type === 'tnode' ? (node.tkind === 'var' ? 'α' : 'T') : isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : node.type === 'law' ? '⚖' : '#'
   ctx.save()
   ctx.shadowColor = snapHighlight ? `${ACCENT}66` : selected ? `${ACCENT}40` : '#211d3414'
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
@@ -1122,6 +1336,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   ctx.restore()
 }
 function label(node, p, baseY, pass) {
+  if (isTypeLevel(node)) { ctx.fillStyle = '#9691a8'; ctx.font = `${11 * state.zoom}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.fillText(describeTypeNode(node), p.x, baseY + 20 * state.zoom); return }
   ctx.fillStyle = '#2b2640'; ctx.font = `600 ${13 * state.zoom}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.fillText(labelText(node), p.x, baseY + 20 * state.zoom)
   const q = node.type === 'function' ? null : resolvedValueQual(node, activeNodes(), pass)
   const signature = node.type === 'function' ? functionSignature(node, activeNodes(), labelNamer, pass) : showQual(q.preds, q.type, labelNamer)
@@ -1151,6 +1366,7 @@ function isHole(node, index) {
 // `3` into add's slot and params[0] becomes '3'), so the declared name comes
 // from the builtin as shipped, or a custom function's body parameter nodes.
 function paramDisplayName(node, index) {
+  if (isTypeLevel(node)) return typeSlotName(node, index)
   const sourceId = node.sourceFunctionId || node.id
   const declared = builtinNodes[sourceId]?.params?.[index]
     ?? Object.values(functionBodies[sourceId] || {}).filter((n) => n.type === 'parameter')[index]?.label
@@ -1208,6 +1424,7 @@ function fixCallSlots(node) {
   while (node.params.length < arity) { node.params.push(''); node.mounted.push(null); node.paramScopes?.push('local') }
 }
 function isSignatureEditable(node) {
+  if (node.type === 'signature') return 'elements' // its context: constraints come and go
   if (nodes[node.id] === node && node.custom) return 'signature'
   if (nodes[node.sourceFunctionId]?.lambda) return 'signature'
   if (hasVariadicSlots(node, definitions)) return 'elements'
@@ -1223,13 +1440,13 @@ function updatePortEditor(pass = typePass()) {
   editor.innerHTML = ''
   // A function node plugged into a slot is hidden (it lives in that slot's
   // nested chip), so its own slots aren't shown either.
-  const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
+  const visibleFunctions = Object.values(activeNodes()).filter((n) => isSlotted(n) && isVisible(n))
   visibleFunctions.forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
     const mountedId = node.mounted[index]
     const mountedNode = mountedId ? activeNodes()[mountedId] : null
     const expectedType = pass.perNode.get(node.id)?.paramTypes?.[index]
-    const slotColor = colorForType(expectedType, labelNamer)
+    const slotColor = isTypeLevel(node) ? TYPE_NODE_COLOR : colorForType(expectedType, labelNamer)
     const isSnapTarget = state.snapTarget?.kind === 'param' && state.snapTarget.targetId === node.id && state.snapTarget.index === index
     const slot = document.createElement('div')
     slot.className = `param-slot ${mountedNode ? 'filled' : ''} ${isSnapTarget ? 'snap-target' : ''}`
@@ -1257,7 +1474,7 @@ function updatePortEditor(pass = typePass()) {
     // just the type itself (the context is still in the signature under the
     // block) and keep the full annotation in the tooltip; anything still too
     // long is ellipsized by CSS.
-    const fullType = expectedParamType(node, index, activeNodes(), labelNamer, pass)
+    const fullType = isTypeLevel(node) ? (node.type === 'signature' && index > 0 ? 'constraint' : '*') : expectedParamType(node, index, activeNodes(), labelNamer, pass)
     const tagType = document.createElement('span')
     tagType.className = 'param-tag-type'; tagType.textContent = fullType.split(' ⇒ ').pop()
     tagType.style.color = slotColor
@@ -1285,7 +1502,7 @@ function updatePortEditor(pass = typePass()) {
       // pulls it back out, magnet-style, as a free node under the cursor.
       const chip = document.createElement('div')
       chip.className = 'param-chip'
-      chip.style.background = colorForType(resolvedValueQual(mountedNode, activeNodes(), pass).type, labelNamer)
+      chip.style.background = mountedNode.type === 'tnode' ? (mountedNode.tkind === 'var' ? TYPE_VAR_COLOR : TYPE_NODE_COLOR) : colorForType(resolvedValueQual(mountedNode, activeNodes(), pass).type, labelNamer)
       chip.textContent = nodeDisplayText(mountedNode)
       chip.style.fontSize = `${11 * state.zoom}px`
       chip.style.padding = `0 ${10 * state.zoom}px`
@@ -1321,6 +1538,8 @@ function updatePortEditor(pass = typePass()) {
       input.style.fontSize = `${11 * state.zoom}px`
       input.style.paddingTop = `${4 * state.zoom}px`
       input.disabled = viewingReadonly()
+      // A type slot is filled by plugging a type node in, never by typing.
+      if (isTypeLevel(node)) { input.readOnly = true; input.placeholder = '·'; input.title = `${typeSlotName(node, index)} — drag a type node here` }
       input.addEventListener('input', () => { node.params[index] = input.value; state.selected = node.id; updateInspector(); draw() })
       slot.append(input)
     }
@@ -1329,7 +1548,7 @@ function updatePortEditor(pass = typePass()) {
     // call, see signature.js) or a list literal (its length). Everywhere else
     // the slots are the callee's parameters.
     const editable = !viewingReadonly() && isSignatureEditable(node)
-    if (!editable) { editor.append(slot); return }
+    if (!editable || (node.type === 'signature' && index === 0)) { editor.append(slot); return }
     const remove = document.createElement('button')
     remove.className = 'param-remove'; remove.type = 'button'; remove.textContent = '−'; remove.title = editable === 'signature' ? `Remove parameter ${paramDisplayName(node, index)} (from the body and every call)` : 'Remove this element'
     remove.style.width = remove.style.height = `${16 * state.zoom}px`
@@ -1342,6 +1561,7 @@ function updatePortEditor(pass = typePass()) {
         const moving = detachMounted(node, index)
         if (moving) { moving.x = node.x + 150; moving.y = node.y + 110 }
         node.params.splice(index, 1); node.mounted.splice(index, 1); node.paramScopes.splice(index, 1)
+        node.mounted.forEach((id, i) => { const child = activeNodes()[id]; if (child) child.mountedTo = `${node.id}:${i}` })
       }
       state.selected = node.id; renderFunctionLibrary(); updateInspector(); draw()
     })
@@ -1492,9 +1712,11 @@ function definitionBlock(id, title = 'DEFINITION') {
   const def = definitions[id]
   const tokens = def && printDefinitionTokens(id, definitions, allBodies)
   if (!tokens) return ''
-  const signature = [{ text: def.label, id: 'header', scope: id, role: 'name' }, { text: ` :: ${asciiType(definitionSignature(id))}` }]
+  const body = allBodies[id]
+  const status = body?.signature ? signatureStatus(inferGraph(definitions, allBodies, body)) : null
+  const signature = [{ text: def.label, id: 'header', scope: id, role: 'name' }, { text: ' ' }, body?.signature ? { text: '::', id: 'signature', scope: id, role: 'type' } : { text: '::' }, { text: ' ' }, ...(body?.signature ? signatureTokens(body, id) : [{ text: asciiType(definitionSignature(id)) }]), ...(status?.bad ? [{ text: `  -- ${status.text}` }] : [])]
   const note = viewDefs[id]?.note ? `\n-- ${viewDefs[id].note}` : ''
-  return `<div class="property definition"><label>${escapeAttr(title)}</label><pre class="haskell">${tokensHtml(signature)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></div>`
+  return `<div class="property definition" data-fn="${escapeAttr(id)}"><label>${escapeAttr(title)}</label><pre class="haskell">${tokensHtml(signature)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></div>`
 }
 function tokensHtml(tokens) {
   const graph = activeNodes()
@@ -1580,7 +1802,7 @@ function deleteNode(id) {
   // References to a deleted node would dangle — they go with it.
   Object.values(graph).filter((m) => (m.type === 'ref' || m.type === 'law') && m.target === id).forEach((ref) => deleteNode(ref.id))
   Object.values(graph).forEach((other) => {
-    if (other.type === 'function') other.mounted?.forEach((mountedId, i) => { if (mountedId === id) { other.mounted[i] = null; other.params[i] = '' } })
+    if (other.mounted) other.mounted.forEach((mountedId, i) => { if (mountedId === id) { other.mounted[i] = null; other.params[i] = '' } })
     if (other.type === 'output' && other.source === id) { other.source = null; other.value = 'open' }
   })
   ;(n.mounted || []).forEach((mountedId, i) => {
@@ -1604,6 +1826,8 @@ function updateInspector() {
   if (!n) return
   inspector.innerHTML = n.type === 'header'
     ? renderHeaderInspector(n)
+    : isTypeLevel(n)
+    ? renderTypeInspector(n, typePass())
     : n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
@@ -1648,6 +1872,9 @@ function updateInspector() {
   // alone is enough to keep the canvas label live; the inspector's own TYPE
   // line catches up next time something reselects this node.
   if (valueInput && (n.type === 'number' || n.type === 'text')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
+  if (isTypeLevel(n)) wireTypeInspector(n)
+  const pin = inspector.querySelector('#pin-signature')
+  if (pin) pin.onclick = () => pinSignature(n.fn)
   addGraphTextRows(n)
 }
 // --- What the DEFINITION text says, edited on the graph ----------------------
@@ -1664,7 +1891,7 @@ function addGraphTextRows(n) {
   const holes = n.type === 'function' && state.activeFunction ? n.params.map((_, i) => i).filter((i) => isHole(n, i)) : []
   if (holes.length) rows.push(`<div class="property"><label>λ HOLES</label>${holes.map((i) => `<div class="port-row"><span class="hole-lambda">\\</span><input class="hole-name" data-index="${i}" value="${escapeAttr(n.holeNames?.[i] || '')}" placeholder="x" spellcheck="false" title="The name this open slot is bound under: \\x -> …" /><small>${escapeAttr(paramDisplayName(n, i))}</small></div>`).join('')}</div>`)
   inspector.querySelector('.selected-node')?.insertAdjacentHTML('afterend', rows.join(''))
-  if (state.activeFunction && n.type !== 'output' && !inspector.querySelector('.property.definition')) {
+  if (state.activeFunction && ![...inspector.querySelectorAll('.property.definition')].some((el) => el.dataset.fn === state.activeFunction)) {
     const block = definitionBlock(state.activeFunction, `DEFINITION · ${definitions[state.activeFunction]?.lambda ? 'λ' : definitions[state.activeFunction]?.label ?? ''}`)
     const note = inspector.querySelector('.inspector-note')
     if (note) note.insertAdjacentHTML('beforebegin', block)
@@ -1705,7 +1932,7 @@ function addGraphTextRows(n) {
 function renderHeaderInspector(n) {
   const def = definitions[n.fn]
   const editable = headerEditable(n)
-  return `<div class="selected-node"><span class="selected-icon">${def?.lambda ? 'λ' : 'ƒ'}</span><div><b>${escapeAttr(def?.lambda ? 'λ' : def?.label ?? '?')}</b><small>Definition header · the left-hand side</small></div><span class="live">BINDERS</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${escapeAttr(definitionSignature(n.fn))}</code></div>${definitionBlock(n.fn)}<div class="inspector-note">${editable ? `${def?.lambda ? '' : 'Rename the function under the block. '}Rename a parameter in its slot; ‹ › reorder, − removes, + adds — every call follows.` : 'Read-only.'}</div>`
+  return `<div class="selected-node"><span class="selected-icon">${def?.lambda ? 'λ' : 'ƒ'}</span><div><b>${escapeAttr(def?.lambda ? 'λ' : def?.label ?? '?')}</b><small>Definition header · the left-hand side</small></div><span class="live">BINDERS</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${escapeAttr(definitionSignature(n.fn))}</code></div>${editable && !allBodies[n.fn]?.signature ? '<button class="use-again" id="pin-signature">:: Declare the type <small>(as a graph)</small></button>' : ''}${definitionBlock(n.fn)}<div class="inspector-note">${editable ? `${def?.lambda ? '' : 'Rename the function under the block. '}Rename a parameter in its slot; ‹ › reorder, − removes, + adds — every call follows.` : 'Read-only.'}</div>`
 }
 // Plays `fn`: evaluates it as a value (callee applied to its applied slots —
 // see src/evaluator.js) and drops the result next to it. A fully-applied
@@ -1778,7 +2005,7 @@ function findSnapTarget(dragged) {
   if (viewingReadonly()) return null // nodes may be moved around to look, never reconnected
   if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.type === 'header' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
   let best = null, bestDist = SNAP_RADIUS
-  Object.values(activeNodes()).filter(isFunction).forEach((target) => {
+  Object.values(activeNodes()).filter(isSlotted).forEach((target) => {
     if (target.id === dragged.id) return
     target.params.forEach((value, index) => {
       if (target.mounted[index]) return // already has a node plugged in — detach it first

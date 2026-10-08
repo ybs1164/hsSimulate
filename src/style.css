@@ -325,3 +325,10 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .header-name:focus{outline:0;border-style:solid;border-color:var(--accent)}
 .hole-name{width:80px;font:11px 'DM Mono';border:1px solid var(--line, #e3e0ef);border-radius:4px;padding:1px 4px}
 .hole-lambda{font-family:'DM Mono';color:var(--accent);font-weight:700}
+/* Type nodes for a function's signature. */
+.tnode-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:2px 0 8px}
+.tnode-item{border:1px solid #c3cbe6;background:#f7f8fd;color:#3a4a80;border-radius:7px;padding:4px 2px;font:11px 'DM Mono';cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tnode-item:hover{border-color:var(--accent);color:var(--accent)}
+.signature-item{width:100%;margin:2px 0 6px;padding:7px;background:#211d34;color:#fff;border-color:#211d34;font-weight:600}
+.signature-item:hover{background:var(--accent);color:#fff}
+.haskell .tok.type{color:#3a4a80}
