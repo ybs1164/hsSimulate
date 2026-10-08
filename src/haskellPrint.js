@@ -20,6 +20,8 @@
 import { parseLiteral } from './literals.js'
 
 const OPERATORS = { '(+)': '+', '(-)': '-', '(*)': '*', '(/)': '/', '(>=)': '>=', '(==)': '==', '(<>)': '<>', '(++)': '++', '(:)': ':', '(!?)': '!?', '(*^)': '*^', '(\\/)': '\\/', '(/\\)': '/\\' }
+// Right-associative operators (infixr): `x : y : []` needs no parentheses on the right.
+const RIGHT_ASSOC = new Set([':', '++', '<>'])
 export const identifier = (s) => typeof s === 'string' && /^[a-z_][A-Za-z0-9_']*$/.test(s)
 
 /** The plain text of a token list. */
@@ -42,8 +44,15 @@ export function printDefinitionTokens(fnId, definitions, functionBodies) {
   const printed = printBody(fnId, definitions, functionBodies)
   if (!def || !printed) return null
   const at = (id, extra) => ({ id, scope: fnId, ...extra })
-  const tokens = [{ text: def.label, ...at('header', { role: 'name' }) }]
-  printed.params.forEach((p) => tokens.push({ text: ' ' }, { text: p.name, ...at(p.id, { role: 'param' }) }))
+  const tokens = []
+  if (def.label === '[ , , ]') { // a list literal's view: [x1, x2, x3] = …
+    tokens.push({ text: '[', ...at('header', { role: 'name' }) })
+    printed.params.forEach((p, i) => tokens.push(...(i ? [{ text: ', ' }] : []), { text: p.name, ...at(p.id, { role: 'param' }) }))
+    tokens.push({ text: ']', ...at('header', { role: 'name' }) })
+  } else {
+    tokens.push({ text: def.label, ...at('header', { role: 'name' }) })
+    printed.params.forEach((p) => tokens.push({ text: ' ' }, { text: p.name, ...at(p.id, { role: 'param' }) }))
+  }
   tokens.push({ text: ' ' }, { text: '=', ...at('output') }, { text: ' ' }, ...printed.rhs)
   if (printed.bindings.length) {
     tokens.push({ text: '\n  ' }, { text: 'where' })
@@ -105,7 +114,7 @@ function printBody(fnId, definitions, functionBodies) {
   // needs parentheses below 3 and an operator's operand below 2.
   const atom = (tokens) => ({ tokens, prec: 3 })
   const app = (tokens) => ({ tokens, prec: 2 })
-  const infix = (tokens) => ({ tokens, prec: 1 })
+  const infix = (tokens, op = null) => ({ tokens, prec: 1, op })
   const lambda = (tokens) => ({ tokens, prec: 0 })
   const paren = (e) => (e.prec === 3 ? e.tokens : [{ text: '(' }, ...e.tokens, { text: ')' }])
   const operand = (e) => (e.prec >= 2 ? e.tokens : [{ text: '(' }, ...e.tokens, { text: ')' }])
@@ -171,7 +180,7 @@ function printBody(fnId, definitions, functionBodies) {
     else if (OPERATORS[labelText] && !head) {
       const op = OPERATORS[labelText]
       const [a, b] = applied
-      if (a && b) e = infix([...operand(a), { text: ' ' }, callTok(op), { text: ' ' }, ...operand(b)])
+      if (a && b) e = infix([...operand(a), { text: ' ' }, callTok(op), { text: ' ' }, ...(RIGHT_ASSOC.has(op) && b.op === op ? b.tokens : operand(b))], op)
       else if (a) e = atom([{ text: '(' }, ...operand(a), { text: ' ' }, callTok(op), { text: ')' }])
       else e = atom([callTok(labelText)])
     } else {

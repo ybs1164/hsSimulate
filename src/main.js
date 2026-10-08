@@ -159,12 +159,12 @@ function applyTypes(next) {
 const evaluator = createEvaluator({ nodes: definitions, functionBodies: allBodies, get types() { return types } })
 // The view of the builtin/Prelude/derived function `defId` (built on first
 // use), or null for a custom function — that has a real body.
-function ensureView(defId) {
+function ensureView(defId, slots = 0) {
   const def = definitions[defId]
   if (!def || def.custom || def.view || viewDefs[defId]) return null
-  const viewId = viewIdOf(defId)
+  const viewId = viewIdOf(defId, def.builtin === 'listOf' ? slots : null)
   if (!viewDefs[viewId]) {
-    const view = buildDefinitionView(def, (id) => definitions[id])
+    const view = buildDefinitionView(def, (id) => definitions[id], { slots })
     Object.assign(viewDefs, view.defs)
     Object.assign(viewBodies, view.bodies)
     const sch = view.defs[viewId].scheme
@@ -172,9 +172,9 @@ function ensureView(defId) {
   }
   return viewId
 }
-function openDefinitionView(defId) {
+function openDefinitionView(defId, slots = 0) {
   if (isOverride(defId)) return enterFunction(defId)
-  const viewId = ensureView(defId)
+  const viewId = ensureView(defId, slots)
   if (viewId) enterFunction(viewId)
 }
 // An edited library definition (see evaluator.js's isOverridableId): a
@@ -1749,9 +1749,9 @@ function definitionBlock(id, title = 'DEFINITION') {
 }
 // A library function's definition in the inspector: the edited one, or the
 // view of the built-in one — with what can be done about it.
-function libraryDefinitionBlock(defId) {
+function libraryDefinitionBlock(defId, slots = 0) {
   if (isOverride(defId)) return `${definitionBlock(defId, 'DEFINITION · edited')}<button class="use-again" id="open-definition">Open definition → <small>(edited graph)</small></button><button class="use-again" id="reset-library-definition">↺ Back to the original <small>(drops the edits)</small></button>`
-  const viewId = ensureView(defId)
+  const viewId = ensureView(defId, slots)
   if (!viewId) return ''
   const editable = isEditableView(viewId, viewDefs)
   return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>(read-only graph)</small></button>${editable ? '<button class="use-again" id="edit-library-definition">✎ Edit definition <small>(every call runs your graph)</small></button>' : ''}`
@@ -1869,7 +1869,7 @@ function updateInspector() {
     : n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${definitions[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : libraryDefinitionBlock(n.sourceFunctionId || n.id)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${definitions[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : libraryDefinitionBlock(n.sourceFunctionId || n.id, n.params.length)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
@@ -1888,7 +1888,7 @@ function updateInspector() {
   const fixSlots = document.querySelector('#fix-slots')
   if (fixSlots) fixSlots.onclick = () => { fixCallSlots(n); updateInspector(); draw() }
   const openDefinition = document.querySelector('#open-definition')
-  if (openDefinition) openDefinition.onclick = () => openDefinitionView(n.sourceFunctionId || n.id)
+  if (openDefinition) openDefinition.onclick = () => openDefinitionView(n.sourceFunctionId || n.id, n.params.length)
   const editLibrary = document.querySelector('#edit-library-definition')
   if (editLibrary) editLibrary.onclick = () => editDefinition(n.sourceFunctionId || n.id)
   const resetLibrary = document.querySelector('#reset-library-definition')
@@ -2210,7 +2210,7 @@ canvas.addEventListener('dblclick', (event) => {
   const definitionId = selected && (selected.sourceFunctionId || selected.id)
   if (selected && definitions[definitionId]?.lambda) enterFunction(definitionId)
   else if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
-  else if (selected && !definitions[definitionId]?.custom) openDefinitionView(definitionId)
+  else if (selected && !definitions[definitionId]?.custom) openDefinitionView(definitionId, selected.params?.length ?? 0)
 })
 function enterFunction(id) {
   const def = definitions[id]

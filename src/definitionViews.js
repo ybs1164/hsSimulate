@@ -25,8 +25,8 @@
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { isOverridableId } from './evaluator.js'
 
-/** The id of the view of function `defId`. */
-export const viewIdOf = (defId) => `view:${defId}`
+/** The id of the view of function `defId` (of the list literal with `slots` elements). */
+export const viewIdOf = (defId, slots = null) => `view:${defId}${slots === null ? '' : `/${slots}`}`
 
 // Notes for primitives, by builtin name. Anything not listed (and not
 // written as a graph below) is a runtime primitive.
@@ -42,7 +42,7 @@ const PRIMITIVE_NOTES = {
   addZero: METHOD('AddMonoid'), mulOne: METHOD('MulMonoid'), divide: METHOD('Field'), sqrt: METHOD('Transcendental'),
   toRational: METHOD('OrderedRing'), fromIntegral: 'primitive · the unique ring map ℤ → a (ℤ is the initial ring)', round: METHOD('OrderedField'),
   isNaN: METHOD('IEEEFloat'), geq: METHOD('Ord'), eq: METHOD('Eq'),
-  nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'), listOf: 'primitive · list literal syntax: [x, y, z] = x : y : z : []',
+  nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
   nothing: CONSTRUCTOR('Maybe a'), just: CONSTRUCTOR('Maybe a'), maybe: 'primitive · the eliminator of Maybe a (a copairing)',
   pair: 'primitive · the pairing of the product (a, b)', fst: 'primitive · the first projection π₁ of the product (a, b)', snd: 'primitive · the second projection π₂ of the product (a, b)',
@@ -60,6 +60,8 @@ const PRIMITIVE_NOTES = {
 // (see `graph` below) and returns the node feeding Output.
 const COLOURS = { red: ['1', '0', '0'], green: ['0', '0.7', '0'], blue: ['0', '0', '1'], yellow: ['1', '0.85', '0'], black: ['0', '0', '0'], white: ['1', '1', '1'] }
 const GRAPHS = {
+  // [x₁, …, xₙ] = x₁ : … : xₙ : [] — syntax for the constructors of [a]
+  listOf: (g, n) => Array.from({ length: n }, (_, i) => i).reduceRight((tail, i) => g.call('prelude:cons', [g.param(i), tail]), g.call('prelude:nil', [])),
   identity: (g) => g.param(0),
   // compose f g x = f (g x) — application made explicit
   compose: (g) => g.call('apply', [g.param(0), g.call('apply', [g.param(1), g.param(2)])]),
@@ -91,11 +93,13 @@ const GRAPHS = {
 /**
  * The view of definition `def` (a builtin node, a Prelude definition or a
  * derived one). `resolve(id)` looks up any definition by id (for callee
- * labels and slot counts). Returns `{ viewId, defs, bodies }`.
+ * labels and slot counts); `slots` is the element count of a list literal
+ * (its definition depends on it). Returns `{ viewId, defs, bodies }`.
  */
-export function buildDefinitionView(def, resolve) {
-  const viewId = viewIdOf(def.id)
-  const params = paramNames(def)
+export function buildDefinitionView(def, resolve, { slots = 0 } = {}) {
+  const variadic = def.builtin === 'listOf'
+  const viewId = viewIdOf(def.id, variadic ? slots : null)
+  const params = variadic ? Array.from({ length: slots }, (_, i) => `x${i + 1}`) : paramNames(def)
   const defs = {}
   const bodies = {}
   const scheme = def.scheme || (def.builtin === 'listOf' ? listOfScheme(params.length) : builtinSchemes[def.builtin])
@@ -104,12 +108,13 @@ export function buildDefinitionView(def, resolve) {
   const g = graph(viewId, params, resolve, defs, bodies)
   const written = def.derived ? derivedGraph(def, g, resolve) : GRAPHS[def.builtin]
   let root
-  if (written) root = typeof written === 'function' ? written(g) : written
+  if (written) root = typeof written === 'function' ? written(g, params.length) : written
   else {
     // A primitive: its parameters applied to it.
     root = g.call(def.id, params.map((_, i) => g.param(i)))
     view.note = def.derived ? derivedNote(def) : PRIMITIVE_NOTES[def.builtin] || 'primitive · built into the runtime'
   }
+  if (variadic) view.note = 'syntax · a list literal is sugar for the constructors (:) and []'
   g.output(root)
   return { viewId, defs, bodies }
 }
@@ -264,7 +269,7 @@ function graph(fnId, params, resolve, defs, bodies) {
  */
 export function isEditableView(viewId, defs) {
   const view = defs[viewId]
-  return Boolean(view && !view.note && isOverridableId(view.view) && !view.view.startsWith('prelude:listOf'))
+  return Boolean(view && !view.note && isOverridableId(view.view))
 }
 
 /**

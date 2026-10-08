@@ -113,3 +113,14 @@ test('projections, updates and the recursor of a declared type are written with 
   assert.equal(viewFold, realFold)
   assert.equal(viewFold, '2')
 })
+
+test('a list literal is shown as the (:) chain it stands for, for its own length', () => {
+  const view = buildDefinitionView(base['prelude:listOf'], (id) => base[id], { slots: 3 })
+  assert.equal(view.viewId, 'view:prelude:listOf/3')
+  assert.match(view.defs[view.viewId].note, /^syntax/)
+  const text = printDefinition(view.viewId, { ...base, ...view.defs }, view.bodies)
+  assert.equal(text, '[x1, x2, x3] = x1 : x2 : x3 : []')
+  const ev = createEvaluator({ nodes: { ...base, ...view.defs }, functionBodies: view.bodies })
+  const call = { id: 'call', type: 'function', sourceFunctionId: view.viewId, params: ['1', '2', '3'], mounted: [null, null, null] }
+  assert.equal(showValue(ev.run({ call }, 'call')), '[1,2,3]')
+})
