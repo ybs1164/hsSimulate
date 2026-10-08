@@ -308,3 +308,20 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .w-tinted .w-text{color:inherit}
 .w-drawing{background:#fff;border:1px solid var(--line);border-radius:var(--radius-sm);align-self:center}
 .broken-call .connection-tag{border-color:#f5c6d4;color:#c0335e}
+/* DEFINITION text linked to the graph: hover a token to find its node, click to go there. */
+.haskell .tok{cursor:pointer;border-radius:3px;transition:background .1s ease}
+.haskell .tok:hover{background:#f0a02033;box-shadow:0 0 0 1px #f0a02066}
+.haskell .tok.linked{background:var(--accent-soft-2);color:var(--accent);font-weight:600}
+.haskell .tok.hole{font-style:italic}
+.haskell .tok.binding{color:#1f8f74}
+/* The definition header: binder slots, reorder buttons, the function's name. */
+.binder-slot{border-style:solid;border-color:#b3a9e6;background:#fff}
+.binder-name{font-weight:600;color:var(--accent);padding-top:0}
+.binder-name:disabled{color:var(--ink)}
+.binder-moves{position:absolute;left:50%;transform:translateX(-50%);display:flex;gap:4px}
+.binder-move{border:0;border-radius:50%;background:#b3a9e6;color:#fff;cursor:pointer;padding:0;font-family:'DM Mono';pointer-events:auto}
+.binder-move:hover{background:var(--accent)}
+.header-name{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;border:1px dashed #b3a9e6;border-radius:6px;background:#fffd;text-align:center;font-family:'DM Mono';font-weight:600;color:var(--ink);padding:1px 6px}
+.header-name:focus{outline:0;border-style:solid;border-color:var(--accent)}
+.hole-name{width:80px;font:11px 'DM Mono';border:1px solid var(--line, #e3e0ef);border-radius:4px;padding:1px 4px}
+.hole-lambda{font-family:'DM Mono';color:var(--accent);font-weight:700}

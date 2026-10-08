@@ -7,8 +7,9 @@ import { createEvaluator, EvalError, isClosure, isData, showValue } from './eval
 import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource } from './typeDecls.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
-import { asciiType, printDefinition } from './haskellPrint.js'
-import { addParameter, hasVariadicSlots, removeParameter, renameParameter } from './signature.js'
+import { asciiType, identifier, printDefinitionTokens, printLambdaText } from './haskellPrint.js'
+import { parseLiteral } from './literals.js'
+import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
@@ -88,8 +89,10 @@ const nodes = {
   eq: { id: 'eq', type: 'function', x: 820, y: 2390, label: '(==)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#3cbe9e', scope: 'main', builtin: 'eq', readonly: true, expression: 'x == y' },
   select: { id: 'select', type: 'function', x: 820, y: 2610, label: 'select', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'select', readonly: true, expression: 'λc a b. c ? a : b' },
 }
-function activeNodes() { return state.activeFunction ? functionBodies[state.activeFunction] : nodes }
-function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${nodes[id]?.label || '?'}`).join(' / ') : '⌂ top level' }
+function activeNodes() { return state.activeFunction ? allBodies[state.activeFunction] : nodes }
+// A read-only definition view (or a λ inside one) is on screen: look, don't touch.
+function viewingReadonly() { return Boolean(state.activeFunction && viewBodies[state.activeFunction]) }
+function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : '') : '⌂ top level' }
 const functionBodies = {
   add: {
     inputX: { id: 'add-input-x', type: 'parameter', typeName: 'Int', x: 110, y: 180, label: 'x', value: 'x', color: '#4f8ef7' },
@@ -149,14 +152,21 @@ const PRELUDE = [
   ['Pictures', [['pCircle', 'circle', ['r']], ['pCircleSolid', 'circleSolid', ['r']], ['pRectangleSolid', 'rectangleSolid', ['w', 'h']], ['pTranslate', 'translate', ['x', 'y', 'picture']], ['pColor', 'color', ['color', 'picture']], ['rgb', 'rgb', ['r', 'g', 'b']], ['red', 'red', []], ['green', 'green', []], ['blue', 'blue', []], ['yellow', 'yellow', []], ['black', 'black', []], ['white', 'white', []]]],
 ]
 const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).map(([builtin, label, params]) => [`prelude:${builtin}`, { id: `prelude:${builtin}`, type: 'function', builtin, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#5fa8e8' }]))
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] })
+// Read-only definition views (src/definitionViews.js): a Prelude, derived or
+// builtin function shown as a graph. `viewDefs`/`viewBodies` hold each
+// view's own definition (id `view:<function id>`) and body, plus any λs it
+// uses; they're never saved.
+const viewDefs = {}
+const viewBodies = {}
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] ?? viewDefs[id] })
+const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
 function applyTypes(next) {
   types = next
   Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
   derivedDefinitions(types).forEach((def) => { derivedDefs[def.id] = def })
   setDynamicInstances(derivedInstances(types))
 }
-const evaluator = createEvaluator({ nodes: definitions, functionBodies, get types() { return types } })
+const evaluator = createEvaluator({ nodes: definitions, functionBodies: allBodies, get types() { return types } })
 const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
@@ -541,10 +551,15 @@ function slotWorldCenter(node, index) { return { x: node.x + SLOT_START + index 
 function slotScreenCenter(node, index) { return toScreen(slotWorldCenter(node, index)) }
 function functionBlockLeft(node) { return node.x - FN_LEFT }
 function functionBlockRight(node) {
-  return node.params.length > 0
-    ? node.x + SLOT_START + (node.params.length - 1) * SLOT_STRIDE + SLOT_D / 2 + FN_TAIL
+  const slots = slotCount(node)
+  return slots > 0
+    ? node.x + SLOT_START + (slots - 1) * SLOT_STRIDE + SLOT_D / 2 + FN_TAIL
     : node.x + 78
 }
+// Drawn as a block with slots (rather than a value chip): a function node,
+// and a function body's definition header (`f x y =`, its slots the binders).
+function isBlock(n) { return n.type === 'function' || n.type === 'header' }
+function slotCount(n) { return n.type === 'header' ? headerParams(n).length : n.params.length }
 function functionBlockWidth(node) { return functionBlockRight(node) - functionBlockLeft(node) }
 function functionBlockScreenRect(node) {
   const p = point(node)
@@ -589,7 +604,7 @@ function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)
   if (!graphNodes.length) return null
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   graphNodes.forEach((n) => {
-    const isFn = n.type === 'function'
+    const isFn = isBlock(n)
     const left = isFn ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
     const right = isFn ? functionBlockRight(n) : n.x + chipHalfWidth(n)
     const halfH = (isFn ? FN_H : CHIP_H) / 2
@@ -625,8 +640,8 @@ function freePosition(graph, width) {
   const cy = (view.top + view.bottom) / 2
   const overlaps = (x, y) => Object.values(graph).some((n) => {
     if (!isVisible(n)) return false
-    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
-    const right = n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n)
+    const left = isBlock(n) ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
+    const right = isBlock(n) ? functionBlockRight(n) : n.x + chipHalfWidth(n)
     return Math.abs(n.y - y) < FN_H + 40 && x - FN_LEFT - 40 < right && x + width + 40 > left
   })
   const inside = (x, y) => x - FN_LEFT >= view.left + 30 && x + width <= view.right - 30 && y - FN_H / 2 >= view.top + 30 && y + FN_H / 2 + 50 <= view.bottom - 30
@@ -657,7 +672,7 @@ function roundedRectPath(c, x, y, w, h, r) {
 // One inferGraph() pass over `graph` (defaults to whatever's on screen). Not
 // cached — cheap for this app's graph sizes, and always fresh so a
 // connect/disconnect is reflected on the very next call, no invalidation needed.
-function typePass(graph = activeNodes()) { return inferGraph(definitions, functionBodies, graph) }
+function typePass(graph = activeNodes()) { return inferGraph(definitions, allBodies, graph) }
 // Shared per-draw() letter assignment (a, b, c, ...) so every node label and
 // port-type badge drawn in the same pass agrees on which variable is which —
 // reset at the top of draw(). A caller outside that pass (e.g. the sidebar
@@ -750,7 +765,7 @@ function drawUnfoldedLinks() {
   Object.values(activeNodes()).filter((n) => n.mountedTo && n.unfolded).forEach((n) => {
     const at = slotHost(n)
     if (!at || !isVisible(at.host)) return
-    const from = toScreen({ x: n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n), y: n.y })
+    const from = toScreen({ x: isBlock(n) ? functionBlockRight(n) : n.x + chipHalfWidth(n), y: n.y })
     const to = slotScreenCenter(at.host, at.index)
     const mid = (from.x + to.x) / 2
     ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(mid, from.y, mid, to.y, to.x, to.y + (SLOT_D / 2) * state.zoom); ctx.stroke()
@@ -773,9 +788,9 @@ function setAllUnfolded(unfolded) {
 }
 const TREE_ROW = FN_H + 70
 const TREE_GAP = 70
-function nodeWidth(n) { return n.type === 'function' ? functionBlockWidth(n) : chipWidth(n) }
-function rightEdge(n) { return n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n) }
-function setRightEdge(n, right) { n.x = n.type === 'function' ? right - (functionBlockRight(n) - n.x) : right - chipHalfWidth(n) }
+function nodeWidth(n) { return isBlock(n) ? functionBlockWidth(n) : chipWidth(n) }
+function rightEdge(n) { return isBlock(n) ? functionBlockRight(n) : n.x + chipHalfWidth(n) }
+function setRightEdge(n, right) { n.x = isBlock(n) ? right - (functionBlockRight(n) - n.x) : right - chipHalfWidth(n) }
 function unfoldedKids(n) {
   const graph = activeNodes()
   return (n.mounted || []).map((id) => graph[id]).filter((k) => k && k.unfolded)
@@ -791,7 +806,7 @@ function layoutTree(root) {
     const h = treeHeight(n)
     setRightEdge(n, right)
     n.y = top + h / 2
-    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
+    const left = isBlock(n) ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
     let y = top
     unfoldedKids(n).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k) })
   }
@@ -802,7 +817,7 @@ function drawOutputLink() {
   const output = activeNodes().output
   const source = output?.source && activeNodes()[output.source]
   if (!source || !isVisible(source)) return
-  const from = toScreen({ x: source.type === 'function' ? functionBlockRight(source) : source.x + chipHalfWidth(source), y: source.y })
+  const from = toScreen({ x: isBlock(source) ? functionBlockRight(source) : source.x + chipHalfWidth(source), y: source.y })
   const to = toScreen({ x: output.x - chipHalfWidth(output), y: output.y })
   ctx.save()
   ctx.strokeStyle = ACCENT; ctx.lineWidth = 2
@@ -832,14 +847,17 @@ function draw() {
   for (let x = state.offset.x % 24; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
   for (let y = state.offset.y % 24; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
   drawReferenceLinks()
+  drawHeaderLinks()
   drawOutputLink()
   drawUnfoldedLinks()
   Object.values(activeNodes()).filter(isVisible).forEach(n => {
     const selected = state.selected === n.id || state.multi.has(n.id)
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
     if (n.type === 'function') drawFunctionBlock(n, pass, selected)
+    else if (n.type === 'header') drawHeaderBlock(n, selected)
     else drawValueChip(n, pass, selected, snapHighlight)
   })
+  drawLinkHighlights()
   updatePortEditor(pass)
   document.querySelector('#node-count').textContent = Object.keys(activeNodes()).length
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
@@ -874,6 +892,135 @@ function drawFunctionBlock(node, pass, selected) {
   label(node, p, rect.top + rect.height, pass)
   ctx.restore()
 }
+// --- Definition header ------------------------------------------------------
+// Every function body shows its left-hand side as a block of its own: the
+// function's name and one slot per parameter — the binders `f x y =` (`\x y
+// ->` for a λ). It's the abstraction of the lambda calculus made visible:
+// each binder slot is linked to the parameter node it binds, and the
+// function's name, its parameters' names and their order are edited right
+// here, on the graph. It lives in the body (`body.header`) so it keeps its
+// position; nothing reads it but the editor.
+function ensureHeader(fnId, body = allBodies[fnId]) {
+  if (!body || body.header) return
+  const params = Object.values(body).filter((n) => n.type === 'parameter')
+  const top = Math.min(...[...params, body.output].filter(Boolean).map((n) => n.y))
+  const left = Math.min(...params.map((n) => n.x), body.output?.x ?? 110)
+  body.header = { id: 'header', type: 'header', fn: fnId, x: left, y: (Number.isFinite(top) ? top : 255) - FN_H - 90 }
+}
+function headerParams(header) { return Object.values(allBodies[header.fn] || activeNodes()).filter((n) => n.type === 'parameter') }
+function headerEditable(header) { return Boolean(nodes[header.fn]?.custom && !viewingReadonly()) }
+// The signature of definition `fnId` (its own type, not a call's), read from a pass over just that node.
+function definitionSignature(fnId, namer) {
+  const def = definitions[fnId]
+  if (!def) return '?'
+  return functionSignature(def, null, namer, inferGraph(definitions, allBodies, { [fnId]: def }))
+}
+function drawHeaderBlock(node, selected) {
+  const rect = functionBlockScreenRect(node), p = point(node)
+  const def = definitions[node.fn]
+  ctx.save()
+  roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (FN_H / 2) * state.zoom)
+  ctx.fillStyle = '#f4f2fd'; ctx.fill()
+  ctx.setLineDash([6 * state.zoom, 4 * state.zoom])
+  ctx.lineWidth = selected ? 3 : 2; ctx.strokeStyle = selected ? ACCENT : '#b3a9e6'; ctx.stroke()
+  ctx.setLineDash([])
+  ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = '#211d34'; ctx.fill()
+  ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+  ctx.fillText(def?.lambda ? 'λ' : 'ƒ', p.x, p.y + 1)
+  // The `=` (`→` for a λ) closing the left-hand side, inside the block's tail.
+  ctx.fillStyle = ACCENT; ctx.font = `700 ${18 * state.zoom}px ui-monospace, monospace`
+  ctx.fillText(def?.lambda ? '→' : '=', rect.right - 26 * state.zoom, p.y + 1)
+  const baseY = rect.top + rect.height
+  if (!headerEditable(node) || def?.lambda) { ctx.fillStyle = '#2b2640'; ctx.font = `600 ${13 * state.zoom}px ui-monospace, monospace`; ctx.fillText(def?.lambda ? 'λ' : def?.label ?? '?', p.x, baseY + 20 * state.zoom) }
+  ctx.fillStyle = '#9691a8'; ctx.font = `${11 * state.zoom}px ui-monospace, monospace`
+  ctx.fillText(`:: ${definitionSignature(node.fn, labelNamer)}`, p.x, baseY + (headerEditable(node) && !def?.lambda ? 46 : 37) * state.zoom)
+  ctx.restore()
+}
+// A dashed line from each binder slot down to the parameter node it binds.
+function drawHeaderLinks() {
+  const header = activeNodes().header
+  if (!header || !isVisible(header)) return
+  ctx.save()
+  ctx.setLineDash([4 * state.zoom, 4 * state.zoom]); ctx.strokeStyle = '#b3a9e6'; ctx.lineWidth = 1.2
+  headerParams(header).forEach((param, i) => {
+    if (!isVisible(param)) return
+    const a = slotScreenCenter(header, i), b = point(param)
+    ctx.beginPath(); ctx.moveTo(a.x, a.y + (SLOT_D / 2) * state.zoom); ctx.lineTo(b.x, b.y - (CHIP_H / 2) * state.zoom); ctx.stroke()
+  })
+  ctx.restore()
+}
+// The header's binder slots (each one's parameter name, editable in place,
+// with ‹ › to reorder and − to remove), a + to add a parameter, and the
+// function's name under the block.
+function renderHeaderEditor(header) {
+  const editable = headerEditable(header)
+  const fnId = header.fn
+  const params = headerParams(header)
+  const refresh = () => { renderFunctionLibrary(); updateInspector(); draw() }
+  const smallButton = (cls, text, title, onClick) => {
+    const b = document.createElement('button')
+    b.className = cls; b.type = 'button'; b.textContent = text; b.title = title
+    b.style.width = b.style.height = `${16 * state.zoom}px`
+    b.style.fontSize = `${12 * state.zoom}px`; b.style.lineHeight = `${16 * state.zoom}px`
+    b.addEventListener('pointerdown', (event) => event.stopPropagation())
+    b.addEventListener('click', (event) => { event.stopPropagation(); onClick() })
+    return b
+  }
+  params.forEach((param, index) => {
+    const center = slotScreenCenter(header, index)
+    const slot = document.createElement('div')
+    slot.className = 'param-slot binder-slot'
+    slot.style.left = `${center.x - (SLOT_D / 2) * state.zoom}px`; slot.style.top = `${center.y - (SLOT_D / 2) * state.zoom}px`
+    slot.style.width = `${SLOT_D * state.zoom}px`; slot.style.height = `${SLOT_D * state.zoom}px`
+    slot.style.borderWidth = `${Math.max(1, 2 * state.zoom)}px`
+    slot.dataset.functionId = 'header'; slot.dataset.index = index
+    const input = document.createElement('input')
+    input.className = 'param-value binder-name'; input.type = 'text'; input.spellcheck = false
+    input.value = param.label; input.title = editable ? `Parameter ${index + 1} — type to rename it` : `Parameter ${index + 1}`
+    input.style.fontSize = `${12 * state.zoom}px`
+    input.disabled = !editable
+    input.addEventListener('change', () => {
+      if (!renameParameter({ nodes, functionBodies }, fnId, index, input.value.trim())) showToast(`"${input.value}" can't be a parameter name here (lowercase identifier, not already used)`)
+      refresh()
+    })
+    slot.append(input)
+    if (editable) {
+      slot.append(smallButton('param-remove', '−', `Remove parameter ${param.label} (from the body and every call)`, () => { removeParameter({ nodes, functionBodies }, fnId, index); refresh() }))
+      const moves = document.createElement('div')
+      moves.className = 'binder-moves'
+      if (index > 0) moves.append(smallButton('binder-move', '‹', 'Move this parameter left (in every call too)', () => { moveParameter({ nodes, functionBodies }, fnId, index, index - 1); refresh() }))
+      if (index < params.length - 1) moves.append(smallButton('binder-move', '›', 'Move this parameter right (in every call too)', () => { moveParameter({ nodes, functionBodies }, fnId, index, index + 1); refresh() }))
+      moves.style.bottom = `${-20 * state.zoom}px`
+      slot.append(moves)
+    }
+    editor.append(slot)
+  })
+  if (!editable) return
+  const add = document.createElement('button')
+  add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = 'Add a parameter (to the body and every call)'
+  const addAt = toScreen({ x: functionBlockRight(header) + 22, y: header.y })
+  const addSize = 26 * state.zoom
+  add.style.width = add.style.height = `${addSize}px`
+  add.style.fontSize = `${18 * state.zoom}px`; add.style.lineHeight = `${20 * state.zoom}px`
+  add.style.left = `${addAt.x - addSize / 2}px`; add.style.top = `${addAt.y - addSize / 2}px`
+  add.addEventListener('click', () => { addParameter({ nodes, functionBodies }, fnId); makeRoom(header); refresh() })
+  editor.append(add)
+  if (definitions[fnId]?.lambda) return
+  const name = document.createElement('input')
+  name.className = 'header-name'; name.type = 'text'; name.spellcheck = false
+  name.value = nodes[fnId].label; name.title = 'The function\'s name — type to rename it (every call follows)'
+  const p = point(header)
+  name.style.fontSize = `${13 * state.zoom}px`
+  name.style.width = `${Math.max(60, nodes[fnId].label.length * 9 + 24) * state.zoom}px`
+  name.style.left = `${p.x}px`; name.style.top = `${p.y + (FN_H / 2 + 20) * state.zoom}px`
+  name.addEventListener('change', () => {
+    if (!renameFunction({ nodes, functionBodies }, fnId, name.value.trim(), takenLabels())) showToast(`"${name.value}" can't be this function's name (lowercase identifier, not already used)`)
+    refresh()
+  })
+  editor.append(name)
+}
+// Labels of functions defined outside `nodes` — a custom function can't take them.
+function takenLabels() { return [...Object.values(preludeDefs), ...Object.values(derivedDefs)].map((d) => d.label) }
 // Value/boolean/output/curried chips share the function block's exact
 // stadium silhouette above (white fill, neutral outline, flat offset
 // shadow) — a value is just a function with every hole already filled, so
@@ -920,10 +1067,27 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   ctx.restore()
 }
 function label(node, p, baseY, pass) {
-  ctx.fillStyle = '#2b2640'; ctx.font = `600 ${13 * state.zoom}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.fillText(node.label, p.x, baseY + 20 * state.zoom)
+  ctx.fillStyle = '#2b2640'; ctx.font = `600 ${13 * state.zoom}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.fillText(labelText(node), p.x, baseY + 20 * state.zoom)
   const q = node.type === 'function' ? null : resolvedValueQual(node, activeNodes(), pass)
   const signature = node.type === 'function' ? functionSignature(node, activeNodes(), labelNamer, pass) : showQual(q.preds, q.type, labelNamer)
   if (signature) { ctx.fillStyle = '#9691a8'; ctx.font = `${11 * state.zoom}px ui-monospace, monospace`; ctx.fillText(signature, p.x, baseY + 37 * state.zoom) }
+}
+// The name line under a node: a λ shows the term it is (`\x -> x + c`), a
+// value shared through `where` shows its name (`next = (+)`, `↪ next`).
+function labelText(node) {
+  const graph = activeNodes()
+  if (node.type === 'function' && definitions[node.sourceFunctionId]?.lambda) {
+    const term = printLambdaText(node.sourceFunctionId, definitions, allBodies)
+    return term.length > 48 ? `${term.slice(0, 47)}…` : term
+  }
+  if (node.type === 'ref') { const name = graph[node.target]?.bindName; return name ? `↪ ${name}` : node.label }
+  if (node.bindName && Object.values(graph).some((m) => m.type === 'ref' && m.target === node.id)) return `${node.bindName} = ${node.label}`
+  return node.label
+}
+// A slot left open before an applied one: the call is a λ over it, `\x -> f x b`.
+function isHole(node, index) {
+  const applied = (i) => Boolean(node.mounted?.[i]) || Boolean(parseLiteral(node.params[i]))
+  return node.type === 'function' && !applied(index) && node.params.some((_, j) => j > index && applied(j))
 }
 // The declared parameter name at this call site's index (e.g. `n`, `x`,
 // `condition`) when known, so a slot can label itself meaningfully instead
@@ -954,8 +1118,8 @@ function detachMounted(node, index) {
 // on its right further right, so nothing ends up hidden underneath it.
 function makeRoom(grown) {
   const graph = activeNodes()
-  const leftOf = (n) => (n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n))
-  const rightOf = (n) => (n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n))
+  const leftOf = (n) => (isBlock(n) ? functionBlockLeft(n) : n.x - chipHalfWidth(n))
+  const rightOf = (n) => (isBlock(n) ? functionBlockRight(n) : n.x + chipHalfWidth(n))
   const queue = [grown]
   for (let guard = 0; queue.length && guard < 200; guard++) {
     const block = queue.shift()
@@ -1095,7 +1259,7 @@ function updatePortEditor(pass = typePass()) {
     } else {
       const input = document.createElement('input')
       input.className = 'param-value'; input.type = 'text'
-      input.placeholder = slotExpectsFunction(node, index, pass) ? 'ƒ' : '?'
+      input.placeholder = isHole(node, index) ? `\\${node.holeNames?.[index] || 'x'}` : slotExpectsFunction(node, index, pass) ? 'ƒ' : '?'
       input.value = rawValue; input.title = `Parameter ${index + 1}`
       if (pass.perNode.get(node.id)?.invalidSlots?.includes(index)) { input.classList.add('invalid'); input.title = `"${rawValue}" doesn't fit ${paramDisplayName(node, index)} :: ${expectedParamType(node, index, activeNodes(), labelNamer, pass)}` }
       input.style.fontSize = `${11 * state.zoom}px`
@@ -1147,6 +1311,8 @@ function updatePortEditor(pass = typePass()) {
     })
     editor.append(add)
   })
+  const header = activeNodes().header
+  if (header && isVisible(header)) renderHeaderEditor(header)
   if (focused) {
     const input = editor.querySelector(`.param-slot[data-function-id="${CSS.escape(focused.fn)}"][data-index="${focused.index}"] .param-value`)
     if (input) { input.focus(); input.setSelectionRange(focused.start, focused.end) }
@@ -1197,7 +1363,9 @@ function renderValueInspector(n) {
 // from some body would leave those calls dangling.
 function deleteBlocker(n) {
   if (n.readonly) return "Builtin functions can't be deleted"
+  if (viewingReadonly()) return 'A definition view is read-only'
   if (n.type === 'output' || n.type === 'parameter') return "A function's Output and parameters can't be deleted"
+  if (n.type === 'header') return "A function's header is its left-hand side — it can't be deleted"
   if (n.custom && nodes[n.id] === n) {
     const callers = Object.values(functionBodies).flatMap((body) => Object.values(body)).filter((m) => m.sourceFunctionId === n.id).length
     if (callers) return `${n.label} is still called ${callers} time${callers > 1 ? 's' : ''} — delete those calls first`
@@ -1258,15 +1426,84 @@ function recheckLawNodes() {
     lawNodeResults.set(n.id, fn ? computeFunctionLaw(fn, n.law) : { law: n.law, ok: false, counterexample: 'the function is gone' })
   }
 }
-// The custom function `id` as Haskell: its signature and its definition,
-// read back from the body graph (src/haskellPrint.js).
-function definitionBlock(id) {
-  const def = nodes[id]
-  if (!def) return ''
-  const code = printDefinition(id, definitions, functionBodies)
-  if (!code) return ''
-  const signature = `${def.label} :: ${asciiType(functionSignature(def, nodes))}`
-  return `<div class="property"><label>DEFINITION</label><pre class="haskell">${escapeAttr(signature)}\n${escapeAttr(code)}</pre></div>`
+// The function `id` as Haskell: its signature and its definition, read
+// back from its body graph (src/haskellPrint.js). Every token is linked to
+// the node it came from: hovering one lights the node up on the canvas,
+// clicking it goes there (opening the body if need be), and the selected
+// node's tokens are marked.
+function definitionBlock(id, title = 'DEFINITION') {
+  const def = definitions[id]
+  const tokens = def && printDefinitionTokens(id, definitions, allBodies)
+  if (!tokens) return ''
+  const signature = [{ text: def.label, id: 'header', scope: id, role: 'name' }, { text: ` :: ${asciiType(definitionSignature(id))}` }]
+  const note = viewDefs[id]?.note ? `\n-- ${viewDefs[id].note}` : ''
+  return `<div class="property definition"><label>${escapeAttr(title)}</label><pre class="haskell">${tokensHtml(signature)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></div>`
+}
+function tokensHtml(tokens) {
+  const graph = activeNodes()
+  const marked = new Set([state.selected, ...state.multi])
+  // A reference stands for its target: selecting either marks both.
+  Object.values(graph).forEach((n) => { if (n.type === 'ref' && (marked.has(n.id) || marked.has(n.target))) { marked.add(n.id); marked.add(n.target) } })
+  return tokens.map((t) => {
+    if (!t.id) return escapeAttr(t.text)
+    const linked = t.scope === state.activeFunction && marked.has(t.id)
+    return `<span class="tok ${t.role || ''} ${linked ? 'linked' : ''}" data-scope="${escapeAttr(t.scope)}" data-node="${escapeAttr(t.id)}"${t.slot === undefined ? '' : ` data-slot="${t.slot}"`}>${escapeAttr(t.text)}</span>`
+  }).join('')
+}
+function wireDefinitionTokens() {
+  inspector.querySelectorAll('.haskell .tok').forEach((span) => {
+    const target = { scope: span.dataset.scope, id: span.dataset.node, slot: span.dataset.slot === undefined ? undefined : Number(span.dataset.slot) }
+    span.onmouseenter = () => { state.hover = target; draw() }
+    span.onmouseleave = () => { state.hover = null; draw() }
+    span.onclick = () => goToToken(target)
+  })
+}
+// Show the node a token was read from: open the body it lives in, then select it.
+function goToToken({ scope, id }) {
+  state.hover = null
+  if (scope !== state.activeFunction) {
+    if (!allBodies[scope]) return
+    enterFunction(scope)
+    if (state.activeFunction !== scope) return
+  }
+  if (activeNodes()[id]) { state.multi.clear(); state.selected = id }
+  updateInspector(); draw()
+}
+// Where on the canvas a node is: the node itself, or — while it sits folded
+// in a slot — that slot (on the nearest visible host).
+function visibleAnchor(id, slot) {
+  let n = activeNodes()[id]
+  let index = slot
+  for (let guard = 0; n && !isVisible(n) && guard < 50; guard++) {
+    const at = slotHost(n)
+    if (!at) return null
+    n = at.host; index = at.index
+  }
+  return n ? { node: n, slot: index } : null
+}
+// A highlight ring around what the hovered DEFINITION token was read from,
+// and around the slot hiding the selected node when it's folded away.
+function drawLinkHighlights() {
+  const rings = []
+  if (state.hover && state.hover.scope === state.activeFunction) rings.push([visibleAnchor(state.hover.id, state.hover.slot), '#f0a020'])
+  const selected = activeNodes()[state.selected]
+  if (selected && !isVisible(selected)) rings.push([visibleAnchor(selected.id), ACCENT])
+  ctx.save()
+  rings.forEach(([anchor, color]) => {
+    if (!anchor) return
+    const { node, slot } = anchor
+    ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.setLineDash([])
+    if (slot !== undefined && isBlock(node)) {
+      const c = slotScreenCenter(node, slot)
+      ctx.beginPath(); ctx.arc(c.x, c.y, (SLOT_D / 2 + 6) * state.zoom, 0, Math.PI * 2); ctx.stroke()
+      return
+    }
+    const r = isBlock(node) ? functionBlockScreenRect(node) : valueBlockScreenRect(node)
+    const pad = 7 * state.zoom
+    roundedRectPath(ctx, r.left - pad, r.top - pad, r.right - r.left + pad * 2, r.height + pad * 2, (r.height / 2 + pad))
+    ctx.stroke()
+  })
+  ctx.restore()
 }
 function useAgainButton(n) {
   return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
@@ -1308,7 +1545,9 @@ function deleteNode(id) {
 function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
-  inspector.innerHTML = n.type === 'output'
+  inspector.innerHTML = n.type === 'header'
+    ? renderHeaderInspector(n)
+    : n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
     ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
@@ -1350,6 +1589,64 @@ function updateInspector() {
   // alone is enough to keep the canvas label live; the inspector's own TYPE
   // line catches up next time something reselects this node.
   if (valueInput && (n.type === 'number' || n.type === 'text')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
+  addGraphTextRows(n)
+}
+// --- What the DEFINITION text says, edited on the graph ----------------------
+// Rows the inspector adds for the parts of the text that belong to a node:
+// a function's name, the `where` name of a value used more than once, the
+// binders of a call's λ holes — plus, inside a body, that body's DEFINITION.
+function addGraphTextRows(n) {
+  const graph = activeNodes()
+  const rows = []
+  if (nodes[n.id] === n && n.custom && !n.lambda) rows.push(`<div class="property"><label>NAME</label><input class="fn-rename" value="${escapeAttr(n.label)}" spellcheck="false" title="Rename the function (every call follows)" /></div>`)
+  const original = n.type === 'ref' ? graph[n.target] : n
+  const shared = original && original.type !== 'parameter' && Object.values(graph).some((m) => m.type === 'ref' && m.target === original.id)
+  if (shared && state.activeFunction) rows.push(`<div class="property"><label>WHERE NAME</label><input class="where-name" value="${escapeAttr(original.bindName || '')}" placeholder="(automatic)" spellcheck="false" title="The name this value is shared under: where name = …" /></div>`)
+  const holes = n.type === 'function' && state.activeFunction ? n.params.map((_, i) => i).filter((i) => isHole(n, i)) : []
+  if (holes.length) rows.push(`<div class="property"><label>λ HOLES</label>${holes.map((i) => `<div class="port-row"><span class="hole-lambda">\\</span><input class="hole-name" data-index="${i}" value="${escapeAttr(n.holeNames?.[i] || '')}" placeholder="x" spellcheck="false" title="The name this open slot is bound under: \\x -> …" /><small>${escapeAttr(paramDisplayName(n, i))}</small></div>`).join('')}</div>`)
+  inspector.querySelector('.selected-node')?.insertAdjacentHTML('afterend', rows.join(''))
+  if (state.activeFunction && n.type !== 'output' && !inspector.querySelector('.property.definition')) {
+    const block = definitionBlock(state.activeFunction, `DEFINITION · ${definitions[state.activeFunction]?.lambda ? 'λ' : definitions[state.activeFunction]?.label ?? ''}`)
+    const note = inspector.querySelector('.inspector-note')
+    if (note) note.insertAdjacentHTML('beforebegin', block)
+    else inspector.insertAdjacentHTML('beforeend', block)
+  }
+  const refresh = () => { renderFunctionLibrary(); updateInspector(); draw() }
+  const rename = inspector.querySelector('.fn-rename')
+  if (rename) rename.onchange = () => {
+    if (!renameFunction({ nodes, functionBodies }, n.id, rename.value.trim(), takenLabels())) showToast(`"${rename.value}" can't be this function's name (lowercase identifier, not already used)`)
+    refresh()
+  }
+  const whereName = inspector.querySelector('.where-name')
+  if (whereName) whereName.onchange = () => {
+    const name = whereName.value.trim()
+    const taken = Object.values(graph).filter((m) => m.type === 'parameter' || (m.bindName && m.id !== original.id)).map((m) => (m.type === 'parameter' ? m.label : m.bindName))
+    if (!name) delete original.bindName
+    else if (!identifier(name) || taken.includes(name)) showToast(`"${name}" can't name this value (lowercase identifier, not a parameter or another shared value)`)
+    else original.bindName = name
+    refresh()
+  }
+  inspector.querySelectorAll('.hole-name').forEach((input) => {
+    input.onchange = () => {
+      const name = input.value.trim()
+      const i = Number(input.dataset.index)
+      if (name && !identifier(name)) { showToast(`"${name}" can't name a λ binder (lowercase identifier)`); return refresh() }
+      n.holeNames = n.params.map((_, j) => n.holeNames?.[j] || undefined)
+      n.holeNames[i] = name || undefined
+      refresh()
+    }
+  })
+  wireDefinitionTokens()
+  // A definition view is read-only: navigation stays, every edit goes.
+  if (viewingReadonly()) {
+    inspector.querySelectorAll('input, select, textarea').forEach((el) => { el.disabled = true })
+    inspector.querySelectorAll('#delete-node, #use-again, #disconnect-output, #fix-slots, #entry-toggle, #evaluate, .law-check, .type-annotate').forEach((el) => el.remove())
+  }
+}
+function renderHeaderInspector(n) {
+  const def = definitions[n.fn]
+  const editable = headerEditable(n)
+  return `<div class="selected-node"><span class="selected-icon">${def?.lambda ? 'λ' : 'ƒ'}</span><div><b>${escapeAttr(def?.lambda ? 'λ' : def?.label ?? '?')}</b><small>Definition header · the left-hand side</small></div><span class="live">BINDERS</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${escapeAttr(definitionSignature(n.fn))}</code></div>${definitionBlock(n.fn)}<div class="inspector-note">${editable ? `${def?.lambda ? '' : 'Rename the function under the block. '}Rename a parameter in its slot; ‹ › reorder, − removes, + adds — every call follows.` : 'Read-only.'}</div>`
 }
 // Plays `fn`: evaluates it as a value (callee applied to its applied slots —
 // see src/evaluator.js) and drops the result next to it. A fully-applied
@@ -1400,7 +1697,7 @@ function executeFunction(fn) {
 function hitNode(x, y) {
   return Object.values(activeNodes()).find(n => {
     if (!isVisible(n)) return false
-    return n.type === 'function' ? pointInFunctionBlock(n, x, y) : pointInValueBlock(n, x, y)
+    return isBlock(n) ? pointInFunctionBlock(n, x, y) : pointInValueBlock(n, x, y)
   })
 }
 // The nearest empty, type-compatible slot (or the function body's Output)
@@ -1418,7 +1715,7 @@ function hitNode(x, y) {
 // clobber a slot that already reads as meaningfully filled.
 const PRECISE_SLOT_RADIUS = 60
 function findSnapTarget(dragged) {
-  if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
+  if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.type === 'header' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
   let best = null, bestDist = SNAP_RADIUS
   Object.values(activeNodes()).filter(isFunction).forEach((target) => {
     if (target.id === dragged.id) return
@@ -1455,7 +1752,7 @@ function finishConnection(dragged) {
     output.source = dragged.id
     output.value = nodeDisplayText(dragged)
     dragged.connected = true
-    const width = dragged.type === 'function' ? functionBlockRight(dragged) - dragged.x : chipHalfWidth(dragged)
+    const width = isBlock(dragged) ? functionBlockRight(dragged) - dragged.x : chipHalfWidth(dragged)
     dragged.x = output.x - chipHalfWidth(output) - 70 - width
     dragged.y = output.y
     state.selected = output.id
@@ -1583,10 +1880,12 @@ canvas.addEventListener('dblclick', (event) => {
   else if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
 })
 function enterFunction(id) {
-  if (nodes[id]?.readonly) return
-  if (!functionBodies[id]) functionBodies[id] = { output: { id: 'output', type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
-  // A λ opens inside the body it was made in (Back returns there); anything else opens from main.
-  state.functionStack = nodes[id]?.lambda && state.activeFunction ? [...state.functionStack, state.activeFunction] : []
+  const def = definitions[id]
+  if (!def || (def.readonly && !viewBodies[id])) return
+  if (!allBodies[id]) functionBodies[id] = { output: { id: 'output', type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
+  ensureHeader(id)
+  // A λ or a definition view opens inside the graph it was opened from (Back returns there); a custom function opens from main.
+  state.functionStack = (def.lambda || viewBodies[id]) && state.activeFunction ? [...state.functionStack, state.activeFunction] : []
   state.activeFunction = id
   state.selected = 'output'
   renderFunctionLibrary()
@@ -1870,7 +2169,7 @@ function loadProject(project) {
   if (typeEditor) { if (types[typeEditor.original]) { typeEditor.draft = declToDraft(types[typeEditor.original]); renderTypeEditor() } else closeTypeEditor() }
   entryId = project.entry
   outputId = project.outputId
-  if (state.activeFunction && !functionBodies[state.activeFunction]) state.activeFunction = null
+  if (state.activeFunction && !allBodies[state.activeFunction]) { state.activeFunction = null; state.functionStack = [] }
   if (!activeNodes()[state.selected]) state.selected = state.activeFunction ? 'output' : 'add'
   recheckLawNodes()
   renderFunctionLibrary(); updateInspector(); draw()
@@ -1947,7 +2246,7 @@ importFile.onchange = async () => {
 let clipboard = null
 function copySelection() {
   const graph = activeNodes()
-  const roots = (state.multi.size ? [...state.multi] : [state.selected]).map((id) => graph[id]).filter((n) => n && !n.readonly && n.type !== 'output' && n.type !== 'parameter' && !(graph === nodes && n.custom))
+  const roots = (state.multi.size ? [...state.multi] : [state.selected]).map((id) => graph[id]).filter((n) => n && !n.readonly && n.type !== 'output' && n.type !== 'parameter' && n.type !== 'header' && !(graph === nodes && n.custom))
   if (!roots.length) return showToast('Nothing copyable selected (builtins, Output, parameters and function definitions stay put)')
   const take = new Map()
   const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])) }

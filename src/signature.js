@@ -34,6 +34,18 @@ function unplugSlot(graph, node, index) {
   }
 }
 
+/** After `node`'s slots were spliced or reordered, point what's plugged into them at their new index. */
+function reindexMounted(graph, node) {
+  node.mounted?.forEach((id, i) => { const child = graph[id]; if (child) child.mountedTo = `${node.id}:${i}` })
+}
+
+/** Reorder `array` in place by moving the element at `from` to `to`. */
+function move(array, from, to) {
+  if (!array || from >= array.length) return
+  const [item] = array.splice(from, 1)
+  array.splice(to, 0, item)
+}
+
 /** A name not used by any of `taken`. */
 function freshName(taken, base = 'p') {
   for (let i = taken.length + 1; ; i++) if (!taken.includes(`${base}${i}`)) return `${base}${i}`
@@ -81,7 +93,56 @@ export function removeParameter(project, fnId, index) {
     node.params.splice(index, 1)
     node.mounted.splice(index, 1)
     node.paramScopes?.splice(index, 1)
+    node.holeNames?.splice(index, 1)
+    reindexMounted(graph, node)
   }
+  return true
+}
+
+/**
+ * Move parameter `from` of custom function `fnId` to position `to` — in its
+ * body (the parameters' order), its definition and every call, whose slots
+ * (and whatever is plugged into them) move along.
+ */
+export function moveParameter(project, fnId, from, to) {
+  const def = project.nodes[fnId]
+  const body = project.functionBodies[fnId]
+  const params = bodyParameters(project, fnId)
+  if (!def?.custom || !body || from === to || from < 0 || to < 0 || from >= params.length || to >= params.length) return false
+  // The order of the body's parameter nodes is their key order: re-insert
+  // every key (keeping the object itself — it is shared), with the parameter
+  // keys taking the new order among themselves.
+  const order = params.map((p) => p.id)
+  move(order, from, to)
+  const entries = Object.entries(body)
+  const byId = new Map(entries.map(([k, n]) => [n.id, [k, n]]))
+  let next = 0
+  const reordered = entries.map((entry) => (entry[1].type === 'parameter' ? byId.get(order[next++]) : entry))
+  entries.forEach(([k]) => delete body[k])
+  reordered.forEach(([k, n]) => { body[k] = n })
+  for (const { graph, node } of [{ graph: project.nodes, node: def }, ...callsTo(project, fnId)]) {
+    move(node.params, from, to)
+    move(node.mounted, from, to)
+    move(node.paramScopes, from, to)
+    if (node.holeNames) { while (node.holeNames.length < node.params.length) node.holeNames.push(undefined); move(node.holeNames, from, to) }
+    reindexMounted(graph, node)
+  }
+  return true
+}
+
+/**
+ * Rename custom function `fnId` (not a λ — that has no name). `taken` lists
+ * the labels of functions defined elsewhere (Prelude, types). Returns false
+ * if the name is invalid or already taken.
+ */
+export function renameFunction(project, fnId, name, taken = []) {
+  const def = project.nodes[fnId]
+  if (!def?.custom || def.lambda || !/^[a-z_][A-Za-z0-9_']*$/.test(name)) return false
+  if (name === def.label) return true
+  const others = Object.values(project.nodes).filter((n) => n.type === 'function' && !n.sourceFunctionId && n.id !== fnId).map((n) => n.label)
+  if ([...others, ...taken].includes(name)) return false
+  def.label = name
+  for (const { node } of callsTo(project, fnId)) node.label = name
   return true
 }
 
