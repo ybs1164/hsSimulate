@@ -1,7 +1,22 @@
 import './style.css'
-import { applySubst, showQual, tfun, unify, createNamer, pred } from './typeSystem.js'
+import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
-import { reduce, predsOnVar, pickDefault } from './numericClasses.js'
+import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
+import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances } from './prelude.js'
+import { createEvaluator, EvalError, isClosure, isData, showValue } from './evaluator.js'
+import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from './typeDecls.js'
+import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
+import { createGame, isProgram } from './runtime.js'
+import { asciiType, printDefinition } from './haskellPrint.js'
+import { ParseError, parseValue } from './valueParser.js'
+import { buildClickCounter } from './examples/clickCounter.js'
+import { buildBlankGame } from './examples/blankGame.js'
+import { renderWidget } from './player.js'
+import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
+
+// The player modules' source text, for bundling into an exported game (Vite inlines these).
+const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
+import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 
 const app = document.querySelector('#app')
 
@@ -18,16 +33,20 @@ app.innerHTML = `
         <nav class="node-library">
           <div class="library-title"><span>NODES</span><button class="add-node" aria-label="Add node">+</button></div>
           <div id="function-library"></div>
+          <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type (Haskell data/newtype)">+</button></div>
+          <div id="type-library"></div>
+          <div class="library-title types-title"><span>PRELUDE</span></div>
+          <div id="prelude-library"></div>
           <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>Numbers</b><small>Int · Float</small></span></button>
-          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String</small></span></button>
+          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String = [Char]</small></span></button>
           <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>Lists</b><small>[a, b, c]</small></span></button>
           <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Booleans</b><small>True · False</small></span></button>
         </nav>
         <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong>GHC 9.6.3 <i>●</i></strong></div></div>
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved"><i></i> Saved just now</span></div><div class="toolbar-actions"><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button></div></div>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Unfold every plugged-in expression onto the canvas">⤢</button><button id="fold-all" title="Fold every expression back into its slot">⤡</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
       <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
@@ -48,8 +67,8 @@ const nodes = {
   compose: { id: 'compose', type: 'function', x: 300, y: 630, label: 'compose', params: ['f', 'g', 'x'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#2bb8b0', scope: 'main', builtin: 'compose', readonly: true, expression: 'λf g x. f (g x)' },
   isZero: { id: 'isZero', type: 'function', x: 620, y: 630, label: 'isZero', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#ed6b84', scope: 'main', builtin: 'isZero', readonly: true, expression: 'λn. n == 0' },
   ifThenElse: { id: 'ifThenElse', type: 'function', x: 620, y: 850, label: 'ifThenElse', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'ifThenElse', readonly: true, expression: 'λc a b. c ? a : b' },
-  // Numeric type-class hierarchy demo builtins (see src/numericClasses.js) —
-  // one representative Prelude function per class.
+  // Group-theoretic numeric hierarchy builtins (see src/numericClasses.js) —
+  // each demands only the weakest algebraic structure it needs.
   plus: { id: 'plus', type: 'function', x: 300, y: 1070, label: '(+)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#e8b23c', scope: 'main', builtin: 'plus', readonly: true, expression: 'x + y' },
   negate: { id: 'negate', type: 'function', x: 620, y: 1070, label: 'negate', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#8c7cf2', scope: 'main', builtin: 'negate', readonly: true, expression: '-x' },
   divide: { id: 'divide', type: 'function', x: 300, y: 1290, label: '(/)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#35b4e0', scope: 'main', builtin: 'divide', readonly: true, expression: 'x / y' },
@@ -58,6 +77,13 @@ const nodes = {
   fromIntegral: { id: 'fromIntegral', type: 'function', x: 620, y: 1510, label: 'fromIntegral', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#ec7550', scope: 'main', builtin: 'fromIntegral', readonly: true, expression: 'fromIntegral x' },
   round: { id: 'round', type: 'function', x: 300, y: 1730, label: 'round', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#86c24c', scope: 'main', builtin: 'round', readonly: true, expression: 'round x' },
   isNaN: { id: 'isNaN', type: 'function', x: 620, y: 1730, label: 'isNaN', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#e85c9e', scope: 'main', builtin: 'isNaN', readonly: true, expression: 'isNaN x' },
+  minus: { id: 'minus', type: 'function', x: 300, y: 1950, label: '(-)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#5fa8e8', scope: 'main', builtin: 'minus', readonly: true, expression: 'x - y' },
+  times: { id: 'times', type: 'function', x: 620, y: 1950, label: '(*)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#f0954a', scope: 'main', builtin: 'times', readonly: true, expression: 'x * y' },
+  addZero: { id: 'addZero', type: 'function', x: 300, y: 2170, label: 'addZero', params: [], mounted: [], paramScopes: [], color: '#4fc2c2', scope: 'main', builtin: 'addZero', readonly: true, expression: '0 (additive identity)' },
+  mulOne: { id: 'mulOne', type: 'function', x: 620, y: 2170, label: 'mulOne', params: [], mounted: [], paramScopes: [], color: '#b98fef', scope: 'main', builtin: 'mulOne', readonly: true, expression: '1 (multiplicative identity)' },
+  geq: { id: 'geq', type: 'function', x: 300, y: 2390, label: '(>=)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#ed8fa8', scope: 'main', builtin: 'geq', readonly: true, expression: 'x >= y' },
+  eq: { id: 'eq', type: 'function', x: 620, y: 2390, label: '(==)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#3cbe9e', scope: 'main', builtin: 'eq', readonly: true, expression: 'x == y' },
+  select: { id: 'select', type: 'function', x: 620, y: 2610, label: 'select', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'select', readonly: true, expression: 'λc a b. c ? a : b' },
 }
 function activeNodes() { return state.activeFunction ? functionBodies[state.activeFunction] : nodes }
 function activeName() { return state.activeFunction ? nodes[state.activeFunction].label : 'main' }
@@ -91,6 +117,42 @@ const functionBodies = {
   },
 }
 let outputId = 0
+// The function `Run graph` (and Ctrl+Enter) plays — a node id in `nodes`.
+let entryId = 'add'
+// Everything in `nodes`/`functionBodies` at startup is a builtin; kept so a
+// loaded project can be reconciled with this version's builtins.
+const builtinNodes = structuredClone(nodes)
+const builtinBodies = structuredClone(functionBodies)
+// User type declarations (see typeDecls.js) and the read-only functions
+// derived from them — constructors, field projections and updates, and
+// each type's eliminator. Derived definitions don't live in `nodes` (that
+// would put them on the main canvas); `definitions` is the lookup the type
+// pass and the evaluator use: every function definition, real or derived.
+let types = {}
+const derivedDefs = {}
+// Prelude functions on lists, Maybe and text (src/dataTypes.js), by their
+// Haskell names. Like derived definitions they're listed in the sidebar
+// rather than drawn on the main canvas.
+const PRELUDE = [
+  ['Lists', [['listOf', '[ , , ]', ['x1', 'x2', 'x3']], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
+  ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
+  ['Text', [['show', 'show', ['x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
+  ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']], ['mkSum', 'Sum', ['x']], ['getSum', 'getSum', ['s']], ['mkProduct', 'Product', ['x']], ['getProduct', 'getProduct', ['p']], ['mkEndo', 'Endo', ['f']], ['appEndo', 'appEndo', ['e', 'x']]]],
+  ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
+  ['Lattice', [['leq', 'leq', ['x', 'y']], ['join', '(\\/)', ['x', 'y']], ['meet', '(/\\)', ['x', 'y']]]],
+  ['VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
+  ['Game', [['program', 'program', ['initial', 'view', 'handle', 'step']], ['wText', 'text', ['s']], ['wButton', 'button', ['label', 'msg']], ['wColumn', 'column', ['widgets']], ['wRow', 'row', ['widgets']], ['wProgress', 'progress', ['fraction']]]],
+]
+const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).map(([builtin, label, params]) => [`prelude:${builtin}`, { id: `prelude:${builtin}`, type: 'function', builtin, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#5fa8e8' }]))
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] })
+function applyTypes(next) {
+  types = next
+  Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
+  derivedDefinitions(types).forEach((def) => { derivedDefs[def.id] = def })
+  setDynamicInstances(derivedInstances(types))
+}
+const evaluator = createEvaluator({ nodes: definitions, functionBodies, get types() { return types } })
+const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
 function renderFunctionLibrary() {
@@ -101,22 +163,101 @@ function renderFunctionLibrary() {
     </button>
   `).join('')
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
-    item.addEventListener('click', () => {
-      if (state.activeFunction) addFunctionCall(item.dataset.functionId)
-      else enterFunction(item.dataset.functionId)
-    })
+    item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
   })
+  renderTypeLibrary()
+}
+// Clicking a function in the library: a custom function opens its body when
+// you're on `main`; anything else (or inside a body) drops a call to it.
+function onLibraryFunction(id) {
+  if (!state.activeFunction && nodes[id]?.custom) enterFunction(id)
+  else addFunctionCall(id)
+}
+function renderPreludeLibrary() {
+  document.querySelector('#prelude-library').innerHTML = PRELUDE.map(([group, fns]) => `<div class="prelude-group">${group}</div>${fns.map(([builtin]) => {
+    const def = preludeDefs[`prelude:${builtin}`]
+    const sch = builtin === 'listOf' ? listOfScheme(3) : builtinSchemes[builtin]
+    return `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${def.label}</b><small>${showQual(sch.preds, sch.type)}</small></button>`
+  }).join('')}`).join('')
+  document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+}
+const typeLibrary = document.querySelector('#type-library')
+function renderTypeLibrary() {
+  const byType = Object.groupBy(Object.values(derivedDefs), (def) => def.derived.type)
+  typeLibrary.innerHTML = Object.values(types).map((d) => `
+    <div class="type-entry">
+      <button class="library-item type-item" data-type-name="${d.name}" title="Edit declaration">
+        <span class="lib-icon type-icon">T</span>
+        <span><b>${d.name}</b><small>${d.constructors.map((c) => c.name).join(' | ')}${d.deriving.length ? ` · deriving (${d.deriving.flatMap((c) => c.classes).join(', ')})` : ''}</small></span>
+      </button>
+      ${(byType[d.name] || []).map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${def.label}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}
+    </div>`).join('')
+  typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeDialog(item.dataset.typeName) })
+  typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+}
+// The laws of every algebraic instance a declared type has, checked on
+// samples by actually running them (src/laws.js).
+function lawReport(typeName) {
+  const classes = lawfulClassesOf(tcon(typeName))
+  if (!classes.length) return ''
+  const rows = classes.flatMap((cls) => {
+    const { results, skipped } = checkClassLaws(cls, tcon(typeName), { ev: evaluator, types })
+    if (skipped) return [`<li class="law skipped">${cls}: ${escapeAttr(skipped)}</li>`]
+    return results.map((r) => `<li class="law ${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓' : '✗'} <b>${r.cls}</b> ${escapeAttr(r.law)}${r.ok ? '' : ` — <em>${escapeAttr(r.counterexample)}</em>`}</li>`)
+  })
+  return `<div class="law-report"><label>LAWS (checked on samples)</label><ul>${rows.join('')}</ul></div>`
+}
+// Declare or edit a type in Haskell syntax. The whole set of declarations is
+// re-checked on save; errors are shown in the dialog, GHC-style.
+function openTypeDialog(editing = null) {
+  if (document.querySelector('#function-dialog')) return
+  const dialog = document.createElement('div')
+  dialog.id = 'function-dialog'
+  const example = 'data Model = Model { clicks :: Double, perClick :: Double } deriving (Eq, Show)'
+  dialog.innerHTML = `<form class="function-form type-form"><h2>${editing ? `${editing} 수정` : '새 타입 선언'}</h2><label>하스켈 data / newtype 선언<textarea name="source" rows="5" spellcheck="false"></textarea></label><p class="type-error" role="alert"></p>${editing ? lawReport(editing) : ''}<p>곱(레코드)·합(생성자 여럿) 타입을 선언하면 생성자, 필드 getter·<code>set</code>·<code>over</code>, 분기 함수 <code>case타입명</code>이 만들어집니다. <code>deriving</code>: stock <code>(Eq, Ord, Show)</code> · 곱 타입의 점별 구조 <code>deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)</code> · <code>deriving (Semigroup, Monoid) via Generically T</code> · newtype은 <code>deriving newtype (…)</code>.</p><div>${editing ? '<button type="button" class="danger" data-delete>삭제</button>' : ''}<button type="button" data-cancel>취소</button><button class="tool-button primary">${editing ? '저장' : '선언'}</button></div></form>`
+  document.body.append(dialog)
+  const form = dialog.querySelector('form')
+  const textarea = form.querySelector('textarea')
+  const error = form.querySelector('.type-error')
+  textarea.value = editing ? types[editing].source : example
+  textarea.focus()
+  dialog.querySelector('[data-cancel]').onclick = () => dialog.remove()
+  const usedBy = (name) => {
+    const prefix = `type:${name}:`
+    const calls = [nodes, ...Object.values(functionBodies)].flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(prefix)).length
+    const fields = Object.values(types).filter((d) => d.name !== name && JSON.stringify(d.constructors).includes(`"name":"${name}"`)).map((d) => d.name)
+    return { calls, fields }
+  }
+  dialog.querySelector('[data-delete]')?.addEventListener('click', () => {
+    const { calls, fields } = usedBy(editing)
+    if (calls || fields.length) { error.textContent = `${editing} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${fields.length ? ` in ${fields.join(', ')}` : ''}`; return }
+    const next = { ...types }
+    delete next[editing]
+    applyTypes(next); dialog.remove(); renderFunctionLibrary(); updateInspector(); draw()
+  })
+  form.onsubmit = (event) => {
+    event.preventDefault()
+    try {
+      // Definitions only (call nodes repeat their callee's name), plus the Prelude's.
+      const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId), ...Object.values(preludeDefs)].map((n) => n.label)
+      applyTypes(declareTypes(types, textarea.value, { replacing: editing, functionLabels: labels }))
+    } catch (e) {
+      if (!(e instanceof DeclError)) throw e
+      error.textContent = e.message
+      return
+    }
+    dialog.remove(); renderFunctionLibrary(); updateInspector(); draw()
+  }
 }
 
 function addFunctionCall(sourceId) {
-  const source = nodes[sourceId]
+  const source = definitions[sourceId]
   if (!source) return
   const graph = activeNodes()
   const id = `call-${sourceId}-${Date.now()}`
   graph[id] = {
     id, type: 'function', sourceFunctionId: sourceId,
-    x: 180 + (Object.keys(graph).length % 3) * 210,
-    y: 360 + (Object.keys(graph).length % 2) * 90,
+    ...freePosition(graph, 120 + source.params.length * SLOT_STRIDE),
     label: source.label, params: source.params.map(() => ''),
     mounted: source.params.map(() => null), paramScopes: source.params.map(() => 'local'),
     scope: 'local', color: source.color,
@@ -135,7 +276,7 @@ function createFunctionBody(id, params) {
     }
   })
   body.output = {
-    id: `${id}-output`, type: 'output', x: 570, y: 255,
+    id: 'output', type: 'output', x: 570, y: 255,
     label: 'Output', value: params[0] || '0', color: '#2fbf8f',
   }
   if (params.length) body.output.source = `input-${id}-0`
@@ -214,7 +355,7 @@ const FN_TAIL = 40       // right padding after the last slot before the block's
 const CHIP_W = 132       // value/boolean/output/curried chip width — same pill language as the function block, just shorter
 const CHIP_H = 64        // chip height — matches SLOT_D so a standalone chip reads as the same unit as an embedded slot
 const SNAP_RADIUS = 130  // world-space magnet radius: highlight + auto-connect distance
-const TYPE_COLORS = { Int: '#4f8ef7', Integer: '#e8b23c', Word: '#35b4e0', Float: '#3cbe84', Double: '#a96ef0', Rational: '#d66bd1', Bool: '#ed6b84' }
+const TYPE_COLORS = { Int: '#4f8ef7', Integer: '#e8b23c', Word: '#35b4e0', Float: '#3cbe84', Double: '#a96ef0', Rational: '#d66bd1', Natural: '#e07a5f', Bool: '#ed6b84' }
 const VAR_PALETTE = ['#8b7cf2', '#5fa8e8', '#3cbe9e', '#e8b23c', '#ed8fa8', '#4fc2c2', '#b98fef', '#f0954a']
 const FN_TYPE_COLOR = '#6c5ce7'
 const NEUTRAL_BORDER = '#d6d1e8'  // shared, undecorated outline for every pill — function block or value chip alike
@@ -223,6 +364,7 @@ function colorForType(type, namer) {
   if (!type) return '#9691a8'
   if (type.kind === 'fun') return FN_TYPE_COLOR
   if (type.kind === 'con') return TYPE_COLORS[type.name] || '#9691a8'
+  if (type.kind === 'app') return colorForType(type.fn, namer) // `Maybe Int` reads as its head, `Maybe`
   return VAR_PALETTE[namer(type.id).charCodeAt(0) % VAR_PALETTE.length]
 }
 // Still worth flagging that a slot wants a function specifically — not as a
@@ -267,7 +409,7 @@ function pointInValueBlock(node, x, y) { return Math.abs(x - node.x) <= CHIP_W /
 // widened with fixed padding for what draw() puts just outside that rect:
 // the param-tag pills above a function block's slots, and the two label
 // lines below every block/chip.
-function graphBounds(graphNodes = Object.values(activeNodes()).filter(n => !n.mountedTo)) {
+function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)) {
   if (!graphNodes.length) return null
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   graphNodes.forEach((n) => {
@@ -298,6 +440,30 @@ function fitToView() {
   document.querySelector('#zoom-level').textContent = `${Math.round(state.zoom * 100)}%`
   draw()
 }
+// Where to put a newly added node of roughly `width` world px: the free spot
+// nearest the middle of what's on screen, searched outward ring by ring so
+// it lands visible and clear of existing nodes.
+function freePosition(graph, width) {
+  const view = { left: -state.offset.x / state.zoom, top: -state.offset.y / state.zoom, right: (canvas.clientWidth - state.offset.x) / state.zoom, bottom: (canvas.clientHeight - state.offset.y) / state.zoom }
+  const cx = (view.left + view.right) / 2 - width / 2
+  const cy = (view.top + view.bottom) / 2
+  const overlaps = (x, y) => Object.values(graph).some((n) => {
+    if (!isVisible(n)) return false
+    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - CHIP_W / 2
+    const right = n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2
+    return Math.abs(n.y - y) < FN_H + 40 && x - FN_LEFT - 40 < right && x + width + 40 > left
+  })
+  const inside = (x, y) => x - FN_LEFT >= view.left + 30 && x + width <= view.right - 30 && y - FN_H / 2 >= view.top + 30 && y + FN_H / 2 + 50 <= view.bottom - 30
+  const stepX = width + 80, stepY = FN_H + 50
+  for (let ring = 0; ring < 14; ring++) {
+    for (let dy = -ring; dy <= ring; dy++) for (let dx = -ring; dx <= ring; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue
+      const x = cx + dx * stepX, y = cy + dy * stepY
+      if (inside(x, y) && !overlaps(x, y)) return { x, y }
+    }
+  }
+  return { x: cx, y: cy }
+}
 function roundedRectPath(c, x, y, w, h, r) {
   c.beginPath(); c.moveTo(x + r, y)
   c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r)
@@ -307,7 +473,7 @@ function roundedRectPath(c, x, y, w, h, r) {
 // One inferGraph() pass over `graph` (defaults to whatever's on screen). Not
 // cached — cheap for this app's graph sizes, and always fresh so a
 // connect/disconnect is reflected on the very next call, no invalidation needed.
-function typePass(graph = activeNodes()) { return inferGraph(nodes, functionBodies, graph) }
+function typePass(graph = activeNodes()) { return inferGraph(definitions, functionBodies, graph) }
 // Shared per-draw() letter assignment (a, b, c, ...) so every node label and
 // port-type badge drawn in the same pass agrees on which variable is which —
 // reset at the top of draw(). A caller outside that pass (e.g. the sidebar
@@ -336,7 +502,7 @@ function expectedParamType(node, index, graph = activeNodes(), namer, pass = typ
 // The (preds, Type) of `node` as a value — a function node folds to its
 // arrow type, so it can be unified against a Function-shaped slot (e.g.
 // apply's `f`). Preds are whatever's still pending on that value (e.g. an
-// unconnected numeric literal carries `Num a` until something pins it).
+// unconnected numeric literal carries `Semiring a` until something pins it).
 function resolvedValueQual(node, graph = activeNodes(), pass = typePass(graph)) {
   const entry = pass.perNode.get(node.id)
   return { preds: entry?.preds || [], type: valueTypeOfEntry(entry) }
@@ -348,7 +514,7 @@ function canConnect(source, target, index) {
   try {
     const s2 = unify(valueTypeOfEntry(pass.perNode.get(source.id)), expected, pass.subst)
     // Unification alone doesn't know about classes — it would happily let a
-    // function value (e.g. identity :: x -> x) bind to a `Num a` slot.
+    // function value (e.g. identity :: x -> x) bind to a `Semiring a` slot.
     // Re-check every outstanding predicate against the hypothetical result;
     // reduce() throws if any of them turns out unsatisfiable (wrong concrete
     // type, or a fun-headed type where a numeric one was required).
@@ -358,7 +524,120 @@ function canConnect(source, target, index) {
     return false
   }
 }
-function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : 'Number · Int' }
+function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : `Number · ${node.annotation || 'literal'}` }
+// The short text a node shows inside its chip / a slot's nested chip. A
+// reference shows what it refers to, so it always reads the same as its
+// original even after the original's value is edited.
+function nodeDisplayText(node, graph = activeNodes()) {
+  if (!node) return '?'
+  if (node.type === 'ref') return `↪ ${nodeDisplayText(graph[node.target], graph)}`
+  if (node.type === 'function') return `ƒ ${node.label}`
+  if (node.type === 'curried') return node.value || 'ƒ'
+  if (node.type === 'output') return node.value ?? 'Output'
+  if (node.type === 'value') return showValue(node.data, types)
+  if (node.type === 'text') return JSON.stringify(String(node.value ?? ''))
+  return String(node.value ?? node.label)
+}
+// Another use of `n`'s value — the diagonal Δ : A → A × A. A node can only be
+// plugged into one slot, so to use a value twice (say a parameter `m` read by
+// two calls), plug in references to it.
+function useAgain(n) {
+  const graph = activeNodes()
+  const original = n.type === 'ref' ? graph[n.target] : n
+  if (!original) return
+  const id = `ref-${Date.now()}`
+  graph[id] = { id, type: 'ref', target: original.id, label: `↪ ${original.label}`, x: n.x + 40, y: n.y + 90 }
+  state.selected = id
+  updateInspector(); draw()
+}
+// A node plugged into a slot normally lives inside that slot's chip. It can
+// be *unfolded*: drawn on the canvas as well, with a link into its slot, so
+// its own slots can be seen and edited. Purely a view — it stays plugged in.
+function isVisible(n) { return !n.mountedTo || n.unfolded }
+function slotHost(n) {
+  const [hostId, index] = String(n.mountedTo || '').split(':')
+  const host = activeNodes()[hostId]
+  return host && host.type === 'function' ? { host, index: Number(index) } : null
+}
+function drawUnfoldedLinks() {
+  ctx.save()
+  ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1.5
+  Object.values(activeNodes()).filter((n) => n.mountedTo && n.unfolded).forEach((n) => {
+    const at = slotHost(n)
+    if (!at || !isVisible(at.host)) return
+    const from = toScreen({ x: n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2, y: n.y })
+    const to = slotScreenCenter(at.host, at.index)
+    const mid = (from.x + to.x) / 2
+    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(mid, from.y, mid, to.y, to.x, to.y + (SLOT_D / 2) * state.zoom); ctx.stroke()
+  })
+  ctx.restore()
+}
+function setUnfolded(n, unfolded) {
+  n.unfolded = unfolded
+  if (unfolded) { layoutTree(slotHost(n)?.host || n); fitToView() } // keep what was just unfolded in view
+  else draw()
+}
+// Unfold everything plugged into a slot in the current graph and lay each
+// expression tree out right-to-left from its root (arguments to the left of
+// the call that uses them), or fold everything back into its slots.
+function setAllUnfolded(unfolded) {
+  const graph = activeNodes()
+  Object.values(graph).forEach((n) => { if (n.mountedTo) n.unfolded = unfolded })
+  if (unfolded) Object.values(graph).filter((n) => !n.mountedTo && n.type === 'function').forEach(layoutTree)
+  draw(); fitToView()
+}
+const TREE_ROW = FN_H + 70
+const TREE_GAP = 70
+function nodeWidth(n) { return n.type === 'function' ? functionBlockWidth(n) : CHIP_W }
+function rightEdge(n) { return n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2 }
+function setRightEdge(n, right) { n.x = n.type === 'function' ? right - (functionBlockRight(n) - n.x) : right - CHIP_W / 2 }
+function unfoldedKids(n) {
+  const graph = activeNodes()
+  return (n.mounted || []).map((id) => graph[id]).filter((k) => k && k.unfolded)
+}
+function treeHeight(n) {
+  const kids = unfoldedKids(n)
+  return kids.length ? Math.max(TREE_ROW, kids.reduce((sum, k) => sum + treeHeight(k), 0)) : TREE_ROW
+}
+// Keep `root` where it is; place its unfolded arguments in a column to its
+// left, each subtree stacked in its own band, recursively.
+function layoutTree(root) {
+  const place = (n, right, top) => {
+    const h = treeHeight(n)
+    setRightEdge(n, right)
+    n.y = top + h / 2
+    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - CHIP_W / 2
+    let y = top
+    unfoldedKids(n).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k) })
+  }
+  place(root, rightEdge(root), root.y - treeHeight(root) / 2)
+}
+// A solid link from whatever feeds a function body's Output into it.
+function drawOutputLink() {
+  const output = activeNodes().output
+  const source = output?.source && activeNodes()[output.source]
+  if (!source || !isVisible(source)) return
+  const from = toScreen({ x: source.type === 'function' ? functionBlockRight(source) : source.x + CHIP_W / 2, y: source.y })
+  const to = toScreen({ x: output.x - CHIP_W / 2, y: output.y })
+  ctx.save()
+  ctx.strokeStyle = ACCENT; ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke()
+  ctx.beginPath(); ctx.arc(to.x, to.y, 4, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
+  ctx.restore()
+}
+// A dashed hairline from each free-standing reference back to its original.
+function drawReferenceLinks() {
+  const graph = activeNodes()
+  ctx.save()
+  ctx.setLineDash([4 * state.zoom, 4 * state.zoom]); ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1
+  Object.values(graph).filter((n) => n.type === 'ref' && isVisible(n)).forEach((ref) => {
+    const target = graph[ref.target]
+    if (!target || !isVisible(target)) return
+    const a = point(ref), b = point(target)
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
+  })
+  ctx.restore()
+}
 function draw() {
   labelNamer = createNamer()
   const pass = typePass() // shared by every node label and port badge below, so nodes/ports that truly share a type variable display the same letter
@@ -367,7 +646,10 @@ function draw() {
   ctx.strokeStyle = '#ecebf5'; ctx.lineWidth = 1
   for (let x = state.offset.x % 24; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
   for (let y = state.offset.y % 24; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
-  Object.values(activeNodes()).filter(n => !n.mountedTo).forEach(n => {
+  drawReferenceLinks()
+  drawOutputLink()
+  drawUnfoldedLinks()
+  Object.values(activeNodes()).filter(isVisible).forEach(n => {
     const selected = state.selected === n.id
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
     if (n.type === 'function') drawFunctionBlock(n, pass, selected)
@@ -378,6 +660,9 @@ function draw() {
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
   document.querySelector('#back-graph').hidden = !state.activeFunction
+  // Every mutation ends in a draw(), so this is the one place that notices
+  // them — debounced, and skipped mid-drag so a drag records one step.
+  if (!state.drag) scheduleCheckpoint()
 }
 // A function node renders as one unified stadium block — the ƒ head badge
 // and every parameter slot live inside the SAME silhouette (no separate
@@ -416,7 +701,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   const isFunctionValued = node.type === 'curried'
   const typeColor = colorForType(resolvedValueQual(node, activeNodes(), pass).type, labelNamer)
   const badgeColor = isFunctionValued ? ACCENT : typeColor
-  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : '#'
+  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : '#'
   ctx.save()
   ctx.shadowColor = snapHighlight ? `${ACCENT}66` : selected ? `${ACCENT}40` : '#211d3414'
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
@@ -431,7 +716,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'
   ctx.font = isFunctionValued ? `700 ${14 * state.zoom}px 'Space Grotesk', sans-serif` : `700 ${11 * state.zoom}px ui-monospace, monospace`
   ctx.fillText(glyph, badgeX, p.y + 1)
-  const content = isFunctionValued ? (node.value || 'ƒ') : node.type === 'output' ? (node.value ?? 'Output') : String(node.value ?? node.label)
+  const content = nodeDisplayText(node)
   ctx.save() // clip long content (e.g. a wired-up output's "ƒ compose") to the pill so it can't bleed past the rounded right cap
   roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (CHIP_H / 2) * state.zoom)
   ctx.clip()
@@ -450,9 +735,14 @@ function label(node, p, baseY, pass) {
 // The declared parameter name at this call site's index (e.g. `n`, `x`,
 // `condition`) when known, so a slot can label itself meaningfully instead
 // of a generic "input N".
+// A canonical definition node's `params` double as its slot *contents* (type
+// `3` into add's slot and params[0] becomes '3'), so the declared name comes
+// from the builtin as shipped, or a custom function's body parameter nodes.
 function paramDisplayName(node, index) {
-  const source = node.sourceFunctionId ? nodes[node.sourceFunctionId] : node
-  return source?.params?.[index] || `#${index + 1}`
+  const sourceId = node.sourceFunctionId || node.id
+  const declared = builtinNodes[sourceId]?.params?.[index]
+    ?? Object.values(functionBodies[sourceId] || {}).filter((n) => n.type === 'parameter')[index]?.label
+  return declared || definitions[sourceId]?.params?.[index] || `#${index + 1}`
 }
 // Unmounts whatever is plugged into `node`'s slot `index` and returns it
 // (or null) — used by both the "−" remove-parameter button and the
@@ -464,12 +754,21 @@ function detachMounted(node, index) {
   const moving = mountedId ? activeNodes()[mountedId] : null
   node.params[index] = ''
   node.mounted[index] = null
-  if (moving) { moving.mountedTo = null; moving.connected = false }
+  if (moving) { moving.mountedTo = null; moving.connected = false; moving.unfolded = false }
   return moving
 }
 function updatePortEditor(pass = typePass()) {
+  // The overlay is rebuilt from scratch on every draw(), including the one a
+  // keystroke in a slot triggers — remember which slot had focus (and the
+  // caret) so typing `12` doesn't lose focus after the `1`.
+  const focused = editor.contains(document.activeElement) && document.activeElement.classList.contains('param-value')
+    ? { fn: document.activeElement.closest('.param-slot').dataset.functionId, index: document.activeElement.closest('.param-slot').dataset.index, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+    : null
   editor.innerHTML = ''
-  Object.values(activeNodes()).filter(isFunction).forEach(node => node.params.forEach((rawValue, index) => {
+  // A function node plugged into a slot is hidden (it lives in that slot's
+  // nested chip), so its own slots aren't shown either.
+  const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
+  visibleFunctions.forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
     const mountedId = node.mounted[index]
     const mountedNode = mountedId ? activeNodes()[mountedId] : null
@@ -518,8 +817,18 @@ function updatePortEditor(pass = typePass()) {
       const chip = document.createElement('div')
       chip.className = 'param-chip'
       chip.style.background = colorForType(resolvedValueQual(mountedNode, activeNodes(), pass).type, labelNamer)
-      chip.textContent = mountedNode.type === 'function' ? `ƒ ${mountedNode.label}` : String(mountedNode.value ?? mountedNode.label)
+      chip.textContent = nodeDisplayText(mountedNode)
       chip.title = '드래그해서 떼어내기'
+      const unfold = document.createElement('button')
+      unfold.className = 'chip-unfold'; unfold.type = 'button'
+      unfold.textContent = mountedNode.unfolded ? '⤡' : '⤢'
+      unfold.title = mountedNode.unfolded ? 'Fold back into the slot' : 'Unfold onto the canvas (it stays plugged in)'
+      unfold.style.width = unfold.style.height = `${16 * state.zoom}px`
+      unfold.style.left = unfold.style.top = `${-6 * state.zoom}px`
+      unfold.style.fontSize = `${11 * state.zoom}px`; unfold.style.lineHeight = `${16 * state.zoom}px`
+      unfold.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
+      unfold.addEventListener('click', (event) => { event.stopPropagation(); setUnfolded(mountedNode, !mountedNode.unfolded) })
+      slot.append(unfold)
       chip.addEventListener('pointerdown', (event) => {
         event.preventDefault(); event.stopPropagation()
         const world = canvasPoint(event)
@@ -536,6 +845,7 @@ function updatePortEditor(pass = typePass()) {
       input.className = 'param-value'; input.type = 'text'
       input.placeholder = slotExpectsFunction(node, index, pass) ? 'ƒ' : '?'
       input.value = rawValue; input.title = `Parameter ${index + 1}`
+      if (pass.perNode.get(node.id)?.invalidSlots?.includes(index)) { input.classList.add('invalid'); input.title = `"${rawValue}" doesn't fit ${paramDisplayName(node, index)} :: ${expectedParamType(node, index, activeNodes(), labelNamer, pass)}` }
       input.style.fontSize = `${11 * state.zoom}px`
       input.style.paddingTop = `${4 * state.zoom}px`
       input.addEventListener('input', () => { node.params[index] = input.value; state.selected = node.id; updateInspector(); draw() })
@@ -556,7 +866,7 @@ function updatePortEditor(pass = typePass()) {
     slot.append(remove)
     editor.append(slot)
   }))
-  Object.values(activeNodes()).filter(isFunction).forEach(node => {
+  visibleFunctions.forEach(node => {
     const add = document.createElement('button')
     add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = 'Add parameter'
     const center = slotScreenCenter(node, node.params.length)
@@ -567,6 +877,10 @@ function updatePortEditor(pass = typePass()) {
     add.addEventListener('click', () => { node.params.push(`p${node.params.length + 1}`); node.mounted.push(null); node.paramScopes.push('local'); state.selected = node.id; updateInspector(); draw() })
     editor.append(add)
   })
+  if (focused) {
+    const input = editor.querySelector(`.param-slot[data-function-id="${CSS.escape(focused.fn)}"][data-index="${focused.index}"] .param-value`)
+    if (input) { input.focus(); input.setSelectionRange(focused.start, focused.end) }
+  }
 }
 // After a `number` node's type annotation changes, any existing wire into it
 // may no longer type-check (e.g. it was plugged into an Int-only port, then
@@ -586,26 +900,130 @@ function invalidateStaleWires(node) {
     })
   })
 }
+function escapeAttr(text) { return String(text).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;') }
 function renderValueInspector(n) {
   const q = resolvedValueQual(n)
   const isNumber = n.type === 'number'
   const defaultType = q.type.kind === 'var' ? pickDefault(q.preds, q.type.id) : null
-  const defaultRow = defaultType ? `<div class="property"><label>DEFAULT</label><div class="connection-tag">${defaultType} <em>(GHC 디폴팅 규칙)</em></div></div>` : ''
+  const defaultRow = defaultType ? `<div class="property"><label>DEFAULT</label><div class="connection-tag">${defaultType} <em>(디폴팅: Integer → Double)</em></div></div>` : ''
+  // Only offer annotations whose type actually has the structure the literal's
+  // text demands (e.g. `-3` needs Ring, so Natural isn't offered) — keeping
+  // the current choice listed even if a later edit made it unfit.
+  const litPred = (t) => pred(literalClass(n.value ?? ''), tcon(t))
   const annotateRow = isNumber
-    ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${['Int', 'Integer', 'Word', 'Float', 'Double', 'Rational'].map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
+    ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label><input class="value-input" value="${n.value ?? 'partial'}" ${isNumber ? '' : 'readonly'} /></div>`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
+}
+// Why `n` can't be deleted, or null if it can. Builtins are the language
+// itself; a function's Output and parameters are its signature, changed
+// through the function's own ports instead; a custom function still called
+// from some body would leave those calls dangling.
+function deleteBlocker(n) {
+  if (n.readonly) return "Builtin functions can't be deleted"
+  if (n.type === 'output' || n.type === 'parameter') return "A function's Output and parameters can't be deleted"
+  if (n.custom && nodes[n.id] === n) {
+    const callers = Object.values(functionBodies).flatMap((body) => Object.values(body)).filter((m) => m.sourceFunctionId === n.id).length
+    if (callers) return `${n.label} is still called ${callers} time${callers > 1 ? 's' : ''} — delete those calls first`
+  }
+  return null
+}
+// Laws a custom function can be checked against: a monoid homomorphism (e.g.
+// production :: Owned → Wallet), a monoid action (tick :: Double → Model →
+// Model — then offline progress is one step), or inflationary on a
+// partial order (achievements never go backwards).
+const lawResults = new Map() // function id -> { [law]: result }
+function functionLawsPanel(n) {
+  const results = lawResults.get(n.id) || {}
+  const rows = FUNCTION_LAWS.map((law) => {
+    const r = results[law]
+    const status = !r ? '' : r.ok ? `<span class="law ok">✓ ${escapeAttr(r.law)}</span>` : `<span class="law bad">✗ ${escapeAttr(r.law)} — <em>${escapeAttr(r.counterexample)}</em></span>`
+    return `<div class="law-row"><button class="law-check" data-law="${law}">${law}</button>${status}</div>`
+  })
+  return `<div class="property"><label>LAWS</label>${rows.join('')}</div>`
+}
+function runFunctionLaw(n, law) {
+  const entry = typePass(nodes).perNode.get(n.id)
+  const arity = Object.values(functionBodies[n.id] || {}).filter((m) => m.type === 'parameter').length
+  let fnType = entry?.paramTypes ? entry.paramTypes.reduceRight((acc, t) => tfun(t, acc), entry.resultType) : null
+  // Samples need concrete types: default each type variable the way GHC
+  // resolves an ambiguous one (Semiring a → Integer, Field a → Double).
+  const unresolved = []
+  if (fnType) {
+    const defaults = new Map()
+    ftv(fnType).forEach((v) => { const d = pickDefault(entry.preds || [], v); if (d) defaults.set(v, tcon(d)); else unresolved.push(v) })
+    fnType = applySubst(defaults, fnType)
+  }
+  const result = !fnType ? { law, ok: false, counterexample: 'no type' }
+    : unresolved.length ? { law, ok: false, counterexample: `${showQual(entry.preds || [], fnType)} is polymorphic — use it at a concrete type to check its laws` }
+    : checkFunctionLaw(law, { kind: 'closure', callee: n.id, args: Array(arity).fill(null) }, fnType, { ev: evaluator, types })
+  lawResults.set(n.id, { ...(lawResults.get(n.id) || {}), [law]: result })
+  updateInspector()
+}
+// The custom function `id` as Haskell: its signature and its definition,
+// read back from the body graph (src/haskellPrint.js).
+function definitionBlock(id) {
+  const def = nodes[id]
+  if (!def) return ''
+  const code = printDefinition(id, definitions, functionBodies)
+  if (!code) return ''
+  const signature = `${def.label} :: ${asciiType(functionSignature(def, nodes))}`
+  return `<div class="property"><label>DEFINITION</label><pre class="haskell">${escapeAttr(signature)}\n${escapeAttr(code)}</pre></div>`
+}
+function useAgainButton(n) {
+  return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
+}
+function deleteButton(n) {
+  return deleteBlocker(n) ? '' : '<button class="delete-node" id="delete-node">Delete node <kbd>Del</kbd></button>'
+}
+// Removes `id` from the active graph, unplugging it from wherever it was
+// mounted and freeing whatever was mounted into it (placed beside it). A
+// custom function's definition takes its body with it.
+function deleteNode(id) {
+  const graph = activeNodes()
+  const n = graph[id]
+  if (!n) return
+  const blocker = deleteBlocker(n)
+  if (blocker) return showToast(blocker)
+  // References to a deleted node would dangle — they go with it.
+  Object.values(graph).filter((m) => m.type === 'ref' && m.target === id).forEach((ref) => deleteNode(ref.id))
+  Object.values(graph).forEach((other) => {
+    if (other.type === 'function') other.mounted?.forEach((mountedId, i) => { if (mountedId === id) { other.mounted[i] = null; other.params[i] = '' } })
+    if (other.type === 'output' && other.source === id) { other.source = null; other.value = 'open' }
+  })
+  ;(n.mounted || []).forEach((mountedId, i) => {
+    const child = mountedId && graph[mountedId]
+    if (child) { child.mountedTo = null; child.connected = false; child.x = n.x + 150 + i * 40; child.y = n.y + 120 }
+  })
+  delete graph[id]
+  if (graph === nodes && n.custom) delete functionBodies[id]
+  if (entryId === id) entryId = null
+  state.selected = state.activeFunction ? 'output' : 'add'
+  renderFunctionLibrary(); updateInspector(); draw()
 }
 function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
   inspector.innerHTML = n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div><div class="inspector-note">This node defines what the function returns.</div>`
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div><button class="evaluate" id="evaluate">▶ &nbsp; Play function</button><div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
+  const entryToggle = document.querySelector('#entry-toggle')
+  if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
+  const disconnectOutput = document.querySelector('#disconnect-output')
+  if (disconnectOutput) disconnectOutput.onclick = () => { const source = activeNodes()[n.source]; if (source) source.connected = false; n.source = null; n.value = 'open'; updateInspector(); draw() }
+  document.querySelectorAll('.law-check').forEach((button) => { button.onclick = () => runFunctionLaw(n, button.dataset.law) })
+  const openBody = document.querySelector('#open-body')
+  if (openBody) openBody.onclick = () => enterFunction(n.sourceFunctionId || n.id)
+  const useAgainNode = document.querySelector('#use-again')
+  if (useAgainNode) useAgainNode.onclick = () => useAgain(n)
+  const deleteNodeButton = document.querySelector('#delete-node')
+  if (deleteNodeButton) deleteNodeButton.onclick = () => deleteNode(n.id)
+  const boolInput = document.querySelector('.bool-input')
+  if (boolInput) boolInput.onchange = () => { n.value = boolInput.value; updateInspector(); draw() }
   const scopeSelect = document.querySelector('#function-scope')
   if (scopeSelect) scopeSelect.onchange = () => { n.scope = scopeSelect.value; updateInspector(); draw() }
   document.querySelectorAll('.param-scope').forEach((select) => {
@@ -618,103 +1036,57 @@ function updateInspector() {
   // very input on every keystroke and steal focus/cursor position. draw()
   // alone is enough to keep the canvas label live; the inspector's own TYPE
   // line catches up next time something reselects this node.
-  if (valueInput && n.type === 'number') valueInput.oninput = () => { n.value = valueInput.value; draw() }
+  if (valueInput && (n.type === 'number' || n.type === 'text')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
 }
+// Plays `fn`: evaluates it as a value (callee applied to its applied slots —
+// see src/evaluator.js) and drops the result next to it. A fully-applied
+// call yields a number/boolean node; anything with open slots yields a
+// curried node carrying both its residual type and its runtime closure, so it
+// can be plugged in and played again later.
 function executeFunction(fn) {
   if (!isFunction(fn)) return
+  const graph = activeNodes()
+  const entry = typePass(graph).perNode.get(fn.id)
+  const bad = entry?.invalidSlots?.[0]
+  if (bad !== undefined) return showToast(`"${fn.params[bad]}" doesn't fit ${paramDisplayName(fn, bad)} :: ${expectedParamType(fn, bad, graph)}`)
+  let result
+  try {
+    result = evaluator.run(graph, fn.id)
+  } catch (error) {
+    if (error instanceof EvalError) return showToast(error.message)
+    throw error
+  }
   state.running = true
-  const values = fn.params.map(value => Number(value) || 0), filled = fn.params.filter(v => v !== '').length
   const id = `output-${++outputId}`
-  if (filled < fn.params.length) {
-    // Residual type after peeling off the already-filled params (left-to-right,
-    // same looseness as `filled` above — this app doesn't track which specific
-    // slots are filled, only how many).
-    const entry = typePass().perNode.get(fn.id)
-    const residual = entry?.paramTypes ? entry.paramTypes.slice(filled).reduceRight((acc, t) => tfun(t, acc), entry.resultType) : null
-    // Note: unlike a full signature, this residual doesn't carry the preds
-    // still pending on it (e.g. partially-applying `plus` loses its `Num`
-    // obligation in this display) — an intentionally narrow scope limit,
-    // same spirit as leaving curried nodes untyped for reconnection below.
-    activeNodes()[id] = { id, type: 'curried', typeName: residual ? showQual([], residual) : functionSignature(fn), resolvedType: residual || undefined, x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45, label: `${fn.label} · ${filled}/${fn.params.length}`, value: 'ƒ', remaining: fn.params.length - filled, color: '#a96ef0' }
+  const position = { x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45 }
+  const valueType = entry ? valueTypeOfEntry(entry) : null
+  if (isClosure(result)) {
+    const appliedCount = entry?.applied?.filter(Boolean).length ?? 0
+    // Keep the residual's class constraints with it (`Semiring a ⇒ a → a`,
+    // not a bare `a → a`), generalized so each later pass instantiates it fresh.
+    const resolvedScheme = valueType ? generalize((entry.preds || []).filter((p) => [...ftv(p.type)].some((v) => ftv(valueType).has(v))), valueType) : undefined
+    graph[id] = { id, type: 'curried', typeName: valueType ? showQual(resolvedScheme.preds, valueType) : functionSignature(fn), resolvedScheme, closure: result, ...position, label: `${fn.label} · ${appliedCount}/${fn.params.length}`, value: 'ƒ', remaining: result.args.filter((a) => a === null).length, color: '#a96ef0' }
+  } else if (isData(result) || typeof result === 'string') {
+    // A data value (a declared type, a list, a Maybe — e.g. `Model {clicks = 1, perClick = 2}`) or a Char.
+    const resolvedScheme = valueType ? generalize((entry.preds || []).filter((p) => [...ftv(p.type)].some((v) => ftv(valueType).has(v))), valueType) : undefined
+    graph[id] = { id, type: 'value', data: result, resolvedScheme, ...position, label: 'result', color: '#3cbe9e' }
   } else {
-    const result = evaluateFunction(fn, values)
     const booleanResult = typeof result === 'boolean'
     // Inherit the function's actual resolved result type when it's concrete
     // (e.g. Play `sqrt` on a Double literal → the result node is Double too,
     // not a hardcoded Int) via the same annotation mechanism a literal uses.
-    const resultType = typePass().perNode.get(fn.id)?.resultType
-    const concreteType = !booleanResult && resultType?.kind === 'con' ? resultType.name : undefined
-    activeNodes()[id] = { id, type: booleanResult ? 'boolean' : 'number', typeName: booleanResult ? 'Bool' : (concreteType || 'Int'), annotation: concreteType, x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45, label: 'result', value: String(result), color: booleanResult ? '#ed6b84' : '#8c7cf2' }
+    const concreteType = !booleanResult && valueType?.kind === 'con' ? valueType.name : undefined
+    graph[id] = { id, type: booleanResult ? 'boolean' : 'number', typeName: booleanResult ? 'Bool' : (concreteType || 'Int'), annotation: concreteType, ...position, label: 'result', value: String(result), color: booleanResult ? '#ed6b84' : '#8c7cf2' }
   }
   state.selected = id; updateInspector(); draw()
   setTimeout(() => { state.running = false; draw() }, 300)
-}
-function evaluateFunction(fn, values, seen = new Set(), environment = {}) {
-  if (seen.has(fn.id)) throw new Error(`Circular function call: ${fn.label}`)
-  const source = fn.sourceFunctionId ? nodes[fn.sourceFunctionId] : fn
-  if (source?.builtin === 'succ') return (values[0] || 0) + 1
-  if (source?.builtin === 'plus') return (values[0] || 0) + (values[1] || 0)
-  if (source?.builtin === 'zero') return 0
-  if (source?.builtin === 'identity') return values[0] || 0
-  if (source?.builtin === 'isZero') return (values[0] || 0) === 0
-  if (source?.builtin === 'ifThenElse') return values[0] ? values[1] : values[2]
-  if (source?.builtin === 'negate') return -(values[0] || 0)
-  if (source?.builtin === 'divide') return (values[0] || 0) / (values[1] || 1) // avoid a bare-zero divisor producing a confusing Infinity by default
-  if (source?.builtin === 'sqrt') return Math.sqrt(values[0] || 0)
-  if (source?.builtin === 'toRational' || source?.builtin === 'fromIntegral') return values[0] || 0 // this app has no distinct runtime numeric representations — type-level only
-  if (source?.builtin === 'round') return Math.round(values[0] || 0) // Haskell rounds half-to-even; simplified here
-  if (source?.builtin === 'isNaN') return Number.isNaN(values[0]) // note: executeFunction launders every param through `Number(value) || 0` before this runs, so a real NaN can never actually arrive — this is a type-level demo of RealFloat, its Play result is always false
-  if (source?.builtin === 'apply') {
-    const target = findFunctionById(fn.mounted?.[0])
-    return target ? evaluateFunction(target, [values[1] || 0], new Set([...seen, fn.id]), environment) : values[1] || 0
-  }
-  if (source?.builtin === 'compose') {
-    const first = findFunctionById(fn.mounted?.[0])
-    const second = findFunctionById(fn.mounted?.[1])
-    if (first && second) {
-      const intermediate = evaluateFunction(second, [values[2] || 0], new Set([...seen, fn.id]), environment)
-      return evaluateFunction(first, [intermediate], new Set([...seen, fn.id]), environment)
-    }
-    return values[0] || 0
-  }
-  const body = functionBodies[fn.sourceFunctionId || fn.id]
-  const output = body && body.output
-  if (output && output.source) {
-    const source = body[output.source]
-    if (source && source.type === 'parameter') {
-      const index = bodyParameterIndex(body, source.id)
-      return values[index] || 0
-    }
-    if (source && source.type === 'function') {
-      const sourceFn = nodes[source.sourceFunctionId || source.id]
-      if (sourceFn) {
-        const args = source.params.map(value => {
-          const numeric = Number(value)
-          return Number.isNaN(numeric) ? (environment[value] || 0) : numeric
-        })
-        return evaluateFunction(sourceFn, args, new Set([...seen, fn.id]), environment)
-      }
-    }
-  }
-  return values[0] || 0
-}
-function bodyParameterIndex(body, id) {
-  return Object.values(body).filter(node => node.type === 'parameter').findIndex(node => node.id === id)
-}
-function findFunctionById(id) {
-  if (!id) return null
-  if (nodes[id] && isFunction(nodes[id])) return nodes[id]
-  for (const body of Object.values(functionBodies)) {
-    if (body[id] && isFunction(body[id])) return body[id]
-  }
-  return null
 }
 // Nodes currently snapped into a slot have no meaningful standalone
 // position/hitbox on the open canvas — they're only reachable through the
 // slot's own nested chip (see updatePortEditor's detach handler).
 function hitNode(x, y) {
   return Object.values(activeNodes()).find(n => {
-    if (n.mountedTo) return false
+    if (!isVisible(n)) return false
     return n.type === 'function' ? pointInFunctionBlock(n, x, y) : pointInValueBlock(n, x, y)
   })
 }
@@ -733,7 +1105,7 @@ function hitNode(x, y) {
 // clobber a slot that already reads as meaningfully filled.
 const PRECISE_SLOT_RADIUS = 60
 function findSnapTarget(dragged) {
-  if (!dragged || dragged.type === 'output') return null
+  if (!dragged || dragged.type === 'output' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
   let best = null, bestDist = SNAP_RADIUS
   Object.values(activeNodes()).filter(isFunction).forEach((target) => {
     if (target.id === dragged.id) return
@@ -762,16 +1134,23 @@ function finishConnection(dragged) {
   if (!target) return false
   if (target.kind === 'output') {
     const output = activeNodes().output
+    // Unlike a slot, Output doesn't swallow the node: it stays on the canvas
+    // (still editable, its own slots still reachable), parked just left of
+    // Output with a link line drawn between them.
+    const previous = activeNodes()[output.source]
+    if (previous) previous.connected = false
     output.source = dragged.id
-    output.value = dragged.type === 'function' ? `ƒ ${dragged.label}` : dragged.value
-    dragged.mountedTo = `${output.id}:source`
+    output.value = nodeDisplayText(dragged)
     dragged.connected = true
+    const width = dragged.type === 'function' ? functionBlockRight(dragged) - dragged.x : CHIP_W / 2
+    dragged.x = output.x - CHIP_W / 2 - 70 - width
+    dragged.y = output.y
     state.selected = output.id
     return true
   }
   const targetNode = activeNodes()[target.targetId]
   if (!targetNode) return false
-  targetNode.params[target.index] = dragged.type === 'function' ? `ƒ ${dragged.label}` : dragged.value
+  targetNode.params[target.index] = nodeDisplayText(dragged)
   targetNode.mounted[target.index] = dragged.id
   dragged.mountedTo = `${targetNode.id}:${target.index}`
   dragged.connected = true
@@ -865,17 +1244,24 @@ canvas.addEventListener('click', (event) => {
     return
   }
   const p = canvasPoint(event)
-  const fn = Object.values(activeNodes()).find(n => n.type === 'function' && !n.mountedTo && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
+  const fn = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
   if (fn) {
     executeFunction(fn)
     return
   }
-  const selected = Object.values(activeNodes()).find(n => n.type === 'function' && !n.mountedTo && pointInFunctionBlock(n, p.x, p.y))
-  if (selected && !state.activeFunction && !selected.readonly && !nodes[selected.sourceFunctionId]?.readonly) enterFunction(selected.id)
+})
+// A single click only selects (so the inspector shows the function);
+// double-clicking a custom function — its definition or a call to it — on
+// `main` opens its body, as does the inspector's "Open body".
+canvas.addEventListener('dblclick', (event) => {
+  const p = canvasPoint(event)
+  const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
+  const definitionId = selected && (selected.sourceFunctionId || selected.id)
+  if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
 })
 function enterFunction(id) {
   if (nodes[id]?.readonly) return
-  if (!functionBodies[id]) functionBodies[id] = { output: { id: `${id}-output`, type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
+  if (!functionBodies[id]) functionBodies[id] = { output: { id: 'output', type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
   state.activeFunction = id
   state.selected = 'output'
   renderFunctionLibrary()
@@ -883,21 +1269,366 @@ function enterFunction(id) {
   fitToView()
 }
 document.querySelector('#back-graph').onclick = () => { state.activeFunction = null; state.selected = 'add'; renderFunctionLibrary(); updateInspector(); fitToView() }
-document.querySelector('#run').onclick = () => executeFunction(activeNodes().add || nodes.add)
-document.querySelector('#reset').onclick = () => { Object.keys(nodes).filter(id => id.startsWith('output-') || id.startsWith('call-') || id.startsWith('number-')).forEach(id => delete nodes[id]); Object.values(functionBodies).forEach(body => Object.keys(body).filter(id => id.startsWith('call-')).forEach(id => delete body[id])); Object.values(nodes).forEach(node => { node.mountedTo = null; node.connected = false }); state.activeFunction = null; state.selected = 'add'; renderFunctionLibrary(); updateInspector(); fitToView() }
+// Plays the entry function (always in `main`), falling back to whichever
+// function is selected when no entry has been set.
+function runEntry() {
+  if (entryId && nodes[entryId] && startGameIfProgram(entryId)) return
+  if (entryId && nodes[entryId]) {
+    if (state.activeFunction) { state.activeFunction = null; renderFunctionLibrary(); fitToView() }
+    return executeFunction(nodes[entryId])
+  }
+  const selected = activeNodes()[state.selected]
+  if (selected && isFunction(selected)) return executeFunction(selected)
+  showToast('Select a function, or make one the Run graph entry in the inspector')
+}
+document.querySelector('#run').onclick = runEntry
+// --- Playing a Program ------------------------------------------------------
+// When the entry point evaluates to a `Program m e` (see builtinSchemes.js'
+// `program` and src/runtime.js), Run graph plays it: the view is rendered in
+// a panel over the canvas, buttons send their messages through `handle`,
+// and time runs through `step` in fixed slices. The game state is saved
+// with a timestamp; reopening it applies the time away — in one call if
+// `step` passes the monoid-action law, otherwise slice by slice.
+const GAME_KEY = 'hs-simulate:game'
+const SLICE = 0.1 // seconds of game time per step call while playing
+const playPanel = document.querySelector('#play-panel')
+let play = null // { game, entry, modelType, speed, running, last, acc, frame, saveTimer, law }
+
+// The Program the function `id` evaluates to (or null), its model type, and
+// whether its `step` is an action of (ℝ≥0, +) — then any span of time is one call.
+function programInfo(id) {
+  let program
+  try {
+    program = evaluator.run(nodes, id)
+  } catch (error) {
+    if (error instanceof EvalError) return null
+    throw error
+  }
+  if (!isProgram(program)) return null
+  const programType = valueTypeOfEntry(typePass(nodes).perNode.get(id))
+  const modelType = programType?.kind === 'app' && programType.fn.kind === 'app' ? programType.fn.arg : null
+  const law = modelType && !ftv(modelType).size
+    ? checkFunctionLaw('action', program.args[3], tfun(tcon('Double'), tfun(modelType, modelType)), { ev: evaluator, types })
+    : { ok: false, counterexample: 'the model type is not concrete' }
+  return { program, modelType, law }
+}
+
+function startGameIfProgram(id) {
+  const info = programInfo(id)
+  if (!info) return false
+  const { program, modelType, law } = info
+  stopGame()
+  const game = createGame(evaluator, program, { exactTime: law.ok })
+  play = { game, entry: id, modelTypeObj: modelType, modelType: modelType ? showQual([], modelType) : '?', speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
+  let offline = null
+  try {
+    const saved = JSON.parse(localStorage.getItem(GAME_KEY) || 'null')
+    if (saved && saved.entry === id && saved.modelType === play.modelType) {
+      game.restore(saved)
+      const away = Math.min(7 * 24 * 3600, Math.max(0, (Date.now() - saved.savedAt) / 1000))
+      if (away > 1) offline = { away, ...game.advance(away, SLICE) }
+    }
+  } catch (error) {
+    if (!(error instanceof EvalError) && !(error instanceof SyntaxError)) throw error
+    game.reset()
+  }
+  playPanel.hidden = false
+  buildPlayPanel()
+  renderPlay()
+  if (offline) showToast(offline.exact ? `While you were away: ${formatSeconds(offline.away)} applied in one step (step is a monoid action)` : `While you were away: ${formatSeconds(offline.away)} simulated in ${offline.calls} slices`)
+  play.saveTimer = setInterval(saveGame, 2000)
+  play.frame = requestAnimationFrame(loop)
+  return true
+}
+
+function formatSeconds(t) {
+  if (t < 90) return `${Math.round(t)}s`
+  if (t < 5400) return `${Math.round(t / 60)}m`
+  return `${(t / 3600).toFixed(1)}h`
+}
+
+function loop(now) {
+  if (!play) return
+  if (play.running && play.last !== null) {
+    play.acc += Math.min(1, (now - play.last) / 1000) * play.speed
+    let ticked = false
+    try {
+      while (play.acc >= SLICE) { play.game.tick(SLICE); play.acc -= SLICE; ticked = true }
+    } catch (error) {
+      gameError(error)
+    }
+    if (ticked) renderPlay()
+  }
+  play.last = now
+  play.frame = requestAnimationFrame(loop)
+}
+
+function gameError(error) {
+  if (!(error instanceof EvalError)) throw error
+  play.running = false
+  showToast(`Game stopped: ${error.message}`)
+  renderPlay()
+}
+
+function saveGame() {
+  if (!play) return
+  try {
+    localStorage.setItem(GAME_KEY, JSON.stringify({ ...play.game.snapshot(), entry: play.entry, modelType: play.modelType, savedAt: Date.now() }))
+  } catch {}
+}
+
+function stopGame() {
+  if (!play) return
+  saveGame()
+  cancelAnimationFrame(play.frame)
+  clearInterval(play.saveTimer)
+  play = null
+  playPanel.hidden = true
+  playPanel.innerHTML = ''
+}
+
+function buildPlayPanel() {
+  playPanel.innerHTML = `<div class="play-bar"><b></b><span class="play-time"></span><button class="tool-button icon-only" data-play="toggle" title="Pause / resume"></button><button class="tool-button" data-play="step" title="Advance one second">+1s</button><select data-play="speed" title="Speed">${[1, 2, 10, 60].map((x) => `<option value="${x}">${x}×</option>`).join('')}</select><button class="tool-button" data-play="reset">Reset game</button><button class="tool-button icon-only" data-play="close" title="Back to the editor">×</button></div><div class="play-body"><div class="play-view"></div><aside class="play-side"><label class="play-model-label"></label><button class="law-check" data-play="edit-model" title="Edit the model in Haskell syntax">Edit</button><pre class="play-model"></pre><div class="play-model-editor" hidden><textarea spellcheck="false" rows="5"></textarea><p class="type-error"></p><button class="law-check" data-play="apply-model">Apply</button> <button class="law-check" data-play="cancel-model">Cancel</button></div><label>TIME</label><p class="play-law"></p><label class="play-log-label"></label><ol class="play-log"></ol></aside></div>`
+  playPanel.querySelector('[data-play="toggle"]').onclick = () => { play.running = !play.running; play.last = null; renderPlay() }
+  playPanel.querySelector('[data-play="step"]').onclick = () => { try { play.game.tick(1) } catch (error) { return gameError(error) } renderPlay() }
+  playPanel.querySelector('[data-play="speed"]').onchange = (event) => { play.speed = Number(event.target.value) }
+  playPanel.querySelector('[data-play="reset"]').onclick = () => { play.game.reset(); saveGame(); renderPlay() }
+  playPanel.querySelector('[data-play="close"]').onclick = stopGame
+  // Editing the model: written in Haskell syntax (exactly what's shown),
+  // read back at the model's type by src/valueParser.js.
+  const editor = playPanel.querySelector('.play-model-editor')
+  playPanel.querySelector('[data-play="edit-model"]').onclick = () => {
+    play.running = false
+    play.editing = true
+    editor.hidden = false
+    editor.querySelector('textarea').value = showValue(play.game.model, types)
+    editor.querySelector('.type-error').textContent = ''
+    renderPlay()
+  }
+  playPanel.querySelector('[data-play="cancel-model"]').onclick = () => { play.editing = false; editor.hidden = true; renderPlay() }
+  playPanel.querySelector('[data-play="apply-model"]').onclick = () => {
+    try {
+      play.game.setModel(parseValue(editor.querySelector('textarea').value, play.modelTypeObj, types))
+    } catch (error) {
+      if (!(error instanceof ParseError)) throw error
+      editor.querySelector('.type-error').textContent = error.message
+      return
+    }
+    play.editing = false
+    editor.hidden = true
+    saveGame()
+    renderPlay()
+    showToast('Model updated (paused — press ▶ to continue)')
+  }
+  playPanel.querySelector('.play-view').addEventListener('pointerdown', (event) => {
+    const button = event.target.closest('.w-button')
+    if (!button || !play) return
+    event.preventDefault()
+    try { play.game.dispatch(play.msgs[Number(button.dataset.msg)]) } catch (error) { return gameError(error) }
+    renderPlay()
+  })
+}
+
+function renderPlay() {
+  if (!play) return
+  const { game } = play
+  const $ = (sel) => playPanel.querySelector(sel)
+  play.msgs = []
+  let view
+  try {
+    view = renderWidget(game.view(), play.msgs)
+  } catch (error) {
+    if (!(error instanceof EvalError)) throw error
+    view = Object.assign(document.createElement('p'), { className: 'w-error', textContent: `view failed: ${error.message}` })
+  }
+  $('.play-view').replaceChildren(view)
+  $('.play-bar b').textContent = `▶ ${nodes[play.entry]?.label || play.entry}`
+  $('.play-time').textContent = `t = ${game.time.toFixed(1)}s`
+  $('[data-play="toggle"]').textContent = play.running ? '⏸' : '▶'
+  $('[data-play="speed"]').value = String(play.speed)
+  $('.play-model-label').textContent = `MODEL :: ${play.modelType}`
+  $('.play-model').textContent = showValue(game.model, types)
+  $('.play-model').hidden = Boolean(play.editing)
+  const law = $('.play-law')
+  law.className = `play-law ${play.law.ok ? 'ok' : ''}`
+  law.textContent = play.law.ok ? '✓ step is a monoid action of (ℝ≥0, +): time away is applied in one step' : `step is not a monoid action (${play.law.counterexample || play.law.law}): time away is simulated in slices`
+  $('.play-log-label').textContent = `LOG · ${game.log.length} messages`
+  $('.play-log').start = Math.max(1, game.log.length - 11)
+  // Each entry rewinds to the state right after that message (time travel).
+  const first = Math.max(0, game.log.length - 12)
+  $('.play-log').replaceChildren(...game.log.slice(first).map((m, i) => {
+    const li = Object.assign(document.createElement('li'), { textContent: showValue(m, types) })
+    const count = first + i + 1
+    if (game.canRewind(count) && count < game.log.length) {
+      li.className = 'rewindable'
+      li.title = 'Rewind to just after this message'
+      li.onclick = () => { game.rewind(count); play.running = false; renderPlay(); showToast(`Rewound to message ${count} (paused)`) }
+    }
+    return li
+  }))
+}
+window.addEventListener('beforeunload', saveGame)
+const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame] }
+document.querySelector('#template').onchange = (event) => {
+  const [name, build] = TEMPLATES[event.target.value] || []
+  event.target.value = ''
+  if (!build) return
+  stopGame()
+  state.activeFunction = null
+  loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
+  fitToView()
+  showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
+}
+// Download the entry point's game as one HTML file that runs without the
+// editor: the player modules plus every definition, body and type it needs.
+document.querySelector('#export-game').onclick = () => {
+  const info = entryId && nodes[entryId] ? programInfo(entryId) : null
+  if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
+  const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
+  const data = { title, definitions: { ...preludeDefs, ...derivedDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok }
+  const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
+  const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
+  link.click()
+  URL.revokeObjectURL(url)
+  showToast(`Exported ${link.download} — open it in any browser to play`)
+}
+// --- Toasts ---------------------------------------------------------------
+let toastTimer = null
+function showToast(message) {
+  let toast = document.querySelector('#toast')
+  if (!toast) { toast = document.createElement('div'); toast.id = 'toast'; toast.setAttribute('role', 'status'); document.body.append(toast) }
+  toast.textContent = message
+  toast.classList.add('visible')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200)
+}
+// --- Project snapshots, autosave, undo/redo ---------------------------------
+function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, entry: entryId, outputId }) }
+// Replaces the live project with `project` (already parsed + merged) in place
+// — `nodes`/`functionBodies` are shared with the evaluator, so they're
+// refilled rather than reassigned.
+function loadProject(project) {
+  Object.keys(nodes).forEach((id) => delete nodes[id])
+  Object.assign(nodes, project.nodes)
+  Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
+  Object.assign(functionBodies, project.functionBodies)
+  applyTypes(project.types || {})
+  entryId = project.entry
+  outputId = project.outputId
+  if (state.activeFunction && !functionBodies[state.activeFunction]) state.activeFunction = null
+  if (!activeNodes()[state.selected]) state.selected = state.activeFunction ? 'output' : 'add'
+  renderFunctionLibrary(); updateInspector(); draw()
+}
+function restoreSnapshot(snapshot) { loadProject(parseProject(snapshot)) }
+const defaultSnapshot = currentSnapshot()
+let checkpointTimer = null
+function scheduleCheckpoint() {
+  clearTimeout(checkpointTimer)
+  checkpointTimer = setTimeout(flushCheckpoint, 300)
+}
+function flushCheckpoint() {
+  clearTimeout(checkpointTimer)
+  checkpointTimer = null
+  const snapshot = currentSnapshot()
+  if (history.record(snapshot)) { persist(snapshot); renderFunctionLibrary() } // keep sidebar signatures current while a body is edited
+  updateHistoryButtons()
+}
+function persist(snapshot) {
+  const status = document.querySelector('#saved-status span')
+  try {
+    localStorage.setItem(STORAGE_KEY, snapshot)
+    status.textContent = `Saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+  } catch {
+    status.textContent = 'Not saved (storage unavailable)'
+  }
+}
+function updateHistoryButtons() {
+  document.querySelector('#undo').disabled = !history.canUndo
+  document.querySelector('#redo').disabled = !history.canRedo
+}
+function undo() {
+  flushCheckpoint()
+  const snapshot = history.undo()
+  if (snapshot) { restoreSnapshot(snapshot); persist(snapshot) }
+  updateHistoryButtons()
+}
+function redo() {
+  flushCheckpoint()
+  const snapshot = history.redo()
+  if (snapshot) { restoreSnapshot(snapshot); persist(snapshot) }
+  updateHistoryButtons()
+}
+document.querySelector('#undo').onclick = undo
+document.querySelector('#redo').onclick = redo
+// Reset is an ordinary (undoable) edit back to the built-in starting graph.
+document.querySelector('#reset').onclick = () => { state.activeFunction = null; restoreSnapshot(defaultSnapshot); fitToView() }
+document.querySelector('#export').onclick = () => {
+  const url = URL.createObjectURL(new Blob([currentSnapshot()], { type: 'application/json' }))
+  const link = Object.assign(document.createElement('a'), { href: url, download: 'hs-simulate-project.json' })
+  link.click()
+  URL.revokeObjectURL(url)
+}
+const importFile = document.querySelector('#import-file')
+document.querySelector('#import').onclick = () => importFile.click()
+importFile.onchange = async () => {
+  const file = importFile.files[0]
+  importFile.value = ''
+  if (!file) return
+  try {
+    state.activeFunction = null
+    loadProject(mergeBuiltins(upgradeProject(parseProject(await file.text())), builtinNodes, builtinBodies))
+    fitToView()
+    showToast(`Imported ${file.name}`)
+  } catch (error) {
+    if (error instanceof ProjectError) return showToast(`Import failed: ${error.message}`)
+    throw error
+  }
+}
+// --- Keyboard ---------------------------------------------------------------
+window.addEventListener('keydown', (event) => {
+  const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
+  const mod = event.ctrlKey || event.metaKey
+  if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
+  if (typing || document.querySelector('#function-dialog') || play) return // no editing shortcuts while a game is playing
+  const key = event.key.toLowerCase()
+  if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
+  else if (mod && key === 'y') { event.preventDefault(); redo() }
+  else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteNode(state.selected) }
+})
 document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
 document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
 document.querySelector('#fit').onclick = () => fitToView()
+document.querySelector('#unfold-all').onclick = () => setAllUnfolded(true)
+document.querySelector('#fold-all').onclick = () => setAllUnfolded(false)
 window.addEventListener('resize', resize)
 document.querySelector('.add-node').addEventListener('click', createCustomFunction)
+document.querySelector('.add-type').addEventListener('click', () => openTypeDialog())
 document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
-  if (!['number', 'boolean'].includes(item.dataset.type)) return
+  if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
   const graph = activeNodes()
+  if (item.dataset.type === 'text') {
+    const id = `text-${Date.now()}`
+    graph[id] = { id, type: 'text', label: 'text', value: 'text', color: '#e8b23c', ...freePosition(graph, CHIP_W) }
+    state.selected = id
+    updateInspector(); draw()
+    return
+  }
+  if (!['number', 'boolean'].includes(item.dataset.type)) return
   const isBoolean = item.dataset.type === 'boolean'
   const id = `${item.dataset.type}-${Date.now()}`
-  graph[id] = { id, type: isBoolean ? 'boolean' : 'number', typeName: isBoolean ? 'Bool' : 'Int', label: isBoolean ? 'boolean' : 'number', value: isBoolean ? 'false' : '0', color: isBoolean ? '#ed6b84' : '#4f8ef7', x: 180 + (Object.keys(graph).length % 3) * 210, y: 360 + (Object.keys(graph).length % 2) * 90 }
+  graph[id] = { id, type: isBoolean ? 'boolean' : 'number', typeName: isBoolean ? 'Bool' : 'Int', label: isBoolean ? 'boolean' : 'number', value: isBoolean ? 'false' : '0', color: isBoolean ? '#ed6b84' : '#4f8ef7', ...freePosition(graph, CHIP_W) }
   state.selected = id
   updateInspector()
   draw()
 }))
-renderFunctionLibrary(); updateInspector(); resize(); fitToView()
+// Restore the autosaved project, if any, then start history from whatever
+// is on screen.
+try {
+  const saved = localStorage.getItem(STORAGE_KEY)
+  if (saved) loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
+} catch (error) {
+  showToast(`Couldn't restore the saved project: ${error.message}`)
+}
+renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
+history.reset(currentSnapshot())
+updateHistoryButtons()

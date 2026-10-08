@@ -17,26 +17,81 @@
 //   (output.source chains, nested call nodes), then generalize()'d — this is
 //   the actual "let-polymorphism" step: infer the body once, close over
 //   whatever's left free, then let each call site instantiate it fresh.
-import { applySubst, freshVar, ftv, generalize, instantiate, pred, tcon, tfun, unify, scheme } from './typeSystem.js'
-import { builtinSchemes } from './builtinSchemes.js'
-import { reduce } from './numericClasses.js'
+import { applySubst, freshVar, ftv, generalize, instantiate, pred, tcon, tfun, tlist, unify, scheme } from './typeSystem.js'
+import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
+import { literalClass, reduce } from './prelude.js'
+import { parseLiteral } from './literals.js'
 
 const Int = tcon('Int')
 const Bool = tcon('Bool')
 
 /**
- * Turn an entry into a single Type (folds a function entry's params+result
- * into a right-nested arrow). Detected by field presence, not `.kind`, so
- * this works on both the internal `{kind, paramTypes|valueType}` shape used
- * during graph traversal and the external `perNode` shape (which drops `kind`).
+ * Turn an entry into the single Type of that node *as a value*. A function
+ * node's value is its callee applied to its applied slots (a mounted node or
+ * an inline literal — see `applied`), so only the still-open slots fold into
+ * the arrow, e.g. `plus` with its `x` slot filled is `a -> a`, and with both
+ * filled just `a`. This is exactly the runtime meaning src/evaluator.js gives
+ * it. Detected by field presence, not `.kind`, so this works on both the
+ * internal `{kind, paramTypes|valueType}` shape used during graph traversal
+ * and the external `perNode` shape (which drops `kind`).
  */
 export function valueTypeOfEntry(entry) {
   if (!entry) return freshVar()
-  if (entry.paramTypes) return entry.paramTypes.reduceRight((acc, t) => tfun(t, acc), entry.resultType)
+  if (entry.paramTypes) return entry.paramTypes.reduceRight((acc, t, i) => (entry.applied?.[i] ? acc : tfun(t, acc)), entry.resultType)
   return entry.valueType
 }
 
+function satisfiable(preds, subst) {
+  try {
+    reduce(preds.map((p) => pred(p.cls, applySubst(subst, p.type))))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Type the inline literals collected since `start`, one at a time, the way
+ * main.js's canConnect vets a dragged edge: unify the literal's type with its
+ * slot and keep it only if no outstanding constraint becomes unsatisfiable —
+ * whether its own (`-3` needs Ring, which a Natural slot lacks) or one
+ * elsewhere (`true` into `apply`'s argument when the function needs Semiring).
+ * A rejected literal is recorded in invalidSlots instead of poisoning the
+ * pass. If the graph was already unsatisfiable without it, only the literal's
+ * own fit is judged, so one broken edge doesn't flag every literal.
+ */
+function settleLiterals(ctx, start) {
+  for (const { graph, id, index, paramType, lit } of ctx.pendingLiterals.splice(start)) {
+    const litType = lit.kind === 'number' ? freshVar() : lit.kind === 'string' ? tlist(tcon('Char')) : lit.kind === 'char' ? tcon('Char') : Bool
+    const litPreds = lit.kind === 'number' ? [pred(literalClass(lit.text), litType)] : []
+    let next
+    try {
+      next = unify(paramType, litType, ctx.subst)
+    } catch {
+      markInvalid(ctx, graph, id, index)
+      continue
+    }
+    const fits = satisfiable([...ctx.preds, ...litPreds], next) || (!satisfiable(ctx.preds, ctx.subst) && satisfiable(litPreds, next))
+    if (!fits) {
+      markInvalid(ctx, graph, id, index)
+      continue
+    }
+    ctx.subst = next
+    ctx.preds.push(...litPreds)
+  }
+}
+
+/** Record that `graph[id]`'s slot `index` holds an inline literal that doesn't fit the slot. */
+function markInvalid(ctx, graph, id, index) {
+  if (!ctx.invalid.has(graph)) ctx.invalid.set(graph, new Map())
+  const perGraph = ctx.invalid.get(graph)
+  if (!perGraph.has(id)) perGraph.set(id, new Set())
+  perGraph.get(id).add(index)
+}
+
 function schemeFor(node, ctx) {
+  if (node.scheme) return node.scheme
+  if ((node.builtin || ctx.nodesRegistry[node.sourceFunctionId]?.builtin) === 'listOf') return listOfScheme(node.params?.length || 0) // a definition that carries its own type (e.g. derived from a type declaration)
   if (node.builtin) return builtinSchemes[node.builtin]
   return customSchemeOf(node.sourceFunctionId || node.id, ctx)
 }
@@ -46,6 +101,7 @@ function customSchemeOf(id, ctx) {
   if (ctx.customCache.has(id)) return ctx.customCache.get(id)
   const def = ctx.nodesRegistry[id]
   if (!def) return scheme([], [], freshVar())
+  if (def.scheme) return def.scheme
   if (def.builtin) return builtinSchemes[def.builtin]
   if (ctx.visiting.has(id)) return scheme([], [], freshVar()) // recursive custom function: monomorphic fallback, not cached
   ctx.visiting.add(id)
@@ -63,7 +119,9 @@ function inferCustomFunctionScheme(body, ctx) {
   const paramVars = paramNodes.map(() => freshVar())
   paramNodes.forEach((n, i) => memo.set(n.id, { kind: 'value', valueType: paramVars[i] }))
   const predsStart = ctx.preds.length
+  const literalsStart = ctx.pendingLiterals.length
   const outputEntry = resolveNodeType('output', body, ctx, memo)
+  settleLiterals(ctx, literalsStart)
   const resultType = valueTypeOfEntry(outputEntry)
   // Resolve against everything unified so far *before* generalizing — a
   // param that got pinned to Int by usage (e.g. wired into isZero) must show
@@ -75,7 +133,7 @@ function inferCustomFunctionScheme(body, ctx) {
   // any nested customSchemeOf call for another function fully pushes and
   // splices its own slice before this one takes its end-snapshot), resolve
   // them against the current substitution, and reduce — a param wired into
-  // `plus` keeps its `Num` obligation here; one wired into `isZero` doesn't
+  // `plus` keeps its `AddSemigroup` obligation here; one wired into `isZero` doesn't
   // (Int already satisfies it, so reduce discharges it). Fall back to the
   // unreduced set defensively rather than let a broken body kill the pass.
   const own = ctx.preds.splice(predsStart).map((p) => pred(p.cls, applySubst(ctx.subst, p.type)))
@@ -94,6 +152,13 @@ function resolveNodeType(id, graph, ctx, memo) {
   const node = graph[id]
   if (!node) return { kind: 'value', valueType: freshVar() }
 
+  if (node.type === 'ref') {
+    // The diagonal Δ : A → A × A — a second use of the same value. It *is*
+    // its target's entry (same memo object), so both uses share one type.
+    const entry = graph[node.target] ? resolveNodeType(node.target, graph, ctx, memo) : { kind: 'value', valueType: freshVar() }
+    memo.set(id, entry)
+    return entry
+  }
   if (node.type === 'parameter') {
     const entry = { kind: 'value', valueType: freshVar() }
     memo.set(id, entry)
@@ -101,18 +166,23 @@ function resolveNodeType(id, graph, ctx, memo) {
   }
   if (node.type === 'number') {
     // A genuine type annotation (like Haskell's `5 :: Double`) resolves
-    // outright, no constraint needed. Otherwise this is a numeric literal:
-    // `Num a => a` for a plain literal, or `Fractional a => a` if it has a
-    // decimal point (matches how a literal with a `.` desugars via
-    // fromRational instead of fromInteger).
+    // outright, no constraint needed. Otherwise this is a numeric literal
+    // carrying only the structure its text needs: `Semiring a => a` for a
+    // non-negative integer, `Ring a => a` for a negative one, `Field a => a`
+    // for a decimal (see literalClass).
     if (node.annotation) {
       const entry = { kind: 'value', valueType: tcon(node.annotation) }
       memo.set(id, entry)
       return entry
     }
     const v = freshVar()
-    ctx.preds.push(pred(/\./.test(node.value ?? '') ? 'Fractional' : 'Num', v))
+    ctx.preds.push(pred(literalClass(node.value ?? ''), v))
     const entry = { kind: 'value', valueType: v }
+    memo.set(id, entry)
+    return entry
+  }
+  if (node.type === 'text') {
+    const entry = { kind: 'value', valueType: tlist(tcon('Char')) }
     memo.set(id, entry)
     return entry
   }
@@ -121,9 +191,17 @@ function resolveNodeType(id, graph, ctx, memo) {
     memo.set(id, entry)
     return entry
   }
-  if (node.type === 'curried') {
-    // Real residual type wired in Phase 4; a fresh var unifies with anything for now.
-    const entry = node.resolvedType ? { kind: 'value', valueType: node.resolvedType } : { kind: 'value', valueType: freshVar() }
+  if (node.type === 'curried' || node.type === 'value') {
+    // A Play result with open slots stores its residual as a generalized
+    // scheme (constraints included), instantiated fresh here like any other
+    // polymorphic value. `resolvedType` is the older bare-type form.
+    let valueType = node.resolvedType || freshVar()
+    if (node.resolvedScheme) {
+      const inst = instantiate(node.resolvedScheme)
+      ctx.preds.push(...inst.preds)
+      valueType = inst.type
+    }
+    const entry = { kind: 'value', valueType }
     memo.set(id, entry)
     return entry
   }
@@ -152,16 +230,29 @@ function resolveNodeType(id, graph, ctx, memo) {
         paramTypes.push(freshVar()) // defensive: node has more ports than its scheme declares
       }
     }
-    const entry = { kind: 'function', paramTypes, resultType: rest }
+    const applied = paramTypes.map(() => false)
+    const entry = { kind: 'function', paramTypes, resultType: rest, applied }
     memo.set(id, entry) // set before recursing so a stray self-mount can't loop
-    ;(node.mounted || []).forEach((mountedId, i) => {
-      if (!mountedId || !graph[mountedId]) return
-      const argEntry = resolveNodeType(mountedId, graph, ctx, memo)
-      try {
-        ctx.subst = unify(paramTypes[i], valueTypeOfEntry(argEntry), ctx.subst)
-      } catch {
-        // Invalid edge — connect-time gating should prevent this; skip defensively rather than blank the canvas.
+    paramTypes.forEach((paramType, i) => {
+      const mountedId = node.mounted?.[i]
+      if (mountedId && graph[mountedId]) {
+        applied[i] = true
+        const argEntry = resolveNodeType(mountedId, graph, ctx, memo)
+        try {
+          ctx.subst = unify(paramType, valueTypeOfEntry(argEntry), ctx.subst)
+        } catch {
+          // Invalid edge — connect-time gating should prevent this; skip defensively rather than blank the canvas.
+        }
+        return
       }
+      // An inline literal typed into the slot counts as applied (the
+      // evaluator will use it) but, unlike a mounted edge, nothing gated it
+      // — so its typing is deferred to settleLiterals, which accepts it only
+      // if every constraint stays satisfiable.
+      const lit = parseLiteral(node.params?.[i])
+      if (!lit) return
+      applied[i] = true
+      ctx.pendingLiterals.push({ graph, id, index: i, paramType, lit })
     })
     return entry
   }
@@ -179,15 +270,18 @@ function resolveNodeType(id, graph, ctx, memo) {
  * schemes reachable from it.
  */
 export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
-  const ctx = { subst: new Map(), customCache: new Map(), visiting: new Set(), nodesRegistry, functionBodiesRegistry, preds: [] }
+  const ctx = { subst: new Map(), customCache: new Map(), visiting: new Set(), nodesRegistry, functionBodiesRegistry, preds: [], invalid: new Map(), pendingLiterals: [] }
   const memo = new Map()
   const perNode = new Map()
-  Object.keys(activeGraph).forEach((id) => {
-    const entry = resolveNodeType(id, activeGraph, ctx, memo)
+  const entries = Object.keys(activeGraph).map((id) => [id, resolveNodeType(id, activeGraph, ctx, memo)])
+  settleLiterals(ctx, 0)
+  // Read every type back only now, against the final substitution, so an
+  // edge resolved late still refines a node resolved early.
+  entries.forEach(([id, entry]) => {
     perNode.set(
       id,
       entry.kind === 'function'
-        ? { paramTypes: entry.paramTypes.map((t) => applySubst(ctx.subst, t)), resultType: applySubst(ctx.subst, entry.resultType) }
+        ? { paramTypes: entry.paramTypes.map((t) => applySubst(ctx.subst, t)), resultType: applySubst(ctx.subst, entry.resultType), applied: entry.applied }
         : { valueType: applySubst(ctx.subst, entry.valueType) },
     )
   })
@@ -213,10 +307,14 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
       }
     })
   }
-  perNode.forEach((entry) => {
+  const invalidHere = ctx.invalid.get(activeGraph) || new Map()
+  perNode.forEach((entry, id) => {
+    if (entry.paramTypes) entry.invalidSlots = [...(invalidHere.get(id) || [])]
     const ownTypes = entry.paramTypes ? [...entry.paramTypes, entry.resultType] : [entry.valueType]
     const ownVars = new Set(ownTypes.flatMap((t) => [...ftv(t)]))
-    entry.preds = reducedPreds.filter((p) => p.type.kind === 'var' && ownVars.has(p.type.id))
+    // Reduced preds are in head-normal form (`Ring a`, or `Show (f a)` under a
+    // constructor class), so "mentions one of this node's variables" is the test.
+    entry.preds = reducedPreds.filter((p) => [...ftv(p.type)].some((v) => ownVars.has(v)))
   })
   return { perNode, subst: ctx.subst, preds: resolvedPreds }
 }
