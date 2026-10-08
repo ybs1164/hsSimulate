@@ -21,7 +21,7 @@
 // OrderedField -> EuclideanRing, `isNaN` IEEEFloat. `geq`/`eq` use the
 // auxiliary Ord/Eq classes, and `select` is the polymorphic `if` that the
 // pinned `ifThenElse` deliberately is not.
-import { pred, scheme, tcon, tfun, tvar } from './typeSystem.js'
+import { pred, scheme, tapp, tcon, tfun, tlist, tvar } from './typeSystem.js'
 
 const a = tvar('a')
 const b = tvar('b')
@@ -29,6 +29,8 @@ const c = tvar('c')
 const Int = tcon('Int')
 const Bool = tcon('Bool')
 const Rational = tcon('Rational')
+const Maybe = (t) => tapp(tcon('Maybe'), t)
+const String = tlist(tcon('Char'))
 
 export const builtinSchemes = {
   zero: scheme([], [], Int),
@@ -54,4 +56,25 @@ export const builtinSchemes = {
   geq: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
   eq: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(a, Bool))),
   select: scheme(['a'], [], tfun(Bool, tfun(a, tfun(a, a)))),
+
+  // Prelude functions on the built-in inductive types (src/dataTypes.js),
+  // under their Haskell names. `foldr` and `maybe` are the recursors of
+  // `[a]` and `Maybe a`. `listOf` (the `[x, y, z]` node) is variadic: its
+  // scheme depends on how many slots the node has — see listOfScheme.
+  nil: scheme(['a'], [], tlist(a)),
+  cons: scheme(['a'], [], tfun(a, tfun(tlist(a), tlist(a)))),
+  foldr: scheme(['a', 'b'], [], tfun(tfun(a, tfun(b, b)), tfun(b, tfun(tlist(a), b)))),
+  map: scheme(['a', 'b'], [], tfun(tfun(a, b), tfun(tlist(a), tlist(b)))),
+  length: scheme(['a'], [], tfun(tlist(a), Int)),
+  append: scheme(['a'], [], tfun(tlist(a), tfun(tlist(a), tlist(a)))),
+  index: scheme(['a'], [], tfun(tlist(a), tfun(Int, Maybe(a)))),
+  nothing: scheme(['a'], [], Maybe(a)),
+  just: scheme(['a'], [], tfun(a, Maybe(a))),
+  maybe: scheme(['a', 'b'], [], tfun(b, tfun(tfun(a, b), tfun(Maybe(a), b)))),
+  show: scheme(['a'], [pred('Show', a)], tfun(a, String)),
+}
+
+/** `[x₁, …, xₙ] :: a → … → a → [a]` for a list node with `n` slots. */
+export function listOfScheme(n) {
+  return scheme(['a'], [], Array.from({ length: n }).reduce((acc) => tfun(a, acc), tlist(a)))
 }

@@ -227,3 +227,4 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .type-form textarea{width:100%;font:12px/1.5 'DM Mono';padding:10px;border:1.5px solid var(--line);border-radius:var(--radius-sm);resize:vertical;margin-top:6px;box-sizing:border-box}
 .type-error{color:#c0335e;font:11px/1.5 'DM Mono';min-height:1em;white-space:pre-wrap}
 .type-form .danger{color:#c0335e;margin-right:auto}
+.prelude-group{font:600 9px 'DM Mono';letter-spacing:1px;color:var(--muted-2);margin:8px 0 2px 8px;text-transform:uppercase}

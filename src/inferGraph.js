@@ -17,8 +17,8 @@
 //   (output.source chains, nested call nodes), then generalize()'d — this is
 //   the actual "let-polymorphism" step: infer the body once, close over
 //   whatever's left free, then let each call site instantiate it fresh.
-import { applySubst, freshVar, ftv, generalize, instantiate, pred, tcon, tfun, unify, scheme } from './typeSystem.js'
-import { builtinSchemes } from './builtinSchemes.js'
+import { applySubst, freshVar, ftv, generalize, instantiate, pred, tcon, tfun, tlist, unify, scheme } from './typeSystem.js'
+import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { literalClass, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
 
@@ -62,7 +62,7 @@ function satisfiable(preds, subst) {
  */
 function settleLiterals(ctx, start) {
   for (const { graph, id, index, paramType, lit } of ctx.pendingLiterals.splice(start)) {
-    const litType = lit.kind === 'number' ? freshVar() : Bool
+    const litType = lit.kind === 'number' ? freshVar() : lit.kind === 'string' ? tlist(tcon('Char')) : lit.kind === 'char' ? tcon('Char') : Bool
     const litPreds = lit.kind === 'number' ? [pred(literalClass(lit.text), litType)] : []
     let next
     try {
@@ -90,7 +90,8 @@ function markInvalid(ctx, graph, id, index) {
 }
 
 function schemeFor(node, ctx) {
-  if (node.scheme) return node.scheme // a definition that carries its own type (e.g. derived from a type declaration)
+  if (node.scheme) return node.scheme
+  if ((node.builtin || ctx.nodesRegistry[node.sourceFunctionId]?.builtin) === 'listOf') return listOfScheme(node.params?.length || 0) // a definition that carries its own type (e.g. derived from a type declaration)
   if (node.builtin) return builtinSchemes[node.builtin]
   return customSchemeOf(node.sourceFunctionId || node.id, ctx)
 }
@@ -177,6 +178,11 @@ function resolveNodeType(id, graph, ctx, memo) {
     const v = freshVar()
     ctx.preds.push(pred(literalClass(node.value ?? ''), v))
     const entry = { kind: 'value', valueType: v }
+    memo.set(id, entry)
+    return entry
+  }
+  if (node.type === 'text') {
+    const entry = { kind: 'value', valueType: tlist(tcon('Char')) }
     memo.set(id, entry)
     return entry
   }

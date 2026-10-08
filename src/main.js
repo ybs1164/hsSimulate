@@ -1,6 +1,7 @@
 import './style.css'
 import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
+import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances } from './prelude.js'
 import { createEvaluator, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from './typeDecls.js'
@@ -23,8 +24,10 @@ app.innerHTML = `
           <div id="function-library"></div>
           <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type (Haskell data/newtype)">+</button></div>
           <div id="type-library"></div>
+          <div class="library-title types-title"><span>PRELUDE</span></div>
+          <div id="prelude-library"></div>
           <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>Numbers</b><small>Int · Float</small></span></button>
-          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String</small></span></button>
+          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String = [Char]</small></span></button>
           <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>Lists</b><small>[a, b, c]</small></span></button>
           <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Booleans</b><small>True · False</small></span></button>
         </nav>
@@ -116,14 +119,23 @@ const builtinBodies = structuredClone(functionBodies)
 // pass and the evaluator use: every function definition, real or derived.
 let types = {}
 const derivedDefs = {}
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] })
+// Prelude functions on lists, Maybe and text (src/dataTypes.js), by their
+// Haskell names. Like derived definitions they're listed in the sidebar
+// rather than drawn on the main canvas.
+const PRELUDE = [
+  ['Lists', [['listOf', '[ , , ]', ['x1', 'x2', 'x3']], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
+  ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
+  ['Text', [['show', 'show', ['x']]]],
+]
+const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).map(([builtin, label, params]) => [`prelude:${builtin}`, { id: `prelude:${builtin}`, type: 'function', builtin, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#5fa8e8' }]))
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] })
 function applyTypes(next) {
   types = next
   Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
   derivedDefinitions(types).forEach((def) => { derivedDefs[def.id] = def })
   setDynamicInstances(derivedInstances(types))
 }
-const evaluator = createEvaluator({ nodes: definitions, functionBodies })
+const evaluator = createEvaluator({ nodes: definitions, functionBodies, get types() { return types } })
 const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
@@ -144,6 +156,14 @@ function renderFunctionLibrary() {
 function onLibraryFunction(id) {
   if (!state.activeFunction && nodes[id]?.custom) enterFunction(id)
   else addFunctionCall(id)
+}
+function renderPreludeLibrary() {
+  document.querySelector('#prelude-library').innerHTML = PRELUDE.map(([group, fns]) => `<div class="prelude-group">${group}</div>${fns.map(([builtin]) => {
+    const def = preludeDefs[`prelude:${builtin}`]
+    const sch = builtin === 'listOf' ? listOfScheme(3) : builtinSchemes[builtin]
+    return `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${def.label}</b><small>${showQual(sch.preds, sch.type)}</small></button>`
+  }).join('')}`).join('')
+  document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
 }
 const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
@@ -475,7 +495,7 @@ function canConnect(source, target, index) {
     return false
   }
 }
-function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : `Number · ${node.annotation || 'literal'}` }
+function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : `Number · ${node.annotation || 'literal'}` }
 // The short text a node shows inside its chip / a slot's nested chip. A
 // reference shows what it refers to, so it always reads the same as its
 // original even after the original's value is edited.
@@ -486,6 +506,7 @@ function nodeDisplayText(node, graph = activeNodes()) {
   if (node.type === 'curried') return node.value || 'ƒ'
   if (node.type === 'output') return node.value ?? 'Output'
   if (node.type === 'value') return showValue(node.data, types)
+  if (node.type === 'text') return JSON.stringify(String(node.value ?? ''))
   return String(node.value ?? node.label)
 }
 // Another use of `n`'s value — the diagonal Δ : A → A × A. A node can only be
@@ -588,7 +609,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   const isFunctionValued = node.type === 'curried'
   const typeColor = colorForType(resolvedValueQual(node, activeNodes(), pass).type, labelNamer)
   const badgeColor = isFunctionValued ? ACCENT : typeColor
-  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : '#'
+  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : '#'
   ctx.save()
   ctx.shadowColor = snapHighlight ? `${ACCENT}66` : selected ? `${ACCENT}40` : '#211d3414'
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
@@ -777,6 +798,7 @@ function invalidateStaleWires(node) {
     })
   })
 }
+function escapeAttr(text) { return String(text).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;') }
 function renderValueInspector(n) {
   const q = resolvedValueQual(n)
   const isNumber = n.type === 'number'
@@ -789,7 +811,7 @@ function renderValueInspector(n) {
   const annotateRow = isNumber
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial'}" ${isNumber ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
 }
 // Why `n` can't be deleted, or null if it can. Builtins are the language
 // itself; a function's Output and parameters are its signature, changed
@@ -867,7 +889,7 @@ function updateInspector() {
   // very input on every keystroke and steal focus/cursor position. draw()
   // alone is enough to keep the canvas label live; the inspector's own TYPE
   // line catches up next time something reselects this node.
-  if (valueInput && n.type === 'number') valueInput.oninput = () => { n.value = valueInput.value; draw() }
+  if (valueInput && (n.type === 'number' || n.type === 'text')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
 }
 // Plays `fn`: evaluates it as a value (callee applied to its applied slots —
 // see src/evaluator.js) and drops the result next to it. A fully-applied
@@ -897,9 +919,10 @@ function executeFunction(fn) {
     // not a bare `a → a`), generalized so each later pass instantiates it fresh.
     const resolvedScheme = valueType ? generalize((entry.preds || []).filter((p) => [...ftv(p.type)].some((v) => ftv(valueType).has(v))), valueType) : undefined
     graph[id] = { id, type: 'curried', typeName: valueType ? showQual(resolvedScheme.preds, valueType) : functionSignature(fn), resolvedScheme, closure: result, ...position, label: `${fn.label} · ${appliedCount}/${fn.params.length}`, value: 'ƒ', remaining: result.args.filter((a) => a === null).length, color: '#a96ef0' }
-  } else if (isData(result)) {
-    // A value of a declared type, e.g. `Model {clicks = 1, perClick = 2}`.
-    graph[id] = { id, type: 'value', data: result, resolvedScheme: valueType ? generalize([], valueType) : undefined, ...position, label: 'result', color: '#3cbe9e' }
+  } else if (isData(result) || typeof result === 'string') {
+    // A data value (a declared type, a list, a Maybe — e.g. `Model {clicks = 1, perClick = 2}`) or a Char.
+    const resolvedScheme = valueType ? generalize((entry.preds || []).filter((p) => [...ftv(p.type)].some((v) => ftv(valueType).has(v))), valueType) : undefined
+    graph[id] = { id, type: 'value', data: result, resolvedScheme, ...position, label: 'result', color: '#3cbe9e' }
   } else {
     const booleanResult = typeof result === 'boolean'
     // Inherit the function's actual resolved result type when it's concrete
@@ -1216,8 +1239,16 @@ window.addEventListener('resize', resize)
 document.querySelector('.add-node').addEventListener('click', createCustomFunction)
 document.querySelector('.add-type').addEventListener('click', () => openTypeDialog())
 document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
-  if (!['number', 'boolean'].includes(item.dataset.type)) return
+  if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
   const graph = activeNodes()
+  if (item.dataset.type === 'text') {
+    const id = `text-${Date.now()}`
+    graph[id] = { id, type: 'text', label: 'text', value: 'text', color: '#e8b23c', ...freePosition(graph, CHIP_W) }
+    state.selected = id
+    updateInspector(); draw()
+    return
+  }
+  if (!['number', 'boolean'].includes(item.dataset.type)) return
   const isBoolean = item.dataset.type === 'boolean'
   const id = `${item.dataset.type}-${Date.now()}`
   graph[id] = { id, type: isBoolean ? 'boolean' : 'number', typeName: isBoolean ? 'Bool' : 'Int', label: isBoolean ? 'boolean' : 'number', value: isBoolean ? 'false' : '0', color: isBoolean ? '#ed6b84' : '#4f8ef7', ...freePosition(graph, CHIP_W) }
@@ -1233,6 +1264,6 @@ try {
 } catch (error) {
   showToast(`Couldn't restore the saved project: ${error.message}`)
 }
-renderFunctionLibrary(); updateInspector(); resize(); fitToView()
+renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
 history.reset(currentSnapshot())
 updateHistoryButtons()

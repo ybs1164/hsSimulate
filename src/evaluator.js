@@ -15,6 +15,7 @@
 //   forced (`run` returns them that way), so they can be stored on a node
 //   and survive save/load.
 import { parseLiteral } from './literals.js'
+import { cons, just, nil, nothing } from './dataTypes.js'
 
 export class EvalError extends Error {}
 
@@ -69,6 +70,13 @@ function show(v) {
  */
 export function showValue(v, types = {}, asArg = false) {
   if (isClosure(v)) return `ƒ ${v.callee}`
+  if (typeof v === 'string') return `'${v}'` // a Char
+  if (isData(v) && v.type === 'List') {
+    const items = []
+    for (let l = v; l.ctorIndex === 1; l = l.args[1]) items.push(l.args[0])
+    if (items.length && items.every((c) => typeof c === 'string')) return JSON.stringify(items.join('')) // a String
+    return `[${items.map((x) => showValue(x, types)).join(',')}]`
+  }
   if (!isData(v)) return String(v)
   if (!v.args.length) return v.ctor
   const ctor = types[v.type]?.constructors.find((c) => c.name === v.ctor)
@@ -111,7 +119,7 @@ const bool = (t) => {
 function compareValues(x, y) {
   const a = force(x)
   const b = force(y)
-  if (typeof a === 'number' && typeof b === 'number') return a < b ? -1 : a > b ? 1 : 0
+  if ((typeof a === 'number' && typeof b === 'number') || (typeof a === 'string' && typeof b === 'string')) return a < b ? -1 : a > b ? 1 : 0
   if (typeof a === 'boolean' && typeof b === 'boolean') return a === b ? 0 : a ? 1 : -1
   if (isData(a) && isData(b)) {
     if (a.ctorIndex !== b.ctorIndex) return a.ctorIndex < b.ctorIndex ? -1 : 1
@@ -122,6 +130,11 @@ function compareValues(x, y) {
     return 0
   }
   throw new EvalError(`Cannot compare ${show(a)} with ${show(b)}`)
+}
+
+/** A JS string as a Haskell String: a lazy list of Chars. */
+function fromJsString(str) {
+  return [...str].reduceRight((tail, ch) => cons(now(ch), now(tail)), nil)
 }
 
 /** Haskell's `round`: halves go to the even neighbour. */
@@ -164,6 +177,58 @@ export function createEvaluator(registry) {
     geq: [2, (x, y) => compareValues(x, y) >= 0],
     eq: [2, (x, y) => compareValues(x, y) === 0],
     select: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
+
+    // Prelude functions on lists and Maybe (dataTypes.js). Lazy throughout,
+    // so they work on infinite lists as far as they're consumed.
+    nil: [0, () => nil],
+    cons: [2, (x, xs) => cons(x, xs)],
+    foldr: [3, (f, z, xs) => {
+      const go = (t) => {
+        const l = list(t)
+        return l.ctorIndex === 0 ? force(z) : applyValue(f, [l.args[0], delay(() => go(l.args[1]))])
+      }
+      return go(xs)
+    }],
+    map: [2, (f, xs) => {
+      const go = (t) => {
+        const l = list(t)
+        return l.ctorIndex === 0 ? nil : cons(delay(() => applyValue(f, [l.args[0]])), delay(() => go(l.args[1])))
+      }
+      return go(xs)
+    }],
+    length: [1, (xs) => {
+      let n = 0
+      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) n++
+      return n
+    }],
+    append: [2, (xs, ys) => {
+      const go = (t) => {
+        const l = list(t)
+        return l.ctorIndex === 0 ? force(ys) : cons(l.args[0], delay(() => go(l.args[1])))
+      }
+      return go(xs)
+    }],
+    index: [2, (xs, i) => {
+      let n = num(i)
+      if (n < 0) return nothing
+      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1]), n--) if (n === 0) return just(l.args[0])
+      return nothing
+    }],
+    nothing: [0, () => nothing],
+    just: [1, (x) => just(x)],
+    maybe: [3, (b, f, m) => {
+      const v = force(m)
+      if (!isData(v) || v.type !== 'Maybe') throw new EvalError(`Expected a Maybe, got ${show(v)}`)
+      return v.ctorIndex === 0 ? force(b) : applyValue(f, [v.args[0]])
+    }],
+    show: [1, (x) => fromJsString(showValue(serializeValue(x), registry.types || {}))],
+    listOf: [null, (...xs) => xs.reduceRight((tail, x) => cons(x, now(tail)), nil)], // arity = the node's slot count
+  }
+
+  function list(t) {
+    const v = force(t)
+    if (!isData(v) || v.type !== 'List') throw new EvalError(`Expected a list, got ${show(v)}`)
+    return v
   }
 
   function definition(callee) {
@@ -259,6 +324,7 @@ export function createEvaluator(registry) {
       return value
     }
     if (node.type === 'boolean') return node.value === 'true'
+    if (node.type === 'text') return fromJsString(String(node.value ?? ''))
     if (node.type === 'ref') {
       if (!graph[node.target]) throw new EvalError(`${node.label}: the original node is gone`)
       return force(nodeValue(graph, node.target, env)) // shares the target's thunk: evaluated once
@@ -285,7 +351,7 @@ export function createEvaluator(registry) {
 
   function functionNodeValue(graph, node, env) {
     const callee = node.sourceFunctionId || node.id
-    const arity = arityOf(callee)
+    const arity = definition(callee).builtin === 'listOf' ? (node.params || []).length : arityOf(callee)
     const args = Array(arity).fill(null)
     ;(node.params || []).forEach((text, i) => {
       const mountedId = node.mounted?.[i]
@@ -293,7 +359,7 @@ export function createEvaluator(registry) {
       if (mountedId && graph[mountedId]) arg = nodeValue(graph, mountedId, env)
       else {
         const lit = parseLiteral(text)
-        if (lit) arg = now(lit.value)
+        if (lit) arg = now(lit.kind === 'string' ? fromJsString(lit.value) : lit.value)
       }
       if (!arg) return
       if (i >= arity) throw new EvalError(`${node.label}: slot ${i + 1} has no matching parameter`)

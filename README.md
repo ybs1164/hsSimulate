@@ -47,6 +47,7 @@ npm run preview
     - 레코드 필드의 사영 `clicks :: Model → Double`과 lens식 갱신 `set clicks :: Double → Model → Model`, `over clicks :: (Double → Double) → Model → Model`
     - 분기 함수(쌍대짝) `caseEvent :: a → (Double → a) → (Int → a) → Event → a` — `maybe`/`either`/`bool`과 같은 모양
     - `deriving`은 stock `Eq`, `Ord`(사전순), `Show`를 지원하며, GHC처럼 `Ord`는 `Eq`가 필요하고 모든 필드가 그 클래스를 가져야 합니다. 생성자 필드는 하스켈처럼 지연 평가됩니다.
+11. 좌측 `PRELUDE`에는 리스트·Maybe·텍스트 함수가 하스켈 이름 그대로 있습니다: `[ , , ]`(슬롯 수만큼의 리스트, `+`로 추가), `[]`, `(:)`, `foldr`(리스트의 재귀자), `map`, `length`, `(++)`, `(!?)`, `Nothing`, `Just`, `maybe`(Maybe = 1 + a의 쌍대짝), `show`. 리스트는 하스켈처럼 지연 평가되는 유도 타입(`[] | x : xs`)이라 무한 리스트도 필요한 만큼만 계산됩니다. `String = [Char]`이며, `Text` 노드나 슬롯의 `"글자"`·`'c'` 리터럴로 만들 수 있습니다. `Eq a ⇒ Eq [a]`처럼 문맥 있는 인스턴스로 리스트·Maybe의 비교·출력이 타입 검사됩니다.
 
 ## 캔버스 조작
 
@@ -73,6 +74,7 @@ npm run preview
 - `src/inferGraph.js`: 캔버스 그래프의 연결(`mounted`/`output.source`)과 인라인 리터럴을 단일화 제약으로 읽어 타입(과 남은 클래스 제약)을 추론하는 패스
 - `src/evaluator.js`: 같은 그래프를 지연 평가하는 실행기(클로저·부분 적용·재귀)
 - `src/literals.js`: 슬롯 인라인 리터럴 파서(타입 패스와 실행기가 공유)
+- `src/dataTypes.js`: 내장 유도 타입(`[a]`, `Maybe a`, `Char`, `()`)의 인스턴스와 런타임 표현
 - `src/typeDecls.js`: 하스켈 `data`/`newtype` 선언 파서·검사기와, 선언에서 유도되는 생성자·사영·갱신·분기 함수와 `deriving` 인스턴스
 - `src/classEnv.js`: 클래스 환경과 제약 해소기(문맥 있는 인스턴스, entailment, context reduction, 디폴팅)
 - `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소기를 다시 내보내는 진입점(하스켈 Prelude처럼)

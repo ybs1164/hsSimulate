@@ -12,7 +12,7 @@
 // THIH: `instance Monoid a => Monoid (Maybe a)` is
 // `{ cls: 'Monoid', head: Maybe $a, context: [Monoid $a] }`, and using it
 // leaves the context's predicates as new obligations.
-import { applySubst, pred, showType, tcon } from './typeSystem.js'
+import { pred, showType, tcon } from './typeSystem.js'
 
 const classes = new Map() // name -> { supers: string[], numeric: boolean }
 const staticInstances = []
@@ -117,6 +117,14 @@ function match(pattern, type, subst = new Map()) {
   return s1 && match(pattern.arg, type.arg, s1)
 }
 
+/** Replace an instance's pattern variables in one step (unlike applySubst, never re-resolving what was substituted in). */
+function substitutePattern(s, t) {
+  if (t.kind === 'var') return s.get(t.id) ?? t
+  if (t.kind === 'fun') return { kind: 'fun', from: substitutePattern(s, t.from), to: substitutePattern(s, t.to) }
+  if (t.kind === 'app') return { kind: 'app', fn: substitutePattern(s, t.fn), arg: substitutePattern(s, t.arg) }
+  return t
+}
+
 /**
  * The obligations left by using an instance for `p` — `[]` for a base
  * instance like `Ring Int`, the instantiated context for one like
@@ -128,7 +136,7 @@ function byInst(p) {
   for (const inst of allInstances()) {
     if (inst.cls !== p.cls) continue
     const s = match(inst.head, p.type)
-    if (s) return inst.context.map((q) => pred(q.cls, applySubst(s, q.type)))
+    if (s) return inst.context.map((q) => pred(q.cls, substitutePattern(s, q.type)))
   }
   return null
 }
