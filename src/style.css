@@ -260,3 +260,8 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .w-progress{height:12px;border-radius:var(--radius-full);background:var(--accent-soft);overflow:hidden}
 .w-progress i{display:block;height:100%;background:var(--accent);transition:width .15s}
 .w-error{color:#c0335e;font:12px 'DM Mono'}
+.chip-unfold{position:absolute;border:0;background:var(--panel);color:var(--accent-ink);border-radius:50%;box-shadow:0 1px 3px #211d3440;cursor:pointer;text-align:center;font-family:'DM Mono';z-index:3;pointer-events:auto;padding:0}
+.param-slot{overflow:visible}
+.haskell{white-space:pre-wrap;word-break:break-word;font:11px/1.6 'DM Mono'}
+.play-log li.rewindable{cursor:pointer}
+.play-log li.rewindable:hover{color:var(--accent-ink);text-decoration:underline}

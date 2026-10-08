@@ -7,6 +7,7 @@ import { createEvaluator, EvalError, isClosure, isData, showValue } from './eval
 import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from './typeDecls.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
+import { asciiType, printDefinition } from './haskellPrint.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 
@@ -38,7 +39,7 @@ app.innerHTML = `
       </aside>
       <section class="canvas-panel">
         <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><button class="tool-button" id="example" title="Load the click-counter example (undoable)">✦ <span>Example</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Unfold every plugged-in expression onto the canvas">⤢</button><button id="fold-all" title="Fold every expression back into its slot">⤡</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
       <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
@@ -401,7 +402,7 @@ function pointInValueBlock(node, x, y) { return Math.abs(x - node.x) <= CHIP_W /
 // widened with fixed padding for what draw() puts just outside that rect:
 // the param-tag pills above a function block's slots, and the two label
 // lines below every block/chip.
-function graphBounds(graphNodes = Object.values(activeNodes()).filter(n => !n.mountedTo)) {
+function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)) {
   if (!graphNodes.length) return null
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   graphNodes.forEach((n) => {
@@ -440,7 +441,7 @@ function freePosition(graph, width) {
   const cx = (view.left + view.right) / 2 - width / 2
   const cy = (view.top + view.bottom) / 2
   const overlaps = (x, y) => Object.values(graph).some((n) => {
-    if (n.mountedTo) return false
+    if (!isVisible(n)) return false
     const left = n.type === 'function' ? functionBlockLeft(n) : n.x - CHIP_W / 2
     const right = n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2
     return Math.abs(n.y - y) < FN_H + 40 && x - FN_LEFT - 40 < right && x + width + 40 > left
@@ -542,11 +543,73 @@ function useAgain(n) {
   state.selected = id
   updateInspector(); draw()
 }
+// A node plugged into a slot normally lives inside that slot's chip. It can
+// be *unfolded*: drawn on the canvas as well, with a link into its slot, so
+// its own slots can be seen and edited. Purely a view — it stays plugged in.
+function isVisible(n) { return !n.mountedTo || n.unfolded }
+function slotHost(n) {
+  const [hostId, index] = String(n.mountedTo || '').split(':')
+  const host = activeNodes()[hostId]
+  return host && host.type === 'function' ? { host, index: Number(index) } : null
+}
+function drawUnfoldedLinks() {
+  ctx.save()
+  ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1.5
+  Object.values(activeNodes()).filter((n) => n.mountedTo && n.unfolded).forEach((n) => {
+    const at = slotHost(n)
+    if (!at || !isVisible(at.host)) return
+    const from = toScreen({ x: n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2, y: n.y })
+    const to = slotScreenCenter(at.host, at.index)
+    const mid = (from.x + to.x) / 2
+    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(mid, from.y, mid, to.y, to.x, to.y + (SLOT_D / 2) * state.zoom); ctx.stroke()
+  })
+  ctx.restore()
+}
+function setUnfolded(n, unfolded) {
+  n.unfolded = unfolded
+  if (unfolded) { layoutTree(slotHost(n)?.host || n); fitToView() } // keep what was just unfolded in view
+  else draw()
+}
+// Unfold everything plugged into a slot in the current graph and lay each
+// expression tree out right-to-left from its root (arguments to the left of
+// the call that uses them), or fold everything back into its slots.
+function setAllUnfolded(unfolded) {
+  const graph = activeNodes()
+  Object.values(graph).forEach((n) => { if (n.mountedTo) n.unfolded = unfolded })
+  if (unfolded) Object.values(graph).filter((n) => !n.mountedTo && n.type === 'function').forEach(layoutTree)
+  draw(); fitToView()
+}
+const TREE_ROW = FN_H + 70
+const TREE_GAP = 70
+function nodeWidth(n) { return n.type === 'function' ? functionBlockWidth(n) : CHIP_W }
+function rightEdge(n) { return n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2 }
+function setRightEdge(n, right) { n.x = n.type === 'function' ? right - (functionBlockRight(n) - n.x) : right - CHIP_W / 2 }
+function unfoldedKids(n) {
+  const graph = activeNodes()
+  return (n.mounted || []).map((id) => graph[id]).filter((k) => k && k.unfolded)
+}
+function treeHeight(n) {
+  const kids = unfoldedKids(n)
+  return kids.length ? Math.max(TREE_ROW, kids.reduce((sum, k) => sum + treeHeight(k), 0)) : TREE_ROW
+}
+// Keep `root` where it is; place its unfolded arguments in a column to its
+// left, each subtree stacked in its own band, recursively.
+function layoutTree(root) {
+  const place = (n, right, top) => {
+    const h = treeHeight(n)
+    setRightEdge(n, right)
+    n.y = top + h / 2
+    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - CHIP_W / 2
+    let y = top
+    unfoldedKids(n).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k) })
+  }
+  place(root, rightEdge(root), root.y - treeHeight(root) / 2)
+}
 // A solid link from whatever feeds a function body's Output into it.
 function drawOutputLink() {
   const output = activeNodes().output
   const source = output?.source && activeNodes()[output.source]
-  if (!source || source.mountedTo) return
+  if (!source || !isVisible(source)) return
   const from = toScreen({ x: source.type === 'function' ? functionBlockRight(source) : source.x + CHIP_W / 2, y: source.y })
   const to = toScreen({ x: output.x - CHIP_W / 2, y: output.y })
   ctx.save()
@@ -560,9 +623,9 @@ function drawReferenceLinks() {
   const graph = activeNodes()
   ctx.save()
   ctx.setLineDash([4 * state.zoom, 4 * state.zoom]); ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1
-  Object.values(graph).filter((n) => n.type === 'ref' && !n.mountedTo).forEach((ref) => {
+  Object.values(graph).filter((n) => n.type === 'ref' && isVisible(n)).forEach((ref) => {
     const target = graph[ref.target]
-    if (!target || target.mountedTo) return
+    if (!target || !isVisible(target)) return
     const a = point(ref), b = point(target)
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
   })
@@ -578,7 +641,8 @@ function draw() {
   for (let y = state.offset.y % 24; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
   drawReferenceLinks()
   drawOutputLink()
-  Object.values(activeNodes()).filter(n => !n.mountedTo).forEach(n => {
+  drawUnfoldedLinks()
+  Object.values(activeNodes()).filter(isVisible).forEach(n => {
     const selected = state.selected === n.id
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
     if (n.type === 'function') drawFunctionBlock(n, pass, selected)
@@ -683,7 +747,7 @@ function detachMounted(node, index) {
   const moving = mountedId ? activeNodes()[mountedId] : null
   node.params[index] = ''
   node.mounted[index] = null
-  if (moving) { moving.mountedTo = null; moving.connected = false }
+  if (moving) { moving.mountedTo = null; moving.connected = false; moving.unfolded = false }
   return moving
 }
 function updatePortEditor(pass = typePass()) {
@@ -696,7 +760,7 @@ function updatePortEditor(pass = typePass()) {
   editor.innerHTML = ''
   // A function node plugged into a slot is hidden (it lives in that slot's
   // nested chip), so its own slots aren't shown either.
-  const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && !n.mountedTo)
+  const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
   visibleFunctions.forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
     const mountedId = node.mounted[index]
@@ -748,6 +812,16 @@ function updatePortEditor(pass = typePass()) {
       chip.style.background = colorForType(resolvedValueQual(mountedNode, activeNodes(), pass).type, labelNamer)
       chip.textContent = nodeDisplayText(mountedNode)
       chip.title = '드래그해서 떼어내기'
+      const unfold = document.createElement('button')
+      unfold.className = 'chip-unfold'; unfold.type = 'button'
+      unfold.textContent = mountedNode.unfolded ? '⤡' : '⤢'
+      unfold.title = mountedNode.unfolded ? 'Fold back into the slot' : 'Unfold onto the canvas (it stays plugged in)'
+      unfold.style.width = unfold.style.height = `${16 * state.zoom}px`
+      unfold.style.left = unfold.style.top = `${-6 * state.zoom}px`
+      unfold.style.fontSize = `${11 * state.zoom}px`; unfold.style.lineHeight = `${16 * state.zoom}px`
+      unfold.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
+      unfold.addEventListener('click', (event) => { event.stopPropagation(); setUnfolded(mountedNode, !mountedNode.unfolded) })
+      slot.append(unfold)
       chip.addEventListener('pointerdown', (event) => {
         event.preventDefault(); event.stopPropagation()
         const world = canvasPoint(event)
@@ -879,6 +953,16 @@ function runFunctionLaw(n, law) {
   lawResults.set(n.id, { ...(lawResults.get(n.id) || {}), [law]: result })
   updateInspector()
 }
+// The custom function `id` as Haskell: its signature and its definition,
+// read back from the body graph (src/haskellPrint.js).
+function definitionBlock(id) {
+  const def = nodes[id]
+  if (!def) return ''
+  const code = printDefinition(id, definitions, functionBodies)
+  if (!code) return ''
+  const signature = `${def.label} :: ${asciiType(functionSignature(def, nodes))}`
+  return `<div class="property"><label>DEFINITION</label><pre class="haskell">${escapeAttr(signature)}\n${escapeAttr(code)}</pre></div>`
+}
 function useAgainButton(n) {
   return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
 }
@@ -914,9 +998,9 @@ function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
   inspector.innerHTML = n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
@@ -995,7 +1079,7 @@ function executeFunction(fn) {
 // slot's own nested chip (see updatePortEditor's detach handler).
 function hitNode(x, y) {
   return Object.values(activeNodes()).find(n => {
-    if (n.mountedTo) return false
+    if (!isVisible(n)) return false
     return n.type === 'function' ? pointInFunctionBlock(n, x, y) : pointInValueBlock(n, x, y)
   })
 }
@@ -1014,7 +1098,7 @@ function hitNode(x, y) {
 // clobber a slot that already reads as meaningfully filled.
 const PRECISE_SLOT_RADIUS = 60
 function findSnapTarget(dragged) {
-  if (!dragged || dragged.type === 'output') return null
+  if (!dragged || dragged.type === 'output' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
   let best = null, bestDist = SNAP_RADIUS
   Object.values(activeNodes()).filter(isFunction).forEach((target) => {
     if (target.id === dragged.id) return
@@ -1153,7 +1237,7 @@ canvas.addEventListener('click', (event) => {
     return
   }
   const p = canvasPoint(event)
-  const fn = Object.values(activeNodes()).find(n => n.type === 'function' && !n.mountedTo && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
+  const fn = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
   if (fn) {
     executeFunction(fn)
     return
@@ -1164,7 +1248,7 @@ canvas.addEventListener('click', (event) => {
 // `main` opens its body, as does the inspector's "Open body".
 canvas.addEventListener('dblclick', (event) => {
   const p = canvasPoint(event)
-  const selected = Object.values(activeNodes()).find(n => n.type === 'function' && !n.mountedTo && pointInFunctionBlock(n, p.x, p.y))
+  const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
   const definitionId = selected && (selected.sourceFunctionId || selected.id)
   if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
 })
@@ -1349,7 +1433,18 @@ function renderPlay() {
   law.textContent = play.law.ok ? '✓ step is a monoid action of (ℝ≥0, +): time away is applied in one step' : `step is not a monoid action (${play.law.counterexample || play.law.law}): time away is simulated in slices`
   $('.play-log-label').textContent = `LOG · ${game.log.length} messages`
   $('.play-log').start = Math.max(1, game.log.length - 11)
-  $('.play-log').replaceChildren(...game.log.slice(-12).map((m) => Object.assign(document.createElement('li'), { textContent: showValue(m, types) })))
+  // Each entry rewinds to the state right after that message (time travel).
+  const first = Math.max(0, game.log.length - 12)
+  $('.play-log').replaceChildren(...game.log.slice(first).map((m, i) => {
+    const li = Object.assign(document.createElement('li'), { textContent: showValue(m, types) })
+    const count = first + i + 1
+    if (game.canRewind(count) && count < game.log.length) {
+      li.className = 'rewindable'
+      li.title = 'Rewind to just after this message'
+      li.onclick = () => { game.rewind(count); play.running = false; renderPlay(); showToast(`Rewound to message ${count} (paused)`) }
+    }
+    return li
+  }))
 }
 window.addEventListener('beforeunload', saveGame)
 document.querySelector('#example').onclick = () => {
@@ -1466,6 +1561,8 @@ window.addEventListener('keydown', (event) => {
 document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
 document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
 document.querySelector('#fit').onclick = () => fitToView()
+document.querySelector('#unfold-all').onclick = () => setAllUnfolded(true)
+document.querySelector('#fold-all').onclick = () => setAllUnfolded(false)
 window.addEventListener('resize', resize)
 document.querySelector('.add-node').addEventListener('click', createCustomFunction)
 document.querySelector('.add-type').addEventListener('click', () => openTypeDialog())

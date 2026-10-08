@@ -90,3 +90,18 @@ test('the example type-checks: main :: Program Model Msg', () => {
     setDynamicInstances([])
   }
 })
+
+test('time travel: rewind to the state right after an earlier message', () => {
+  const game = createGame(ev, ev.run(nodes, 'main'))
+  const [click, buy] = game.view().children.slice(3, 5).map((b) => b.msg)
+  for (let i = 0; i < 12; i++) game.dispatch(click)
+  game.dispatch(buy)
+  game.dispatch(click)
+  assert.equal(clicks(game), 4)
+  assert.ok(game.rewind(12))
+  assert.equal(clicks(game), 12)
+  assert.equal(game.log.length, 12)
+  assert.equal(game.canRewind(13), false, 'messages after the rewind point are gone')
+  game.dispatch(click)
+  assert.equal(clicks(game), 13, 'and play continues from there')
+})

@@ -17,6 +17,7 @@
 import { EvalError } from './evaluator.js'
 
 export const MAX_OFFLINE_SLICES = 20000
+export const MAX_HISTORY = 500
 
 /** A Haskell String (a list of Chars) as a JS string. */
 export function toJsString(v) {
@@ -60,6 +61,11 @@ export function createGame(ev, program, { exactTime = false } = {}) {
   let model = initial
   let log = []
   let time = 0
+  // The state right after each message (and at the start), for rewinding.
+  let history = [{ model, time, logLength: 0 }]
+  const remember = () => {
+    history = [...history, { model, time, logLength: log.length }].slice(-MAX_HISTORY)
+  }
 
   return {
     get model() { return model },
@@ -72,6 +78,20 @@ export function createGame(ev, program, { exactTime = false } = {}) {
     dispatch(msg) {
       model = ev.apply(handle, [msg, model])
       log = [...log, msg]
+      remember()
+    },
+    /** Go back to the state right after the first `count` messages (if still remembered); later messages are dropped. */
+    rewind(count) {
+      const at = history.findLast((h) => h.logLength === count)
+      if (!at) return false
+      model = at.model
+      time = at.time
+      log = log.slice(0, count)
+      history = history.filter((h) => h.logLength <= count)
+      return true
+    },
+    canRewind(count) {
+      return history.some((h) => h.logLength === count)
     },
     tick(dt) {
       model = ev.apply(step, [dt, model])
@@ -97,6 +117,7 @@ export function createGame(ev, program, { exactTime = false } = {}) {
       model = initial
       log = []
       time = 0
+      history = [{ model, time, logLength: 0 }]
     },
     snapshot() {
       return { model, log, time }
@@ -105,6 +126,7 @@ export function createGame(ev, program, { exactTime = false } = {}) {
       model = saved.model
       log = saved.log || []
       time = saved.time || 0
+      history = [{ model, time, logLength: log.length }]
     },
   }
 }

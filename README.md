@@ -51,6 +51,7 @@ npm run preview
 12. 카테고리 이론의 대수 구조도 하스켈 클래스 이름 그대로 있습니다(`src/categoryClasses.js`). `Semigroup`/`Monoid`(`(<>)`, `mempty`, `mconcat`) — 리스트는 자유 모노이드, `Endo a`는 합성·항등의 자기사상 모노이드, 한 대상에 구조가 여럿일 때는 `Sum`/`Product`로 고릅니다. `Functor`·`Foldable`(`fmap`, `foldMap` — 자유 모노이드에서 나가는 유일한 준동형), `PartialOrd`·`Lattice`(`leq`, `(\/)`, `(/\)` — 순서 집합은 thin 카테고리), `VectorSpace`(`(*^)`). 곱 타입은 등식만으로 정의되는 구조를 점별로 가질 수 있습니다(Lawvere 이론): `deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)`, `deriving (Semigroup, Monoid) via Generically T`. `Field`나 `Ord`처럼 곱에서 살아남지 않는 구조는 이유와 함께 거부됩니다. 숫자 리터럴은 곱을 따라 대각선으로 퍼지고(ℤ → R×S), `mempty`는 관찰될 때 맞는 모양(`[]`, `Nothing`, `Sum 0`, 항등 함수, 필드별 `mempty`)이 됩니다.
 13. 법칙 검사(`src/laws.js`): 타입 선언을 열면 그 타입이 가진 모든 대수 인스턴스의 법칙(결합·항등·역원·교환·분배·격자·벡터 공간)을 표본으로 실제 실행해 확인한 결과가 표시됩니다. 커스텀 함수의 인스펙터 `LAWS`에서는 그 함수가 모노이드 준동형(예: 생산량 `Owned → Wallet`), 모노이드 작용(예: `tick :: Double → Model → Model` — 통과하면 방치 보상을 한 번에 계산할 수 있음), 팽창적(예: 업적은 되돌아가지 않음)인지 검사하고, 실패하면 반례를 보여 줍니다. 다형 함수는 GHC 디폴팅 규칙으로 구체 타입을 정해 검사합니다.
 14. 게임 만들기(`src/runtime.js`): PRELUDE의 `Game` 그룹에 하스켈 gloss의 `play`와 같은 모양의 `program :: m → (m → Widget e) → (e → m → m) → (Double → m → m) → Program m e`와 위젯(`text`, `button 라벨 메시지`, `column`, `row`, `progress`)이 있습니다. 진입 함수(`ENTRY POINT`)가 `Program` 값이면 `Run graph`가 게임을 실행합니다: 캔버스 위 패널에 `view`가 그려지고, 버튼은 메시지를 `handle`로 보내며, 시간은 0.1초 단위로 `step`을 거칩니다. 일시정지·`+1s`·배속·게임 리셋, 현재 모델과 메시지 기록이 함께 표시됩니다. 게임 상태는 시각과 함께 저장되어, 다시 열면 지나간 시간이 적용됩니다 — `step`이 (ℝ≥0, +)의 모노이드 작용 법칙을 통과하면 한 번의 호출로, 아니면 잘게 나눠 시뮬레이션합니다. 상단 `Example`은 그래프만으로 만든 클릭 카운터 예제(`src/examples/clickCounter.js`)를 불러옵니다(실행 취소 가능).
+15. 슬롯 안에 들어간 식은 칩 왼쪽 위의 `⤢`로 캔버스에 펼칠 수 있습니다(슬롯에 연결된 채로, 연결선과 함께 표시되며 그 노드의 슬롯도 편집 가능). 확대/축소 컨트롤의 `⤢`/`⤡`는 현재 그래프의 모든 식을 트리 모양(인자가 왼쪽)으로 펼치거나 다시 접습니다. 커스텀 함수를 선택하거나 함수 본체에서 Output을 선택하면 인스펙터의 `DEFINITION`에 그 함수가 하스켈 정의로 표시됩니다(`src/haskellPrint.js` — 중위 연산자와 섹션, 여러 번 쓰인 값은 `where`로 공유, 중간 슬롯이 빈 부분 적용은 람다). 게임 실행 중 메시지 기록의 항목을 누르면 그 메시지 직후의 상태로 되감깁니다(시간 여행).
 
 ## 캔버스 조작
 
@@ -83,7 +84,8 @@ npm run preview
 - `src/classEnv.js`: 클래스 환경과 제약 해소기(문맥 있는 인스턴스, entailment, context reduction, 디폴팅)
 - `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소기를 다시 내보내는 진입점(하스켈 Prelude처럼)
 - `src/laws.js`: 클래스 법칙과 함수 법칙(준동형·작용·팽창)을 표본으로 검사하는 법칙 검사기
-- `src/runtime.js`: `Program` 값을 실행하는 게임 런타임(메시지·시간·방치 보상)
+- `src/runtime.js`: `Program` 값을 실행하는 게임 런타임(메시지·시간·방치 보상·되감기)
+- `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력하는 프린터
 - `src/examples/clickCounter.js`: 그래프로 만든 클릭 카운터 예제 프로젝트
 - `src/project.js`: 프로젝트 직렬화·불러오기 검증·기초 함수 병합·실행 취소 기록
 - `src/style.css`: 레이아웃과 반응형 스타일
