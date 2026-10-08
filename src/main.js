@@ -61,7 +61,7 @@ const canvas = document.querySelector('#graph-canvas')
 const ctx = canvas.getContext('2d')
 const editor = document.querySelector('#port-editor')
 const inspector = document.querySelector('#inspector-content')
-const state = { functionStack: [], zoom: 1, offset: { x: 0, y: 0 }, selected: 'add', running: false, drag: null, pan: null, snapTarget: null, activeFunction: null, suppressClick: false }
+const state = { functionStack: [], multi: new Set(), zoom: 1, offset: { x: 0, y: 0 }, selected: 'add', running: false, drag: null, pan: null, snapTarget: null, activeFunction: null, suppressClick: false }
 const nodes = {
   add: { id: 'add', type: 'function', x: 300, y: 190, label: 'add', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#6c5ce7', scope: 'main', builtin: 'succ', readonly: true, expression: 'λn f x. f (n f x)' },
   identity: { id: 'identity', type: 'function', x: 820, y: 190, label: 'identity', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#4f8ef7', scope: 'main', builtin: 'identity', readonly: true, expression: 'λx. x' },
@@ -89,7 +89,7 @@ const nodes = {
   select: { id: 'select', type: 'function', x: 820, y: 2610, label: 'select', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'select', readonly: true, expression: 'λc a b. c ? a : b' },
 }
 function activeNodes() { return state.activeFunction ? functionBodies[state.activeFunction] : nodes }
-function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => nodes[id]?.label || '?').join(' / ') : 'main' }
+function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${nodes[id]?.label || '?'}`).join(' / ') : '⌂ top level' }
 const functionBodies = {
   add: {
     inputX: { id: 'add-input-x', type: 'parameter', typeName: 'Int', x: 110, y: 180, label: 'x', value: 'x', color: '#4f8ef7' },
@@ -137,7 +137,7 @@ const derivedDefs = {}
 // Haskell names. Like derived definitions they're listed in the sidebar
 // rather than drawn on the main canvas.
 const PRELUDE = [
-  ['Lists', [['listOf', '[ , , ]', ['x1', 'x2', 'x3']], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
+  ['Lists', [['listOf', '[ , , ]', []], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
   ['Text', [['show', 'show', ['x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
   ['Pairs · Random', [['pair', '(,)', ['a', 'b']], ['fst', 'fst', ['p']], ['snd', 'snd', ['p']], ['mkStdGen', 'mkStdGen', ['seed']], ['randomR', 'randomR', ['range', 'gen']], ['randomRInt', 'randomRInt', ['range', 'gen']]]],
@@ -822,7 +822,7 @@ function draw() {
   drawOutputLink()
   drawUnfoldedLinks()
   Object.values(activeNodes()).filter(isVisible).forEach(n => {
-    const selected = state.selected === n.id
+    const selected = state.selected === n.id || state.multi.has(n.id)
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
     if (n.type === 'function') drawFunctionBlock(n, pass, selected)
     else drawValueChip(n, pass, selected, snapHighlight)
@@ -832,6 +832,7 @@ function draw() {
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
   document.querySelector('#back-graph').hidden = !state.activeFunction
+  document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${nodes[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
   if (!state.drag) scheduleCheckpoint()
@@ -846,11 +847,12 @@ function draw() {
 // holes in it.
 function drawFunctionBlock(node, pass, selected) {
   const rect = functionBlockScreenRect(node), p = point(node)
+  const broken = callProblem(node)
   ctx.save()
   ctx.shadowColor = selected ? `${ACCENT}40` : '#211d3414'; ctx.shadowBlur = 0; ctx.shadowOffsetY = selected ? 4 : 3
   roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (FN_H / 2) * state.zoom)
   ctx.fillStyle = '#fff'; ctx.fill()
-  ctx.shadowColor = 'transparent'; ctx.lineWidth = selected ? 3 : 2; ctx.strokeStyle = selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
+  ctx.shadowColor = 'transparent'; ctx.lineWidth = selected || broken ? 3 : 2; ctx.strokeStyle = broken ? '#e0537d' : selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
   ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('ƒ', p.x, p.y + 1)
   const playX = rect.right - 24 * state.zoom, playY = rect.top + 2 * state.zoom
@@ -930,6 +932,25 @@ function detachMounted(node, index) {
   return moving
 }
 // 'signature' for a custom function's own definition, 'elements' for a list literal, else false.
+// Why a call node no longer matches what it calls (a type edit renamed a
+// constructor or field, or a signature changed underneath it), or null.
+function callProblem(node) {
+  if (node.type !== 'function' || !node.sourceFunctionId) return null
+  const def = definitions[node.sourceFunctionId]
+  if (!def) return `${node.label} no longer exists (renamed or deleted)`
+  if (def.builtin === 'listOf') return null
+  const arity = def.custom ? Object.values(functionBodies[def.id] || {}).filter((n) => n.type === 'parameter').length : def.derived ? def.derived.arity : def.params?.length
+  if (arity !== undefined && arity !== node.params.length) return `${def.label} now takes ${arity} argument${arity === 1 ? '' : 's'}, this call has ${node.params.length} slot${node.params.length === 1 ? '' : 's'}`
+  return null
+}
+// Give a call node exactly as many slots as its function takes (dropping the extra ones' contents).
+function fixCallSlots(node) {
+  const def = definitions[node.sourceFunctionId]
+  if (!def) return
+  const arity = def.custom ? Object.values(functionBodies[def.id] || {}).filter((n) => n.type === 'parameter').length : def.derived ? def.derived.arity : def.params.length
+  while (node.params.length > arity) { detachMounted(node, node.params.length - 1); node.params.pop(); node.mounted.pop(); node.paramScopes?.pop() }
+  while (node.params.length < arity) { node.params.push(''); node.mounted.push(null); node.paramScopes?.push('local') }
+}
 function isSignatureEditable(node) {
   if (nodes[node.id] === node && node.custom) return 'signature'
   if (nodes[node.sourceFunctionId]?.lambda) return 'signature'
@@ -1252,7 +1273,7 @@ function updateInspector() {
   inspector.innerHTML = n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
@@ -1268,6 +1289,8 @@ function updateInspector() {
   if (disconnectOutput) disconnectOutput.onclick = () => { const source = activeNodes()[n.source]; if (source) source.connected = false; n.source = null; n.value = 'open'; updateInspector(); draw() }
   document.querySelectorAll('.law-check[data-law]').forEach((button) => { button.onclick = () => runFunctionLaw(n, button.dataset.law) })
   document.querySelectorAll('.law-check[data-pin]').forEach((button) => { button.onclick = () => pinLaw(n, button.dataset.pin) })
+  const fixSlots = document.querySelector('#fix-slots')
+  if (fixSlots) fixSlots.onclick = () => { fixCallSlots(n); updateInspector(); draw() }
   const openBody = document.querySelector('#open-body')
   if (openBody) openBody.onclick = () => enterFunction(n.sourceFunctionId || n.id)
   const useAgainNode = document.querySelector('#use-again')
@@ -1437,6 +1460,11 @@ canvas.addEventListener('pointerdown', (event) => {
   const p = canvasPoint(event), node = hitNode(p.x, p.y)
   canvas.setPointerCapture(event.pointerId)
   if (node) {
+    // Shift+click adds to / removes from a multi-selection (moved, deleted and copied together).
+    if (event.shiftKey) {
+      if (state.multi.size === 0 && state.selected && activeNodes()[state.selected]) state.multi.add(state.selected)
+      state.multi.has(node.id) ? state.multi.delete(node.id) : state.multi.add(node.id)
+    } else if (!state.multi.has(node.id)) state.multi.clear()
     state.selected = node.id
     if (node.type === 'output') {
       updateInspector()
@@ -1446,6 +1474,7 @@ canvas.addEventListener('pointerdown', (event) => {
     beginDrag(node, p)
     updateInspector(); draw()
   } else {
+    if (!event.shiftKey) state.multi.clear()
     state.pan = { x: event.clientX, y: event.clientY, offsetX: state.offset.x, offsetY: state.offset.y }
     canvas.classList.add('panning')
   }
@@ -1460,8 +1489,11 @@ window.addEventListener('pointermove', (event) => {
   if (state.drag) {
     const p = canvasPoint(event)
     if (Math.hypot(event.movementX, event.movementY) > 2) state.drag.moved = true
-    state.drag.node.x = p.x - state.drag.dx
-    state.drag.node.y = p.y - state.drag.dy
+    const dx = p.x - state.drag.dx - state.drag.node.x, dy = p.y - state.drag.dy - state.drag.node.y
+    state.drag.node.x += dx
+    state.drag.node.y += dy
+    // the rest of a multi-selection moves with it
+    if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m && m !== state.drag.node) { m.x += dx; m.y += dy } })
     state.snapTarget = findSnapTarget(state.drag.node)
     draw()
   } else if (state.pan) {
@@ -1870,6 +1902,44 @@ importFile.onchange = async () => {
     throw error
   }
 }
+// --- Copy / paste -------------------------------------------------------------
+// Copies the selected node(s) together with everything plugged into their
+// slots (the whole expression), and pastes them with fresh ids into the
+// graph in view. Builtins, Output and parameters aren't copied.
+let clipboard = null
+function copySelection() {
+  const graph = activeNodes()
+  const roots = (state.multi.size ? [...state.multi] : [state.selected]).map((id) => graph[id]).filter((n) => n && !n.readonly && n.type !== 'output' && n.type !== 'parameter' && !(graph === nodes && n.custom))
+  if (!roots.length) return showToast('Nothing copyable selected (builtins, Output, parameters and function definitions stay put)')
+  const take = new Map()
+  const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])) }
+  roots.forEach(visit)
+  clipboard = [...take.values()]
+  showToast(`Copied ${clipboard.length} node${clipboard.length > 1 ? 's' : ''}`)
+}
+function pasteClipboard() {
+  if (!clipboard) return
+  const graph = activeNodes()
+  const stamp = Date.now()
+  const ids = new Map(clipboard.map((n, i) => [n.id, `${n.id.replace(/-copy-\d+-\d+$/, '')}-copy-${stamp}-${i}`]))
+  state.multi.clear()
+  for (const original of clipboard) {
+    const n = structuredClone(original)
+    n.id = ids.get(original.id)
+    n.x += 60; n.y += 60
+    if (n.mounted) n.mounted = n.mounted.map((m) => (m && ids.has(m) ? ids.get(m) : null))
+    if (n.mounted) n.params = n.params.map((text, i) => (original.mounted?.[i] && !ids.has(original.mounted[i]) ? '' : text))
+    if (n.mountedTo) { const [host, slot] = n.mountedTo.split(':'); n.mountedTo = ids.has(host) ? `${ids.get(host)}:${slot}` : null; if (!n.mountedTo) n.connected = false }
+    if (n.type === 'ref' && ids.has(n.target)) n.target = ids.get(n.target)
+    if (n.type === 'ref' && !graph[n.target] && !ids.has(original.target)) continue // its original isn't in this graph
+    graph[n.id] = n
+    if (!n.mountedTo) state.multi.add(n.id)
+  }
+  // the pasted copies keep only references whose target exists
+  state.selected = [...state.multi][0] || state.selected
+  updateInspector(); draw()
+  showToast(`Pasted ${clipboard.length} node${clipboard.length > 1 ? 's' : ''}`)
+}
 // --- Keyboard ---------------------------------------------------------------
 window.addEventListener('keydown', (event) => {
   const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
@@ -1880,7 +1950,12 @@ window.addEventListener('keydown', (event) => {
   const key = event.key.toLowerCase()
   if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
   else if (mod && key === 'y') { event.preventDefault(); redo() }
-  else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteNode(state.selected) }
+  else if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault()
+    if (state.multi.size) { const ids = [...state.multi]; state.multi.clear(); ids.forEach((id) => activeNodes()[id] && deleteNode(id)) }
+    else deleteNode(state.selected)
+  } else if (mod && key === 'c') { event.preventDefault(); copySelection() }
+  else if (mod && key === 'v') { event.preventDefault(); pasteClipboard() }
 })
 document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
 document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)

@@ -307,3 +307,4 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .w-tinted .w-button{background:var(--tint);box-shadow:none}
 .w-tinted .w-text{color:inherit}
 .w-drawing{background:#fff;border:1px solid var(--line);border-radius:var(--radius-sm);align-self:center}
+.broken-call .connection-tag{border-color:#f5c6d4;color:#c0335e}
