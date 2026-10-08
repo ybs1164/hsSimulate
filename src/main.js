@@ -433,7 +433,7 @@ function createFunctionBody(id, params) {
   params.forEach((name, index) => {
     body[`input-${id}-${index}`] = {
       id: `input-${id}-${index}`, type: 'parameter',
-      x: 110, y: 180 + index * 120, label: name, value: name, color: '#4f8ef7',
+      x: 110, y: 180 + index * 160, label: name, value: name, color: '#4f8ef7',
     }
   })
   body.output = {
@@ -515,8 +515,10 @@ const SLOT_D = 64        // embedded parameter slot circle diameter
 const FN_TAIL = 52       // right padding after the last slot before the block's right edge — room for the ▶ badge on the top border, clear of the last slot's tag
 const TAG_MIN_ZOOM = .45 // below this zoom slot tags are hidden (too small to read)
 const TAG_GAP = 8        // world px kept free between neighbouring slot tags (a tag is at most SLOT_STRIDE - TAG_GAP wide)
-const CHIP_W = 132       // value/boolean/output/curried chip width — same pill language as the function block, just shorter
-const CHIP_H = 64        // chip height — matches SLOT_D so a standalone chip reads as the same unit as an embedded slot
+const CHIP_W = 150       // default (and minimum) value-chip width; a chip grows with its content up to CHIP_MAX_W
+const CHIP_MAX_W = 420   // past this a chip's text is cut with an ellipsis (never squeezed)
+const CHIP_H = FN_H      // chip height — the same height as a function block, so a value is visibly the same pill, not a flattened one
+const CHIP_FONT = 15     // world px, value text inside a chip
 const SNAP_RADIUS = 130  // world-space magnet radius: highlight + auto-connect distance
 const TYPE_COLORS = { Int: '#4f8ef7', Integer: '#e8b23c', Word: '#35b4e0', Float: '#3cbe84', Double: '#a96ef0', Rational: '#d66bd1', Natural: '#e07a5f', Bool: '#ed6b84' }
 const VAR_PALETTE = ['#8b7cf2', '#5fa8e8', '#3cbe9e', '#e8b23c', '#ed8fa8', '#4fc2c2', '#b98fef', '#f0954a']
@@ -557,16 +559,27 @@ function pointInFunctionBlock(node, x, y) { return x >= functionBlockLeft(node) 
 // Value/boolean/output/curried chip geometry — the same rect-plus-stadium-
 // radius recipe as the function block above, just fixed-width since these
 // never grow embedded slots.
+// A value chip is as wide as its content needs (head badge + text), within
+// [CHIP_W, CHIP_MAX_W] world px.
+function chipWidth(node) {
+  ctx.save()
+  ctx.font = `600 ${CHIP_FONT}px ui-monospace, monospace`
+  const text = ctx.measureText(nodeDisplayText(node)).width
+  ctx.restore()
+  return Math.min(CHIP_MAX_W, Math.max(CHIP_W, 46 + 23 + 14 + text + 32))
+}
+function chipHalfWidth(node) { return chipWidth(node) / 2 }
 function valueBlockScreenRect(node) {
   const p = point(node)
+  const half = chipHalfWidth(node)
   return {
-    left: p.x - (CHIP_W / 2) * state.zoom,
-    right: p.x + (CHIP_W / 2) * state.zoom,
+    left: p.x - half * state.zoom,
+    right: p.x + half * state.zoom,
     top: p.y - (CHIP_H / 2) * state.zoom,
     height: CHIP_H * state.zoom,
   }
 }
-function pointInValueBlock(node, x, y) { return Math.abs(x - node.x) <= CHIP_W / 2 && Math.abs(y - node.y) <= CHIP_H / 2 }
+function pointInValueBlock(node, x, y) { return Math.abs(x - node.x) <= chipHalfWidth(node) && Math.abs(y - node.y) <= CHIP_H / 2 }
 // World-space bounding box of every node currently on screen (skips anything
 // mounted into a slot, same filter draw() uses) — the block/chip's own rect
 // widened with fixed padding for what draw() puts just outside that rect:
@@ -577,8 +590,8 @@ function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   graphNodes.forEach((n) => {
     const isFn = n.type === 'function'
-    const left = isFn ? functionBlockLeft(n) : n.x - CHIP_W / 2
-    const right = isFn ? functionBlockRight(n) : n.x + CHIP_W / 2
+    const left = isFn ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
+    const right = isFn ? functionBlockRight(n) : n.x + chipHalfWidth(n)
     const halfH = (isFn ? FN_H : CHIP_H) / 2
     minX = Math.min(minX, left); maxX = Math.max(maxX, right)
     minY = Math.min(minY, n.y - halfH - 40); maxY = Math.max(maxY, n.y + halfH + 50)
@@ -612,8 +625,8 @@ function freePosition(graph, width) {
   const cy = (view.top + view.bottom) / 2
   const overlaps = (x, y) => Object.values(graph).some((n) => {
     if (!isVisible(n)) return false
-    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - CHIP_W / 2
-    const right = n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2
+    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
+    const right = n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n)
     return Math.abs(n.y - y) < FN_H + 40 && x - FN_LEFT - 40 < right && x + width + 40 > left
   })
   const inside = (x, y) => x - FN_LEFT >= view.left + 30 && x + width <= view.right - 30 && y - FN_H / 2 >= view.top + 30 && y + FN_H / 2 + 50 <= view.bottom - 30
@@ -737,7 +750,7 @@ function drawUnfoldedLinks() {
   Object.values(activeNodes()).filter((n) => n.mountedTo && n.unfolded).forEach((n) => {
     const at = slotHost(n)
     if (!at || !isVisible(at.host)) return
-    const from = toScreen({ x: n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2, y: n.y })
+    const from = toScreen({ x: n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n), y: n.y })
     const to = slotScreenCenter(at.host, at.index)
     const mid = (from.x + to.x) / 2
     ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(mid, from.y, mid, to.y, to.x, to.y + (SLOT_D / 2) * state.zoom); ctx.stroke()
@@ -760,9 +773,9 @@ function setAllUnfolded(unfolded) {
 }
 const TREE_ROW = FN_H + 70
 const TREE_GAP = 70
-function nodeWidth(n) { return n.type === 'function' ? functionBlockWidth(n) : CHIP_W }
-function rightEdge(n) { return n.type === 'function' ? functionBlockRight(n) : n.x + CHIP_W / 2 }
-function setRightEdge(n, right) { n.x = n.type === 'function' ? right - (functionBlockRight(n) - n.x) : right - CHIP_W / 2 }
+function nodeWidth(n) { return n.type === 'function' ? functionBlockWidth(n) : chipWidth(n) }
+function rightEdge(n) { return n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n) }
+function setRightEdge(n, right) { n.x = n.type === 'function' ? right - (functionBlockRight(n) - n.x) : right - chipHalfWidth(n) }
 function unfoldedKids(n) {
   const graph = activeNodes()
   return (n.mounted || []).map((id) => graph[id]).filter((k) => k && k.unfolded)
@@ -778,7 +791,7 @@ function layoutTree(root) {
     const h = treeHeight(n)
     setRightEdge(n, right)
     n.y = top + h / 2
-    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - CHIP_W / 2
+    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
     let y = top
     unfoldedKids(n).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k) })
   }
@@ -789,8 +802,8 @@ function drawOutputLink() {
   const output = activeNodes().output
   const source = output?.source && activeNodes()[output.source]
   if (!source || !isVisible(source)) return
-  const from = toScreen({ x: source.type === 'function' ? functionBlockRight(source) : source.x + CHIP_W / 2, y: source.y })
-  const to = toScreen({ x: output.x - CHIP_W / 2, y: output.y })
+  const from = toScreen({ x: source.type === 'function' ? functionBlockRight(source) : source.x + chipHalfWidth(source), y: source.y })
+  const to = toScreen({ x: output.x - chipHalfWidth(output), y: output.y })
   ctx.save()
   ctx.strokeStyle = ACCENT; ctx.lineWidth = 2
   ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke()
@@ -885,18 +898,24 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   ctx.lineWidth = snapHighlight ? 4 : selected ? 3 : 2
   ctx.strokeStyle = snapHighlight || selected ? ACCENT : NEUTRAL_BORDER
   ctx.stroke()
-  const badgeX = rect.left + 30 * state.zoom
-  ctx.beginPath(); ctx.arc(badgeX, p.y, 15 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = badgeColor; ctx.fill()
+  // Same proportions as a function block's head: a 23px badge, 46px in from the left end.
+  const badgeX = rect.left + 46 * state.zoom
+  ctx.beginPath(); ctx.arc(badgeX, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = badgeColor; ctx.fill()
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'
-  ctx.font = isFunctionValued ? `700 ${14 * state.zoom}px 'Space Grotesk', sans-serif` : `700 ${11 * state.zoom}px ui-monospace, monospace`
+  ctx.font = isFunctionValued ? `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif` : `700 ${16 * state.zoom}px ui-monospace, monospace`
   ctx.fillText(glyph, badgeX, p.y + 1)
-  const content = nodeDisplayText(node)
-  ctx.save() // clip long content (e.g. a wired-up output's "ƒ compose") to the pill so it can't bleed past the rounded right cap
-  roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (CHIP_H / 2) * state.zoom)
-  ctx.clip()
-  ctx.textAlign = 'left'; ctx.fillStyle = '#211d34'; ctx.font = `600 ${12 * state.zoom}px ui-monospace, monospace`
-  ctx.fillText(content, badgeX + 24 * state.zoom, p.y + 1, rect.right - (badgeX + 24 * state.zoom) - 10 * state.zoom)
-  ctx.restore()
+  // Text never gets squeezed to fit (fillText's maxWidth would narrow the
+  // glyphs): a chip grows with its content, and past CHIP_MAX_W the text
+  // is cut with an ellipsis.
+  ctx.textAlign = 'left'; ctx.fillStyle = '#211d34'; ctx.font = `600 ${CHIP_FONT * state.zoom}px ui-monospace, monospace`
+  const textX = badgeX + (23 + 14) * state.zoom
+  const room = rect.right - textX - 28 * state.zoom
+  let content = nodeDisplayText(node)
+  if (ctx.measureText(content).width > room) {
+    while (content.length > 1 && ctx.measureText(`${content}…`).width > room) content = content.slice(0, -1)
+    content = `${content}…`
+  }
+  ctx.fillText(content, textX, p.y + 1)
   label(node, p, rect.top + rect.height, pass)
   ctx.restore()
 }
@@ -930,6 +949,24 @@ function detachMounted(node, index) {
   node.mounted[index] = null
   if (moving) { moving.mountedTo = null; moving.connected = false; moving.unfolded = false }
   return moving
+}
+// A block that just grew (a slot was added) pushes whatever it now overlaps
+// on its right further right, so nothing ends up hidden underneath it.
+function makeRoom(grown) {
+  const graph = activeNodes()
+  const leftOf = (n) => (n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n))
+  const rightOf = (n) => (n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n))
+  const queue = [grown]
+  for (let guard = 0; queue.length && guard < 200; guard++) {
+    const block = queue.shift()
+    for (const n of Object.values(graph)) {
+      if (n === block || n === grown || !isVisible(n) || Math.abs(n.y - block.y) >= FN_H + 40) continue
+      if (leftOf(n) >= leftOf(block) && leftOf(n) < rightOf(block) + 40) {
+        n.x += rightOf(block) + 60 - leftOf(n)
+        queue.push(n)
+      }
+    }
+  }
 }
 // 'signature' for a custom function's own definition, 'elements' for a list literal, else false.
 // Why a call node no longer matches what it calls (a type edit renamed a
@@ -1105,6 +1142,7 @@ function updatePortEditor(pass = typePass()) {
     add.addEventListener('click', () => {
       if (editable === 'signature') addParameter({ nodes, functionBodies }, nodes[node.sourceFunctionId]?.lambda ? node.sourceFunctionId : node.id)
       else { node.params.push(''); node.mounted.push(null); node.paramScopes.push('local') }
+      makeRoom(node)
       state.selected = node.id; renderFunctionLibrary(); updateInspector(); draw()
     })
     editor.append(add)
@@ -1417,8 +1455,8 @@ function finishConnection(dragged) {
     output.source = dragged.id
     output.value = nodeDisplayText(dragged)
     dragged.connected = true
-    const width = dragged.type === 'function' ? functionBlockRight(dragged) - dragged.x : CHIP_W / 2
-    dragged.x = output.x - CHIP_W / 2 - 70 - width
+    const width = dragged.type === 'function' ? functionBlockRight(dragged) - dragged.x : chipHalfWidth(dragged)
+    dragged.x = output.x - chipHalfWidth(output) - 70 - width
     dragged.y = output.y
     state.selected = output.id
     return true

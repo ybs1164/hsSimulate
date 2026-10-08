@@ -50,7 +50,7 @@ export function addParameter(project, fnId, name) {
   while (body[`input-${fnId}-${k}`]) k++
   const id = `input-${fnId}-${k}`
   const last = params[params.length - 1]
-  body[id] = { id, type: 'parameter', label, value: label, color: '#4f8ef7', x: last ? last.x : 110, y: last ? last.y + 120 : 180 }
+  body[id] = { id, type: 'parameter', label, value: label, color: '#4f8ef7', x: last ? last.x : 110, y: last ? last.y + 160 : 180 }
   def.params.push(label)
   def.mounted.push(null)
   def.paramScopes?.push('local')

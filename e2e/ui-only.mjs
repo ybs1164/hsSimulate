@@ -8,7 +8,7 @@
 // Needs a local Chrome/Chromium (set CHROME=/path/to/chrome if it isn't
 // found). Starts its own Vite dev server. Run with `npm run test:e2e`.
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -49,7 +49,10 @@ async function check(name, fn) {
     console.log(`  ✓ ${name}${note ? ` — ${note}` : ''}`)
   } catch (e) {
     failures++
-    console.log(`  ✗ ${name}: ${e.message}`)
+    const shot = join(tmpdir(), `hs-e2e-failure-${failures}.png`)
+    try { writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64')) } catch {}
+    console.log(`  ✗ ${name}: ${e.message}
+    screenshot: ${shot}`)
   }
 }
 const expect = (cond, message) => { if (!cond) throw new Error(message) }

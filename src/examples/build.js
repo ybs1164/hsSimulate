@@ -44,7 +44,7 @@ function layout(graph) {
   free.forEach((x, i) => {
     const isResult = x.id === output.source
     x.x = isResult ? 520 : 110
-    x.y = isResult ? 255 : 150 + i * 130
+    x.y = isResult ? 255 : 150 + i * 160
   })
   output.x = 980
   output.y = 255
