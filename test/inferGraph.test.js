@@ -92,3 +92,15 @@ test('a curried Play result keeps its constraints, instantiated fresh per use', 
   assert.deepEqual(pass.perNode.get('ap').invalidSlots, [1], 'Semiring Bool is unsatisfiable')
   assert.equal(valueSig(infer({ c: { id: 'c', type: 'curried', resolvedScheme } }), 'c'), 'Semiring a ⇒ a → a')
 })
+
+test('a reference is the same value: both uses constrain one type', () => {
+  const pass = infer({
+    lit: num('lit', '4'),
+    r: { id: 'r', type: 'ref', target: 'lit' },
+    z: fn('z', 'isZero', ['lit']),
+    s: fn('s', 'sqrt', ['r']),
+  })
+  assert.throws(() => reduce(pass.preds), 'Int (from isZero) has no Transcendental instance')
+  const ok = infer({ lit: num('lit', '4'), r: { id: 'r', type: 'ref', target: 'lit' }, p: fn('p', 'plus', ['lit', 'r']) })
+  assert.equal(valueSig(ok, 'r'), 'Semiring a ⇒ a')
+})

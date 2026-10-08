@@ -149,6 +149,13 @@ function resolveNodeType(id, graph, ctx, memo) {
   const node = graph[id]
   if (!node) return { kind: 'value', valueType: freshVar() }
 
+  if (node.type === 'ref') {
+    // The diagonal Δ : A → A × A — a second use of the same value. It *is*
+    // its target's entry (same memo object), so both uses share one type.
+    const entry = graph[node.target] ? resolveNodeType(node.target, graph, ctx, memo) : { kind: 'value', valueType: freshVar() }
+    memo.set(id, entry)
+    return entry
+  }
   if (node.type === 'parameter') {
     const entry = { kind: 'value', valueType: freshVar() }
     memo.set(id, entry)

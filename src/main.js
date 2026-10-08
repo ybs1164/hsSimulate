@@ -3,7 +3,7 @@ import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, 
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
 import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes } from './prelude.js'
 import { createEvaluator, EvalError, isClosure } from './evaluator.js'
-import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject } from './project.js'
+import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 
 const app = document.querySelector('#app')
 
@@ -152,7 +152,7 @@ function createFunctionBody(id, params) {
     }
   })
   body.output = {
-    id: `${id}-output`, type: 'output', x: 570, y: 255,
+    id: 'output', type: 'output', x: 570, y: 255,
     label: 'Output', value: params[0] || '0', color: '#2fbf8f',
   }
   if (params.length) body.output.source = `input-${id}-0`
@@ -376,7 +376,56 @@ function canConnect(source, target, index) {
     return false
   }
 }
-function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : 'Number · Int' }
+function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : 'Number · Int' }
+// The short text a node shows inside its chip / a slot's nested chip. A
+// reference shows what it refers to, so it always reads the same as its
+// original even after the original's value is edited.
+function nodeDisplayText(node, graph = activeNodes()) {
+  if (!node) return '?'
+  if (node.type === 'ref') return `↪ ${nodeDisplayText(graph[node.target], graph)}`
+  if (node.type === 'function') return `ƒ ${node.label}`
+  if (node.type === 'curried') return node.value || 'ƒ'
+  if (node.type === 'output') return node.value ?? 'Output'
+  return String(node.value ?? node.label)
+}
+// Another use of `n`'s value — the diagonal Δ : A → A × A. A node can only be
+// plugged into one slot, so to use a value twice (say a parameter `m` read by
+// two calls), plug in references to it.
+function useAgain(n) {
+  const graph = activeNodes()
+  const original = n.type === 'ref' ? graph[n.target] : n
+  if (!original) return
+  const id = `ref-${Date.now()}`
+  graph[id] = { id, type: 'ref', target: original.id, label: `↪ ${original.label}`, x: n.x + 40, y: n.y + 90 }
+  state.selected = id
+  updateInspector(); draw()
+}
+// A solid link from whatever feeds a function body's Output into it.
+function drawOutputLink() {
+  const output = activeNodes().output
+  const source = output?.source && activeNodes()[output.source]
+  if (!source || source.mountedTo) return
+  const from = toScreen({ x: source.type === 'function' ? functionBlockRight(source) : source.x + CHIP_W / 2, y: source.y })
+  const to = toScreen({ x: output.x - CHIP_W / 2, y: output.y })
+  ctx.save()
+  ctx.strokeStyle = ACCENT; ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke()
+  ctx.beginPath(); ctx.arc(to.x, to.y, 4, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
+  ctx.restore()
+}
+// A dashed hairline from each free-standing reference back to its original.
+function drawReferenceLinks() {
+  const graph = activeNodes()
+  ctx.save()
+  ctx.setLineDash([4 * state.zoom, 4 * state.zoom]); ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1
+  Object.values(graph).filter((n) => n.type === 'ref' && !n.mountedTo).forEach((ref) => {
+    const target = graph[ref.target]
+    if (!target || target.mountedTo) return
+    const a = point(ref), b = point(target)
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
+  })
+  ctx.restore()
+}
 function draw() {
   labelNamer = createNamer()
   const pass = typePass() // shared by every node label and port badge below, so nodes/ports that truly share a type variable display the same letter
@@ -385,6 +434,8 @@ function draw() {
   ctx.strokeStyle = '#ecebf5'; ctx.lineWidth = 1
   for (let x = state.offset.x % 24; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
   for (let y = state.offset.y % 24; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
+  drawReferenceLinks()
+  drawOutputLink()
   Object.values(activeNodes()).filter(n => !n.mountedTo).forEach(n => {
     const selected = state.selected === n.id
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
@@ -437,7 +488,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   const isFunctionValued = node.type === 'curried'
   const typeColor = colorForType(resolvedValueQual(node, activeNodes(), pass).type, labelNamer)
   const badgeColor = isFunctionValued ? ACCENT : typeColor
-  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : '#'
+  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : '#'
   ctx.save()
   ctx.shadowColor = snapHighlight ? `${ACCENT}66` : selected ? `${ACCENT}40` : '#211d3414'
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
@@ -452,7 +503,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'
   ctx.font = isFunctionValued ? `700 ${14 * state.zoom}px 'Space Grotesk', sans-serif` : `700 ${11 * state.zoom}px ui-monospace, monospace`
   ctx.fillText(glyph, badgeX, p.y + 1)
-  const content = isFunctionValued ? (node.value || 'ƒ') : node.type === 'output' ? (node.value ?? 'Output') : String(node.value ?? node.label)
+  const content = nodeDisplayText(node)
   ctx.save() // clip long content (e.g. a wired-up output's "ƒ compose") to the pill so it can't bleed past the rounded right cap
   roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (CHIP_H / 2) * state.zoom)
   ctx.clip()
@@ -501,7 +552,10 @@ function updatePortEditor(pass = typePass()) {
     ? { fn: document.activeElement.closest('.param-slot').dataset.functionId, index: document.activeElement.closest('.param-slot').dataset.index, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
     : null
   editor.innerHTML = ''
-  Object.values(activeNodes()).filter(isFunction).forEach(node => node.params.forEach((rawValue, index) => {
+  // A function node plugged into a slot is hidden (it lives in that slot's
+  // nested chip), so its own slots aren't shown either.
+  const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && !n.mountedTo)
+  visibleFunctions.forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
     const mountedId = node.mounted[index]
     const mountedNode = mountedId ? activeNodes()[mountedId] : null
@@ -550,7 +604,7 @@ function updatePortEditor(pass = typePass()) {
       const chip = document.createElement('div')
       chip.className = 'param-chip'
       chip.style.background = colorForType(resolvedValueQual(mountedNode, activeNodes(), pass).type, labelNamer)
-      chip.textContent = mountedNode.type === 'function' ? `ƒ ${mountedNode.label}` : String(mountedNode.value ?? mountedNode.label)
+      chip.textContent = nodeDisplayText(mountedNode)
       chip.title = '드래그해서 떼어내기'
       chip.addEventListener('pointerdown', (event) => {
         event.preventDefault(); event.stopPropagation()
@@ -589,7 +643,7 @@ function updatePortEditor(pass = typePass()) {
     slot.append(remove)
     editor.append(slot)
   }))
-  Object.values(activeNodes()).filter(isFunction).forEach(node => {
+  visibleFunctions.forEach(node => {
     const add = document.createElement('button')
     add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = 'Add parameter'
     const center = slotScreenCenter(node, node.params.length)
@@ -635,7 +689,7 @@ function renderValueInspector(n) {
   const annotateRow = isNumber
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${n.value ?? 'partial'}" ${isNumber ? '' : 'readonly'} />`}</div>${deleteButton(n)}`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${n.type === 'ref' ? nodeDisplayText(n) : n.value ?? 'partial'}" ${isNumber ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
 }
 // Why `n` can't be deleted, or null if it can. Builtins are the language
 // itself; a function's Output and parameters are its signature, changed
@@ -650,6 +704,9 @@ function deleteBlocker(n) {
   }
   return null
 }
+function useAgainButton(n) {
+  return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
+}
 function deleteButton(n) {
   return deleteBlocker(n) ? '' : '<button class="delete-node" id="delete-node">Delete node <kbd>Del</kbd></button>'
 }
@@ -662,6 +719,8 @@ function deleteNode(id) {
   if (!n) return
   const blocker = deleteBlocker(n)
   if (blocker) return showToast(blocker)
+  // References to a deleted node would dangle — they go with it.
+  Object.values(graph).filter((m) => m.type === 'ref' && m.target === id).forEach((ref) => deleteNode(ref.id))
   Object.values(graph).forEach((other) => {
     if (other.type === 'function') other.mounted?.forEach((mountedId, i) => { if (mountedId === id) { other.mounted[i] = null; other.params[i] = '' } })
     if (other.type === 'output' && other.source === id) { other.source = null; other.value = 'open' }
@@ -680,14 +739,18 @@ function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
   inspector.innerHTML = n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div><div class="inspector-note">This node defines what the function returns.</div>`
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
   const entryToggle = document.querySelector('#entry-toggle')
   if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
+  const disconnectOutput = document.querySelector('#disconnect-output')
+  if (disconnectOutput) disconnectOutput.onclick = () => { const source = activeNodes()[n.source]; if (source) source.connected = false; n.source = null; n.value = 'open'; updateInspector(); draw() }
+  const useAgainNode = document.querySelector('#use-again')
+  if (useAgainNode) useAgainNode.onclick = () => useAgain(n)
   const deleteNodeButton = document.querySelector('#delete-node')
   if (deleteNodeButton) deleteNodeButton.onclick = () => deleteNode(n.id)
   const boolInput = document.querySelector('.bool-input')
@@ -798,16 +861,23 @@ function finishConnection(dragged) {
   if (!target) return false
   if (target.kind === 'output') {
     const output = activeNodes().output
+    // Unlike a slot, Output doesn't swallow the node: it stays on the canvas
+    // (still editable, its own slots still reachable), parked just left of
+    // Output with a link line drawn between them.
+    const previous = activeNodes()[output.source]
+    if (previous) previous.connected = false
     output.source = dragged.id
-    output.value = dragged.type === 'function' ? `ƒ ${dragged.label}` : dragged.value
-    dragged.mountedTo = `${output.id}:source`
+    output.value = nodeDisplayText(dragged)
     dragged.connected = true
+    const width = dragged.type === 'function' ? functionBlockRight(dragged) - dragged.x : CHIP_W / 2
+    dragged.x = output.x - CHIP_W / 2 - 70 - width
+    dragged.y = output.y
     state.selected = output.id
     return true
   }
   const targetNode = activeNodes()[target.targetId]
   if (!targetNode) return false
-  targetNode.params[target.index] = dragged.type === 'function' ? `ƒ ${dragged.label}` : dragged.value
+  targetNode.params[target.index] = nodeDisplayText(dragged)
   targetNode.mounted[target.index] = dragged.id
   dragged.mountedTo = `${targetNode.id}:${target.index}`
   dragged.connected = true
@@ -911,7 +981,7 @@ canvas.addEventListener('click', (event) => {
 })
 function enterFunction(id) {
   if (nodes[id]?.readonly) return
-  if (!functionBodies[id]) functionBodies[id] = { output: { id: `${id}-output`, type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
+  if (!functionBodies[id]) functionBodies[id] = { output: { id: 'output', type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
   state.activeFunction = id
   state.selected = 'output'
   renderFunctionLibrary()
@@ -968,7 +1038,7 @@ function flushCheckpoint() {
   clearTimeout(checkpointTimer)
   checkpointTimer = null
   const snapshot = currentSnapshot()
-  if (history.record(snapshot)) persist(snapshot)
+  if (history.record(snapshot)) { persist(snapshot); renderFunctionLibrary() } // keep sidebar signatures current while a body is edited
   updateHistoryButtons()
 }
 function persist(snapshot) {
@@ -1014,7 +1084,7 @@ importFile.onchange = async () => {
   if (!file) return
   try {
     state.activeFunction = null
-    loadProject(mergeBuiltins(parseProject(await file.text()), builtinNodes, builtinBodies))
+    loadProject(mergeBuiltins(upgradeProject(parseProject(await file.text())), builtinNodes, builtinBodies))
     fitToView()
     showToast(`Imported ${file.name}`)
   } catch (error) {
@@ -1052,7 +1122,7 @@ document.querySelectorAll('.node-library > .library-item[data-type]').forEach((i
 // is on screen.
 try {
   const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) loadProject(mergeBuiltins(parseProject(saved), builtinNodes, builtinBodies))
+  if (saved) loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
 } catch (error) {
   showToast(`Couldn't restore the saved project: ${error.message}`)
 }

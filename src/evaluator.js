@@ -186,6 +186,10 @@ export function createEvaluator(registry) {
       return value
     }
     if (node.type === 'boolean') return node.value === 'true'
+    if (node.type === 'ref') {
+      if (!graph[node.target]) throw new EvalError(`${node.label}: the original node is gone`)
+      return force(nodeValue(graph, node.target, env)) // shares the target's thunk: evaluated once
+    }
     if (node.type === 'parameter') {
       if (!env.args) throw new EvalError(`Parameter ${node.label} only has a value inside a call`)
       const index = Object.values(graph).filter((n) => n.type === 'parameter').findIndex((n) => n.id === id)

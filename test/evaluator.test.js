@@ -99,3 +99,25 @@ test('round goes half-to-even like Haskell', () => {
   const g = graphOf(...['2.5', '3.5', '-2.5', '0.5', '1.4'].map((v, i) => call(`r${i}`, 'round', [v])))
   assert.deepEqual([0, 1, 2, 3, 4].map((i) => ev.run(g, `r${i}`)), [2, 4, -2, 0, 1])
 })
+
+test('a reference lets a body use its parameter twice (square n = n * n)', () => {
+  const reg = registry()
+  reg.nodes.square = { id: 'square', type: 'function', label: 'square', params: ['n'], mounted: [null], custom: true }
+  reg.functionBodies.square = graphOf(
+    { id: 'n', type: 'parameter', label: 'n' },
+    { id: 'n2', type: 'ref', target: 'n', label: '↪ n' },
+    call('mul', 'times', [{ node: 'n' }, { node: 'n2' }]),
+    { id: 'output', type: 'output', label: 'Output', source: 'mul' },
+  )
+  assert.equal(createEvaluator(reg).run(graphOf(call('go', 'square', ['7'])), 'go'), 49)
+})
+
+test('a reference shares its target\'s thunk instead of re-evaluating it', () => {
+  const reg = registry()
+  let calls = 0
+  reg.nodes.tick = { id: 'tick', type: 'function', label: 'tick', params: [], mounted: [], custom: true }
+  reg.functionBodies.tick = { output: { id: 'o', type: 'output', label: 'Output', source: 'v' }, v: { id: 'v', type: 'number', label: 'v', get value() { calls++; return '1' } } }
+  const g = graphOf(call('t', 'tick', []), { id: 'r', type: 'ref', target: 't', label: '↪ t' }, call('sum', 'plus', [{ node: 't' }, { node: 'r' }]))
+  assert.equal(createEvaluator(reg).run(g, 'sum'), 2)
+  assert.equal(calls, 1)
+})

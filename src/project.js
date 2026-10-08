@@ -40,6 +40,22 @@ export function parseProject(text) {
   }
 }
 
+/**
+ * Bring a project saved by an older version up to date. Run on load/import
+ * only — undo/redo snapshots are always current. Older saves hid whatever
+ * fed a body's Output (mountedTo `…:source`); Output no longer swallows its
+ * source, so it's un-hidden. A body's Output had id `<fn>-output` under the
+ * key `output`; ids now equal keys, so lookups by id find it. (Builtin
+ * bodies are replaced from code by mergeBuiltins right after.)
+ */
+export function upgradeProject(project) {
+  for (const graph of [project.nodes, ...Object.values(project.functionBodies)]) {
+    for (const node of Object.values(graph)) if (typeof node?.mountedTo === 'string' && node.mountedTo.endsWith(':source')) node.mountedTo = null
+  }
+  for (const body of Object.values(project.functionBodies)) if (isRecord(body.output)) body.output.id = 'output'
+  return project
+}
+
 // Fields of a builtin definition owned by the code, never by a saved file —
 // so a save from an older version picks up renamed labels or new
 // expressions, and a file can't turn a builtin into something else.

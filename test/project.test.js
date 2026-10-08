@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHistory, mergeBuiltins, parseProject, ProjectError, serializeProject } from '../src/project.js'
+import { createHistory, mergeBuiltins, parseProject, ProjectError, serializeProject, upgradeProject } from '../src/project.js'
 
 const builtinNodes = {
   add: { id: 'add', type: 'function', label: 'add', builtin: 'succ', readonly: true, params: ['n'], mounted: [null], x: 0, y: 0 },
@@ -59,4 +59,12 @@ test('history skips no-op records and supports undo/redo', () => {
   assert.equal(h.redo(), 'b')
   h.record('d')
   assert.equal(h.canRedo, false, 'a new edit clears the redo stack')
+})
+
+test('older saves that hid the Output source are migrated', () => {
+  const text = JSON.stringify({ version: 1, nodes: {}, functionBodies: { f: { c: { id: 'c', type: 'function', mountedTo: 'f-output:source' }, d: { id: 'd', type: 'number', mountedTo: 'c:0' } } }, entry: null, outputId: 0 })
+  const body = upgradeProject(parseProject(text)).functionBodies.f
+  assert.equal(upgradeProject(parseProject(JSON.stringify({ version: 1, nodes: {}, functionBodies: { g: { output: { id: 'g-output', type: 'output' } } } }))).functionBodies.g.output.id, 'output')
+  assert.equal(body.c.mountedTo, null)
+  assert.equal(body.d.mountedTo, 'c:0', 'slot mounts are untouched')
 })

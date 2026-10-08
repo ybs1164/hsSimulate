@@ -213,3 +213,6 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .bool-input{width:100%;font:12px 'DM Mono';padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel);color:var(--ink)}
 #toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,12px);background:var(--ink);color:#fff;font:11px/1.5 'DM Mono';padding:10px 16px;border-radius:var(--radius-sm);box-shadow:0 6px 20px #211d3440;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:20;max-width:min(560px,90vw);text-align:center}
 #toast.visible{opacity:1;transform:translate(-50%,0)}
+.use-again{width:100%;margin-top:12px;border:1.5px dashed var(--accent-soft-2);border-radius:var(--radius-sm);background:var(--panel);padding:9px 11px;font:11px 'DM Mono';color:var(--accent-ink);cursor:pointer}
+.use-again:hover{background:var(--accent-soft)}
+.use-again small{color:var(--muted-2);margin-left:4px}
