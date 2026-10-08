@@ -8,6 +8,7 @@ import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from '.
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, printDefinition } from './haskellPrint.js'
+import { addParameter, hasVariadicSlots, removeParameter, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
@@ -767,6 +768,12 @@ function detachMounted(node, index) {
   if (moving) { moving.mountedTo = null; moving.connected = false; moving.unfolded = false }
   return moving
 }
+// 'signature' for a custom function's own definition, 'elements' for a list literal, else false.
+function isSignatureEditable(node) {
+  if (nodes[node.id] === node && node.custom) return 'signature'
+  if (hasVariadicSlots(node, definitions)) return 'elements'
+  return false
+}
 function updatePortEditor(pass = typePass()) {
   // The overlay is rebuilt from scratch on every draw(), including the one a
   // keystroke in a slot triggers — remember which slot had focus (and the
@@ -876,24 +883,35 @@ function updatePortEditor(pass = typePass()) {
       input.addEventListener('input', () => { node.params[index] = input.value; state.selected = node.id; updateInspector(); draw() })
       slot.append(input)
     }
+    // Slots can only be added/removed where that means something: a custom
+    // function's definition (its signature — synced to its body and every
+    // call, see signature.js) or a list literal (its length). Everywhere else
+    // the slots are the callee's parameters.
+    const editable = isSignatureEditable(node)
+    if (!editable) { editor.append(slot); return }
     const remove = document.createElement('button')
-    remove.className = 'param-remove'; remove.type = 'button'; remove.textContent = '−'; remove.title = 'Remove parameter'
+    remove.className = 'param-remove'; remove.type = 'button'; remove.textContent = '−'; remove.title = editable === 'signature' ? `Remove parameter ${paramDisplayName(node, index)} (from the body and every call)` : 'Remove this element'
     remove.style.width = remove.style.height = `${16 * state.zoom}px`
     remove.style.right = remove.style.top = '0'
     remove.style.fontSize = `${12 * state.zoom}px`; remove.style.lineHeight = `${16 * state.zoom}px`
     remove.addEventListener('click', (event) => {
       event.stopPropagation()
-      const moving = detachMounted(node, index)
-      if (moving) { moving.x = node.x + 150; moving.y = node.y + 110 }
-      node.params.splice(index, 1); node.mounted.splice(index, 1); node.paramScopes.splice(index, 1)
-      state.selected = node.id; updateInspector(); draw()
+      if (editable === 'signature') removeParameter({ nodes, functionBodies }, node.id, index)
+      else {
+        const moving = detachMounted(node, index)
+        if (moving) { moving.x = node.x + 150; moving.y = node.y + 110 }
+        node.params.splice(index, 1); node.mounted.splice(index, 1); node.paramScopes.splice(index, 1)
+      }
+      state.selected = node.id; renderFunctionLibrary(); updateInspector(); draw()
     })
     slot.append(remove)
     editor.append(slot)
   }))
   visibleFunctions.forEach(node => {
+    const editable = isSignatureEditable(node)
+    if (!editable) return
     const add = document.createElement('button')
-    add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = 'Add parameter'
+    add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = editable === 'signature' ? 'Add a parameter (to the body and every call)' : 'Add an element'
     // Just past the block's right edge (not at the next slot's would-be
     // center, which lands on the edge itself once the tail is wider).
     const center = toScreen({ x: functionBlockRight(node) + 22, y: node.y })
@@ -901,7 +919,11 @@ function updatePortEditor(pass = typePass()) {
     add.style.width = add.style.height = `${addSize}px`
     add.style.fontSize = `${18 * state.zoom}px`; add.style.lineHeight = `${20 * state.zoom}px`
     add.style.left = `${center.x - addSize / 2}px`; add.style.top = `${point(node).y - addSize / 2}px`
-    add.addEventListener('click', () => { node.params.push(`p${node.params.length + 1}`); node.mounted.push(null); node.paramScopes.push('local'); state.selected = node.id; updateInspector(); draw() })
+    add.addEventListener('click', () => {
+      if (editable === 'signature') addParameter({ nodes, functionBodies }, node.id)
+      else { node.params.push(''); node.mounted.push(null); node.paramScopes.push('local') }
+      state.selected = node.id; renderFunctionLibrary(); updateInspector(); draw()
+    })
     editor.append(add)
   })
   if (focused) {
@@ -1034,12 +1056,18 @@ function updateInspector() {
   inspector.innerHTML = n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
   const entryToggle = document.querySelector('#entry-toggle')
   if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
+  document.querySelectorAll('.param-rename').forEach((input) => {
+    input.onchange = () => {
+      if (!renameParameter({ nodes, functionBodies }, n.id, Number(input.dataset.index), input.value.trim())) showToast(`"${input.value}" can't be a parameter name here (lowercase identifier, not already used)`)
+      renderFunctionLibrary(); updateInspector(); draw()
+    }
+  })
   const disconnectOutput = document.querySelector('#disconnect-output')
   if (disconnectOutput) disconnectOutput.onclick = () => { const source = activeNodes()[n.source]; if (source) source.connected = false; n.source = null; n.value = 'open'; updateInspector(); draw() }
   document.querySelectorAll('.law-check').forEach((button) => { button.onclick = () => runFunctionLaw(n, button.dataset.law) })
