@@ -30,6 +30,7 @@
 // and registers the instances its `deriving` clauses ask for.
 import { classClosure, entails, isClass, productLiftable, withDynamicInstances } from './prelude.js'
 import { constructorArity, pred, scheme, showType, tapp, tcon, tfun, tlist, ttuple, tvar, wellKinded } from './typeSystem.js'
+import { builtinSchemes } from './builtinSchemes.js'
 
 export class DeclError extends Error {}
 
@@ -477,4 +478,48 @@ export function draftToSource(draft) {
     d.newtype.length && ` deriving newtype (${d.newtype.join(', ')})`,
   ].filter(Boolean)
   return `${draft.keyword} ${[draft.name, ...(draft.params || [])].join(' ')} = ${draft.constructors.map(ctor).join(' | ')}${clauses.join('')}`
+}
+
+// ---- Instance methods ------------------------------------------------------
+// Each class method a declaration's deriving clauses give it is a function
+// of its own — `(+) @Wallet`, id `instance:Wallet:plus` — whose definition
+// is the derived one written as a graph (definitionViews.js): pointwise
+// through the eliminator for the algebraic classes (a product's structure
+// is its components'), structural for Eq and Ord. Until it is edited, the
+// method runs as built in; edited, every use of the method at that type
+// runs the graph (evaluator.js dispatches on the value's type).
+const CLASS_METHODS = { AddSemigroup: ['plus'], AddGroup: ['negate', 'minus'], MulSemigroup: ['times'], VectorSpace: ['scale'], PartialOrd: ['leq'], Lattice: ['join', 'meet'], Semigroup: ['mappend'], Eq: ['eq'], Ord: ['geq'] }
+const METHOD_LABELS = { plus: '(+)', negate: 'negate', minus: '(-)', times: '(*)', scale: '(*^)', leq: 'leq', join: '(\\/)', meet: '(/\\)', mappend: '(<>)', eq: '(==)', geq: '(>=)' }
+const METHOD_PARAMS = { negate: ['x'], scale: ['k', 'v'] }
+
+/** The class method definitions `instance:<T>:<method>` of the declarations in `types`. */
+export function instanceDefinitions(types) {
+  const defs = []
+  for (const d of Object.values(types)) {
+    const T = declaredType(d)
+    const classes = [...new Set(d.deriving.flatMap((c) => c.classes))]
+    for (const cls of classes) {
+      for (const method of CLASS_METHODS[cls] || []) {
+        // Only Eq is written for a sum type; the rest need one constructor.
+        if (method !== 'eq' && d.constructors.length !== 1) continue
+        const generic = builtinSchemes[method]
+        const type = substVar(generic.type, 'a', T)
+        const params = METHOD_PARAMS[method] || ['x', 'y']
+        defs.push({
+          id: `instance:${d.name}:${method}`, type: 'function', label: `${METHOD_LABELS[method]} @${d.name}`,
+          params: [...params], mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#e8b23c',
+          builtin: method, scheme: scheme([...(d.params || [])], (d.params || []).map((p) => pred(cls, tvar(p))), type),
+          instance: { cls, type: d.name, method },
+        })
+      }
+    }
+  }
+  return defs
+}
+
+function substVar(t, id, by) {
+  if (t.kind === 'var') return t.id === id ? by : t
+  if (t.kind === 'fun') return tfun(substVar(t.from, id, by), substVar(t.to, id, by))
+  if (t.kind === 'app') return tapp(substVar(t.fn, id, by), substVar(t.arg, id, by))
+  return t
 }

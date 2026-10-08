@@ -239,10 +239,10 @@ export function createEvaluator(registry) {
     isZero: [1, (n) => num(n) === 0],
     ifThenElse: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
 
-    plus: [2, (x, y) => lift2((a, b) => a + b, x, y)],
-    negate: [1, (x) => lift1((a) => -a, x)],
-    minus: [2, (x, y) => lift2((a, b) => a - b, x, y)],
-    times: [2, (x, y) => lift2((a, b) => a * b, x, y)],
+    plus: [2, (x, y) => lift2((a, b) => a + b, x, y, method('plus'))],
+    negate: [1, (x) => lift1((a) => -a, x, method('negate'))],
+    minus: [2, (x, y) => lift2((a, b) => a - b, x, y, method('minus'))],
+    times: [2, (x, y) => lift2((a, b) => a * b, x, y, method('times'))],
     addZero: [0, () => 0],
     mulOne: [0, () => 1],
     divide: [2, (x, y) => num(x) / num(y)],
@@ -343,9 +343,9 @@ export function createEvaluator(registry) {
       return go(now(v))
     }],
     leq: [2, (x, y) => leq(x, y)],
-    join: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a || b : Math.max(a, b)), x, y)],
-    meet: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a && b : Math.min(a, b)), x, y)],
-    scale: [2, (k, v) => lift1((a) => num(k) * a, v)],
+    join: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a || b : Math.max(a, b)), x, y, method('join'))],
+    meet: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a && b : Math.min(a, b)), x, y, method('meet'))],
+    scale: [2, (k, v) => lift1((a) => num(k) * a, v, (f) => builtins.scale[1](k, f))],
     mkSum: [1, (x) => ({ kind: 'data', type: 'Sum', ctor: 'Sum', ctorIndex: 0, args: [x] })],
     getSum: [1, (s) => newtypeField(s, 'Sum', 0)],
     mkProduct: [1, (x) => ({ kind: 'data', type: 'Product', ctor: 'Product', ctorIndex: 0, args: [x] })],
@@ -389,6 +389,28 @@ export function createEvaluator(registry) {
     }],
   }
 
+  // A class method at a declared type whose instance definition was edited
+  // (`instance:<T>:<method>`, typeDecls.js's instanceDefinitions) runs that
+  // definition — at the top and for every field a structure is lifted
+  // through, so a record holding a Wallet uses Wallet's edited (+). The
+  // arguments looked at are the ones carrying the type.
+  const DISPATCH = { plus: [0, 1], negate: [0], minus: [0, 1], times: [0, 1], scale: [1], leq: [0, 1], join: [0, 1], meet: [0, 1], mappend: [0], eq: [0, 1], geq: [0, 1] }
+  for (const [name, at] of Object.entries(DISPATCH)) {
+    const [arity, impl] = builtins[name]
+    builtins[name] = [arity, (...args) => {
+      for (const i of at) {
+        const v = force(args[i])
+        const id = isData(v) ? `instance:${v.type}:${name}` : null
+        if (id && overrideOf(id) && registry.nodes[id]) return call(id, args)
+      }
+      return impl(...args)
+    }]
+  }
+  /** Method `name` as a binary function on thunks (dispatching, see above). */
+  function method(name) {
+    return (...args) => builtins[name][1](...args)
+  }
+
   /** A Program with setting `index` replaced (record update). Programs from older saves get the defaults first. */
   function setProgramField(p, index, value) {
     const v = force(p)
@@ -406,23 +428,23 @@ export function createEvaluator(registry) {
     return force(v.args[0])
   }
 
-  /** A unary numeric/boolean operation, lifted pointwise over data values. */
-  function lift1(op, x) {
+  /** A unary numeric/boolean operation, lifted pointwise over data values (each field through `self`). */
+  function lift1(op, x, self = (f) => lift1(op, f)) {
     const a = force(x)
-    if (isData(a)) return { ...a, args: a.args.map((f) => delay(() => lift1(op, f))) }
+    if (isData(a)) return { ...a, args: a.args.map((f) => delay(() => self(f))) }
     if (typeof a !== 'number' && typeof a !== 'boolean') throw new EvalError(`Expected a number, got ${show(a)}`)
     return op(a)
   }
 
-  /** A binary operation, lifted pointwise over data values; a bare number is broadcast along the other side. */
-  function lift2(op, x, y) {
+  /** A binary operation, lifted pointwise over data values (each field through `self`); a bare number is broadcast along the other side. */
+  function lift2(op, x, y, self = (f, g) => lift2(op, f, g)) {
     let a = force(x)
     let b = force(y)
     if (typeof a === 'number' && isData(b)) a = broadcast(a, b)
     if (typeof b === 'number' && isData(a)) b = broadcast(b, a)
     if (isData(a) && isData(b)) {
       if (a.ctorIndex !== b.ctorIndex) throw new EvalError(`Cannot combine ${a.ctor} with ${b.ctor}`)
-      return { ...a, args: a.args.map((f, i) => delay(() => lift2(op, f, b.args[i]))) }
+      return { ...a, args: a.args.map((f, i) => delay(() => self(f, b.args[i]))) }
     }
     const ok = (v) => typeof v === 'number' || typeof v === 'boolean'
     if (!ok(a) || !ok(b)) throw new EvalError(`Expected numbers, got ${show(a)} and ${show(b)}`)
@@ -435,7 +457,7 @@ export function createEvaluator(registry) {
     let b = force(y)
     if (typeof a === 'number' && isData(b)) a = broadcast(a, b)
     if (typeof b === 'number' && isData(a)) b = broadcast(b, a)
-    if (isData(a) && isData(b)) return a.ctorIndex === b.ctorIndex && a.args.every((f, i) => leq(f, b.args[i]))
+    if (isData(a) && isData(b)) return a.ctorIndex === b.ctorIndex && a.args.every((f, i) => builtins.leq[1](f, b.args[i]))
     if (typeof a === 'boolean') return !a || b
     return num(now(a)) <= num(now(b))
   }
@@ -460,7 +482,7 @@ export function createEvaluator(registry) {
     }
     // A record deriving Semigroup via Generically: fieldwise.
     if (a.ctorIndex !== b.ctorIndex) throw new EvalError(`Cannot combine ${a.ctor} with ${b.ctor}`)
-    return { ...a, args: a.args.map((f, i) => delay(() => mappend(f, b.args[i]))) }
+    return { ...a, args: a.args.map((f, i) => delay(() => builtins.mappend[1](f, b.args[i]))) }
   }
 
   function list(t) {

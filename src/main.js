@@ -4,7 +4,7 @@ import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances, productLiftable, classNames } from './prelude.js'
 import { createEvaluator, EvalError, isClosure, isData, isOverridableId, showValue } from './evaluator.js'
-import { DeclError, declToDraft, declareTypes, declaredArities, derivedDefinitions, derivedInstances, draftToSource } from './typeDecls.js'
+import { DeclError, declToDraft, declareTypes, declaredArities, derivedDefinitions, derivedInstances, draftToSource, instanceDefinitions } from './typeDecls.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, identifier, printDefinitionTokens, printLambdaText } from './haskellPrint.js'
@@ -141,13 +141,16 @@ const builtinBodies = structuredClone(functionBodies)
 // pass and the evaluator use: every function definition, real or derived.
 let types = {}
 const derivedDefs = {}
+// The class methods the declared types' instances define, `(+) @Wallet`
+// (typeDecls.js's instanceDefinitions): editable like any library function.
+const instanceDefs = {}
 // Read-only definition views (src/definitionViews.js): a Prelude, derived or
 // builtin function shown as a graph. `viewDefs`/`viewBodies` hold each
 // view's own definition (id `view:<function id>`) and body, plus any λs it
 // uses; they're never saved.
 const viewDefs = {}
 const viewBodies = {}
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] ?? viewDefs[id] })
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? instanceDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] ?? viewDefs[id] })
 const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
 function applyTypes(next) {
   types = next
@@ -155,6 +158,8 @@ function applyTypes(next) {
   clearViews()
   Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
   derivedDefinitions(types).forEach((def) => { derivedDefs[def.id] = def })
+  Object.keys(instanceDefs).forEach((id) => delete instanceDefs[id])
+  instanceDefinitions(types).forEach((def) => { instanceDefs[def.id] = def })
   setDynamicInstances(derivedInstances(types))
 }
 const evaluator = createEvaluator({ nodes: definitions, functionBodies: allBodies, get types() { return types } })
@@ -353,7 +358,7 @@ searchInput.addEventListener('keydown', (event) => {
 })
 const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
-  const byType = Object.groupBy(Object.values(derivedDefs), (def) => def.derived.type)
+  const byType = Object.groupBy([...Object.values(derivedDefs), ...Object.values(instanceDefs)], (def) => def.derived?.type ?? def.instance.type)
   typeLibrary.innerHTML = Object.values(types).map((d) => `
     <div class="type-entry">
       <button class="library-item type-item" data-type-name="${d.name}" title="Edit declaration">
@@ -1762,7 +1767,14 @@ function libraryDefinitionBlock(defId, slots = 0) {
   const viewId = ensureView(defId, slots)
   if (!viewId) return ''
   const editable = isEditableView(viewId, viewDefs)
-  return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>(read-only graph)</small></button>${editable ? '<button class="use-again" id="edit-library-definition">✎ Edit definition <small>(every call runs your graph)</small></button>' : ''}`
+  return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>(read-only graph)</small></button>${editable ? '<button class="use-again" id="edit-library-definition">✎ Edit definition <small>(every call runs your graph)</small></button>' : ''}${instancesBlock(definitions[defId])}`
+}
+// A class method's instances at the declared types — each a definition of
+// its own that can be opened and edited (then the method runs it at that type).
+function instancesBlock(def) {
+  const at = Object.values(instanceDefs).filter((d) => def?.builtin && d.instance.method === def.builtin && !def.instance)
+  if (!at.length) return ''
+  return `<div class="property"><label>INSTANCES · at your types</label>${at.map((d) => `<button class="use-again instance-link" data-instance="${escapeAttr(d.id)}">${escapeAttr(d.label)}${isOverride(d.id) ? ' ✎ <small>(edited)</small>' : ' <small>(derived)</small>'}</button>`).join('')}</div>`
 }
 function tokensHtml(tokens) {
   const graph = activeNodes()
@@ -1897,6 +1909,7 @@ function updateInspector() {
   if (fixSlots) fixSlots.onclick = () => { fixCallSlots(n); updateInspector(); draw() }
   const openDefinition = document.querySelector('#open-definition')
   if (openDefinition) openDefinition.onclick = () => openDefinitionView(n.sourceFunctionId || n.id, n.params.length)
+  document.querySelectorAll('.instance-link').forEach((b) => { b.onclick = () => openDefinitionView(b.dataset.instance) })
   const editLibrary = document.querySelector('#edit-library-definition')
   if (editLibrary) editLibrary.onclick = () => editDefinition(n.sourceFunctionId || n.id)
   const resetLibrary = document.querySelector('#reset-library-definition')
@@ -1941,6 +1954,8 @@ function addGraphTextRows(n) {
   const holes = n.type === 'function' && state.activeFunction ? n.params.map((_, i) => i).filter((i) => isHole(n, i)) : []
   if (holes.length) rows.push(`<div class="property"><label>λ HOLES</label>${holes.map((i) => `<div class="port-row"><span class="hole-lambda">\\</span><input class="hole-name" data-index="${i}" value="${escapeAttr(n.holeNames?.[i] || '')}" placeholder="x" spellcheck="false" title="The name this open slot is bound under: \\x -> …" /><small>${escapeAttr(paramDisplayName(n, i))}</small></div>`).join('')}</div>`)
   inspector.querySelector('.selected-node')?.insertAdjacentHTML('afterend', rows.join(''))
+  const editedInstance = editingOverride() && definitions[state.activeFunction]?.instance
+  if (editedInstance && !inspector.querySelector('.law-report')) (inspector.querySelector('.inspector-note') || inspector.lastElementChild)?.insertAdjacentHTML('beforebegin', lawReport(editedInstance.type))
   if (state.activeFunction && ![...inspector.querySelectorAll('.property.definition')].some((el) => el.dataset.fn === state.activeFunction)) {
     const block = definitionBlock(state.activeFunction, `DEFINITION · ${definitions[state.activeFunction]?.lambda ? 'λ' : definitions[state.activeFunction]?.label ?? ''}`)
     const note = inspector.querySelector('.inspector-note')
@@ -2482,7 +2497,7 @@ document.querySelector('#export-game').onclick = () => {
   const info = entryId && nodes[entryId] ? programInfo(entryId) : null
   if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
   const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
-  const data = { title, definitions: { ...preludeDefs, ...preludeTypeDefs, ...derivedDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok }
+  const data = { title, definitions: { ...preludeDefs, ...preludeTypeDefs, ...derivedDefs, ...instanceDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok }
   const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
   const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
   link.click()

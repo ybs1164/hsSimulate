@@ -131,7 +131,7 @@ export function buildDefinitionView(def, resolve, { slots = 0 } = {}) {
   const view = { id: viewId, type: 'function', label: def.label, params: [...params], mounted: params.map(() => null), paramScopes: params.map(() => 'local'), readonly: true, view: def.id, scheme, color: def.color }
   defs[viewId] = view
   const g = graph(viewId, params, resolve, defs, bodies)
-  const written = def.derived ? derivedGraph(def, g, resolve) : GRAPHS[def.builtin]
+  const written = def.instance ? instanceGraph(def, g, resolve) : def.derived ? derivedGraph(def, g, resolve) : GRAPHS[def.builtin]
   let root
   if (written) root = typeof written === 'function' ? written(g, params.length) : written
   else {
@@ -203,6 +203,69 @@ function derivedGraph(def, g, resolve) {
   return null
 }
 
+// A class method at a declared type (typeDecls.js's instanceDefinitions),
+// written the way it is derived:
+//
+//   x + y   = caseT (\y x₁ … xₙ -> caseT (\x₁ … xₙ y₁ … yₙ -> C (x₁ + y₁) … (xₙ + yₙ)) y) x
+//   negate x = caseT (\x₁ … xₙ -> C (negate x₁) … (negate xₙ)) x
+//   k *^ v  = caseT (\k x₁ … xₙ -> C (k *^ x₁) … (k *^ xₙ)) v
+//   leq x y = … the same, with leq x₁ y₁ && … && leq xₙ yₙ
+//   x >= y  = lexicographic: if x₁ == y₁ then (the rest) else x₁ >= y₁
+//   x == y  = the same constructor, and equal fields
+//
+// `&&` is `select a b False` — the eliminator of Bool.
+const FIELD_OP = { plus: 'plus', negate: 'negate', minus: 'minus', times: 'times', scale: 'prelude:scale', leq: 'prelude:leq', join: 'prelude:join', meet: 'prelude:meet', mappend: 'prelude:mappend', eq: 'eq', geq: 'geq' }
+function instanceGraph(def, g, resolve) {
+  const { type, method } = def.instance
+  const caseId = `type:${type}:case${type}`
+  const caseDef = resolve(caseId)
+  if (!caseDef) return null
+  const ctors = caseDef.params.slice(0, -1).map((_, i) => resolve(`type:${type}:${ctorNameAt(resolve, type, i)}`))
+  if (ctors.some((c) => !c)) return null
+  const op = FIELD_OP[method]
+  // binders for the fields of the first operand (x₁ y₁ …) and of the second (x₂ y₂ …)
+  const names = (ctor, operand = 1) => (ctor?.params || []).map((p, i) => (/^[a-z_][A-Za-z0-9_']*$/.test(p) && !/^x\d+$/.test(p) ? `${p}${operand}` : `${operand === 1 ? 'a' : 'b'}${i + 1}`)) // positional fields: a₁ … / b₁ …
+  // a₁ && … && aₙ, in graph `h`, from condition nodes (True when there are none)
+  const all = (h, conds) => (conds.length ? conds.reduceRight((rest, c) => (rest === null ? c : h.call('select', [c, rest, { lit: 'False' }])), null) : h.bool(true))
+  // the fields of x (xs) and of y (ys) of one constructor, both in scope in a λ: \xs ys -> body
+  const pairwise = (h, ctor, xsOf, build) => {
+    const xs = names(ctor, 1)
+    const ys = names(ctor, 2)
+    return h.lambda([...xs, ...ys], (m) => build(m, xs.map((_, i) => [m.param(i), m.param(xs.length + i)])), xsOf)
+  }
+  if (method === 'eq') {
+    // caseT (branch per constructor of x: caseT (True for the same constructor with equal fields, False otherwise) y) x
+    const branches = ctors.map((ci, i) => {
+      const xs = names(ci, 1)
+      const inner = (h, y, xsOf) => h.call(caseId, [...ctors.map((cj, j) => {
+        if (j !== i) return cj.params.length ? h.lambda(names(cj, 2), (m) => m.bool(false)) : { lit: 'False' }
+        return ci.params.length ? pairwise(h, ci, xsOf, (m, pairs) => all(m, pairs.map(([a, b]) => m.call('eq', [a, b])))) : { lit: 'True' }
+      }), y])
+      if (!xs.length) return inner(g, g.param(1), [])
+      return g.lambda(['y', ...xs], (l) => inner(l, l.param(0), xs.map((_, k) => l.param(1 + k))), [g.param(1)])
+    })
+    return () => g.call(caseId, [...branches, g.param(0)])
+  }
+  if (ctors.length !== 1) return null
+  const [ctor] = ctors
+  const n = ctor.params.length
+  const xs = names(ctor, 1)
+  if (method === 'negate') return () => g.call(caseId, [g.lambda(xs, (l) => l.call(ctor.id, xs.map((_, i) => l.call(op, [l.param(i)])))), g.param(0)])
+  if (method === 'scale') return () => g.call(caseId, [g.lambda(['k', ...xs], (l) => l.call(ctor.id, xs.map((_, i) => l.call(op, [l.param(0), l.param(1 + i)]))), [g.param(0)]), g.param(1)])
+  // binary: \y xs -> caseT (\xs ys -> result) y, applied to x's fields
+  const binary = (result) => () => {
+    if (!n) return g.call(caseId, [result(g, []), g.param(0)])
+    return g.call(caseId, [g.lambda(['y', ...xs], (l) => l.call(caseId, [pairwise(l, ctor, xs.map((_, i) => l.param(1 + i)), result), l.param(0)]), [g.param(1)]), g.param(0)])
+  }
+  if (method === 'leq') return binary((m, pairs) => all(m, pairs.map(([a, b]) => m.call(op, [a, b]))))
+  if (method === 'geq') {
+    // lexicographic: select (x₁ == y₁) (the rest) (x₁ >= y₁)
+    const lex = (m, pairs) => (pairs.length ? pairs.reduceRight((rest, [a, b]) => (rest === null ? m.call('geq', [a, b]) : m.call('select', [m.call('eq', [a, b]), rest, m.call('geq', [m.ref(a), m.ref(b)])])), null) : m.bool(true))
+    return binary(lex)
+  }
+  return binary((m, pairs) => (pairs.length ? m.call(ctor.id, pairs.map(([a, b]) => m.call(op, [a, b]))) : m.call(ctor.id, [])))
+}
+
 function ctorNameAt(resolve, type, index) {
   const caseDef = resolve(`type:${type}:case${type}`)
   // caseT's branch parameters are the constructors' names, lowercased (typeDecls.js).
@@ -257,6 +320,15 @@ function graph(fnId, params, resolve, defs, bodies) {
   })
   const api = {
     param: (i) => use(paramIds[i]),
+    /** Another use of node `id` already plugged somewhere: a reference to it. */
+    ref: (id) => use(id),
+    /** A Bool value node. */
+    bool(value) {
+      const id = fresh('bool')
+      body[id] = { id, type: 'boolean', label: value ? 'True' : 'False', value: String(value), color: '#e85c9e', x: 0, y: 0 }
+      used.add(id)
+      return id
+    },
     call(defId, args) {
       const callee = resolve(defId) || defs[defId]
       const slots = callee?.builtin === 'listOf' ? args.length : (callee?.params || args).length
