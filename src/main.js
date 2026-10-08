@@ -61,29 +61,29 @@ const inspector = document.querySelector('#inspector-content')
 const state = { zoom: 1, offset: { x: 0, y: 0 }, selected: 'add', running: false, drag: null, pan: null, snapTarget: null, activeFunction: null, suppressClick: false }
 const nodes = {
   add: { id: 'add', type: 'function', x: 300, y: 190, label: 'add', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#6c5ce7', scope: 'main', builtin: 'succ', readonly: true, expression: 'λn f x. f (n f x)' },
-  identity: { id: 'identity', type: 'function', x: 620, y: 190, label: 'identity', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#4f8ef7', scope: 'main', builtin: 'identity', readonly: true, expression: 'λx. x' },
+  identity: { id: 'identity', type: 'function', x: 820, y: 190, label: 'identity', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#4f8ef7', scope: 'main', builtin: 'identity', readonly: true, expression: 'λx. x' },
   zero: { id: 'zero', type: 'function', x: 300, y: 410, label: 'zero', params: [], mounted: [], paramScopes: [], color: '#a96ef0', scope: 'main', builtin: 'zero', readonly: true, expression: 'λf x. x' },
-  apply: { id: 'apply', type: 'function', x: 620, y: 410, label: 'apply', params: ['f', 'x'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#f0954a', scope: 'main', builtin: 'apply', readonly: true, expression: 'λf x. f x' },
+  apply: { id: 'apply', type: 'function', x: 820, y: 410, label: 'apply', params: ['f', 'x'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#f0954a', scope: 'main', builtin: 'apply', readonly: true, expression: 'λf x. f x' },
   compose: { id: 'compose', type: 'function', x: 300, y: 630, label: 'compose', params: ['f', 'g', 'x'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#2bb8b0', scope: 'main', builtin: 'compose', readonly: true, expression: 'λf g x. f (g x)' },
-  isZero: { id: 'isZero', type: 'function', x: 620, y: 630, label: 'isZero', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#ed6b84', scope: 'main', builtin: 'isZero', readonly: true, expression: 'λn. n == 0' },
-  ifThenElse: { id: 'ifThenElse', type: 'function', x: 620, y: 850, label: 'ifThenElse', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'ifThenElse', readonly: true, expression: 'λc a b. c ? a : b' },
+  isZero: { id: 'isZero', type: 'function', x: 820, y: 630, label: 'isZero', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#ed6b84', scope: 'main', builtin: 'isZero', readonly: true, expression: 'λn. n == 0' },
+  ifThenElse: { id: 'ifThenElse', type: 'function', x: 820, y: 850, label: 'ifThenElse', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'ifThenElse', readonly: true, expression: 'λc a b. c ? a : b' },
   // Group-theoretic numeric hierarchy builtins (see src/numericClasses.js) —
   // each demands only the weakest algebraic structure it needs.
   plus: { id: 'plus', type: 'function', x: 300, y: 1070, label: '(+)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#e8b23c', scope: 'main', builtin: 'plus', readonly: true, expression: 'x + y' },
-  negate: { id: 'negate', type: 'function', x: 620, y: 1070, label: 'negate', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#8c7cf2', scope: 'main', builtin: 'negate', readonly: true, expression: '-x' },
+  negate: { id: 'negate', type: 'function', x: 820, y: 1070, label: 'negate', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#8c7cf2', scope: 'main', builtin: 'negate', readonly: true, expression: '-x' },
   divide: { id: 'divide', type: 'function', x: 300, y: 1290, label: '(/)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#35b4e0', scope: 'main', builtin: 'divide', readonly: true, expression: 'x / y' },
-  sqrt: { id: 'sqrt', type: 'function', x: 620, y: 1290, label: 'sqrt', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#3cbe84', scope: 'main', builtin: 'sqrt', readonly: true, expression: 'sqrt x' },
+  sqrt: { id: 'sqrt', type: 'function', x: 820, y: 1290, label: 'sqrt', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#3cbe84', scope: 'main', builtin: 'sqrt', readonly: true, expression: 'sqrt x' },
   toRational: { id: 'toRational', type: 'function', x: 300, y: 1510, label: 'toRational', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#d66bd1', scope: 'main', builtin: 'toRational', readonly: true, expression: 'toRational x' },
-  fromIntegral: { id: 'fromIntegral', type: 'function', x: 620, y: 1510, label: 'fromIntegral', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#ec7550', scope: 'main', builtin: 'fromIntegral', readonly: true, expression: 'fromIntegral x' },
+  fromIntegral: { id: 'fromIntegral', type: 'function', x: 820, y: 1510, label: 'fromIntegral', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#ec7550', scope: 'main', builtin: 'fromIntegral', readonly: true, expression: 'fromIntegral x' },
   round: { id: 'round', type: 'function', x: 300, y: 1730, label: 'round', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#86c24c', scope: 'main', builtin: 'round', readonly: true, expression: 'round x' },
-  isNaN: { id: 'isNaN', type: 'function', x: 620, y: 1730, label: 'isNaN', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#e85c9e', scope: 'main', builtin: 'isNaN', readonly: true, expression: 'isNaN x' },
+  isNaN: { id: 'isNaN', type: 'function', x: 820, y: 1730, label: 'isNaN', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#e85c9e', scope: 'main', builtin: 'isNaN', readonly: true, expression: 'isNaN x' },
   minus: { id: 'minus', type: 'function', x: 300, y: 1950, label: '(-)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#5fa8e8', scope: 'main', builtin: 'minus', readonly: true, expression: 'x - y' },
-  times: { id: 'times', type: 'function', x: 620, y: 1950, label: '(*)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#f0954a', scope: 'main', builtin: 'times', readonly: true, expression: 'x * y' },
+  times: { id: 'times', type: 'function', x: 820, y: 1950, label: '(*)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#f0954a', scope: 'main', builtin: 'times', readonly: true, expression: 'x * y' },
   addZero: { id: 'addZero', type: 'function', x: 300, y: 2170, label: 'addZero', params: [], mounted: [], paramScopes: [], color: '#4fc2c2', scope: 'main', builtin: 'addZero', readonly: true, expression: '0 (additive identity)' },
-  mulOne: { id: 'mulOne', type: 'function', x: 620, y: 2170, label: 'mulOne', params: [], mounted: [], paramScopes: [], color: '#b98fef', scope: 'main', builtin: 'mulOne', readonly: true, expression: '1 (multiplicative identity)' },
+  mulOne: { id: 'mulOne', type: 'function', x: 820, y: 2170, label: 'mulOne', params: [], mounted: [], paramScopes: [], color: '#b98fef', scope: 'main', builtin: 'mulOne', readonly: true, expression: '1 (multiplicative identity)' },
   geq: { id: 'geq', type: 'function', x: 300, y: 2390, label: '(>=)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#ed8fa8', scope: 'main', builtin: 'geq', readonly: true, expression: 'x >= y' },
-  eq: { id: 'eq', type: 'function', x: 620, y: 2390, label: '(==)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#3cbe9e', scope: 'main', builtin: 'eq', readonly: true, expression: 'x == y' },
-  select: { id: 'select', type: 'function', x: 620, y: 2610, label: 'select', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'select', readonly: true, expression: 'λc a b. c ? a : b' },
+  eq: { id: 'eq', type: 'function', x: 820, y: 2390, label: '(==)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#3cbe9e', scope: 'main', builtin: 'eq', readonly: true, expression: 'x == y' },
+  select: { id: 'select', type: 'function', x: 820, y: 2610, label: 'select', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'select', readonly: true, expression: 'λc a b. c ? a : b' },
 }
 function activeNodes() { return state.activeFunction ? functionBodies[state.activeFunction] : nodes }
 function activeName() { return state.activeFunction ? nodes[state.activeFunction].label : 'main' }
@@ -311,8 +311,8 @@ function createCustomFunction() {
 
 function resize() {
   const dpr = window.devicePixelRatio || 1
-  canvas.width = canvas.clientWidth * dpr
-  canvas.height = canvas.clientHeight * dpr
+  canvas.width = Math.round(canvas.clientWidth * dpr)
+  canvas.height = Math.round(canvas.clientHeight * dpr)
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   if (canvas.clientWidth < 760) {
     nodes.add.x = 220
@@ -351,7 +351,9 @@ const FN_LEFT = 46       // world px from node.x (head badge center) to the bloc
 const SLOT_START = 118   // world px from node.x to the first parameter slot's center
 const SLOT_STRIDE = 94   // world px between consecutive slot centers
 const SLOT_D = 64        // embedded parameter slot circle diameter
-const FN_TAIL = 40       // right padding after the last slot before the block's right edge
+const FN_TAIL = 52       // right padding after the last slot before the block's right edge — room for the ▶ badge on the top border, clear of the last slot's tag
+const TAG_MIN_ZOOM = .45 // below this zoom slot tags are hidden (too small to read)
+const TAG_GAP = 8        // world px kept free between neighbouring slot tags (a tag is at most SLOT_STRIDE - TAG_GAP wide)
 const CHIP_W = 132       // value/boolean/output/curried chip width — same pill language as the function block, just shorter
 const CHIP_H = 64        // chip height — matches SLOT_D so a standalone chip reads as the same unit as an embedded slot
 const SNAP_RADIUS = 130  // world-space magnet radius: highlight + auto-connect distance
@@ -681,7 +683,7 @@ function drawFunctionBlock(node, pass, selected) {
   ctx.shadowColor = 'transparent'; ctx.lineWidth = selected ? 3 : 2; ctx.strokeStyle = selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
   ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('ƒ', p.x, p.y + 1)
-  const playX = rect.right - 16 * state.zoom, playY = rect.top + 2 * state.zoom
+  const playX = rect.right - 24 * state.zoom, playY = rect.top + 2 * state.zoom
   ctx.beginPath(); ctx.arc(playX, playY, 13 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = '#211d34'; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `${11 * state.zoom}px sans-serif`; ctx.fillText('▶', playX + 1, playY + 1)
   label(node, p, rect.top + rect.height, pass)
@@ -780,6 +782,7 @@ function updatePortEditor(pass = typePass()) {
     slot.style.left = `${center.x - (SLOT_D / 2) * state.zoom}px`; slot.style.top = `${center.y - (SLOT_D / 2) * state.zoom}px`
     slot.style.width = `${SLOT_D * state.zoom}px`; slot.style.height = `${SLOT_D * state.zoom}px`
     slot.style.borderColor = mountedNode ? 'transparent' : slotColor
+    slot.style.borderWidth = `${Math.max(1, 2 * state.zoom)}px`
     slot.dataset.functionId = node.id; slot.dataset.index = index
     // One small pill above the slot reads exactly like a Haskell type
     // annotation — `n :: Int` — so the slot is self-explanatory without
@@ -795,20 +798,32 @@ function updatePortEditor(pass = typePass()) {
     tagName.className = 'param-tag-name'; tagName.textContent = paramDisplayName(node, index)
     const tagSep = document.createElement('i')
     tagSep.className = 'param-tag-sep'; tagSep.textContent = '::'
+    // The tag only gets one slot's worth of width, so a class context
+    // (`AddSemigroup g ⇒ g`) would spill into the neighbouring tag — show
+    // just the type itself (the context is still in the signature under the
+    // block) and keep the full annotation in the tooltip; anything still too
+    // long is ellipsized by CSS.
+    const fullType = expectedParamType(node, index, activeNodes(), labelNamer, pass)
     const tagType = document.createElement('span')
-    tagType.className = 'param-tag-type'; tagType.textContent = expectedParamType(node, index, activeNodes(), labelNamer, pass)
+    tagType.className = 'param-tag-type'; tagType.textContent = fullType.split(' ⇒ ').pop()
     tagType.style.color = slotColor
     tag.append(tagName, tagSep, tagType)
+    tag.title = `${paramDisplayName(node, index)} :: ${fullType}`
     // Plain DOM elements laid over the canvas, not canvas-drawn text — the
     // slot's own width/height already scale with state.zoom above, but this
     // tag's font-size/spacing need the same treatment explicitly or it stays
     // pinned at its CSS default size while the slot around it grows/shrinks,
     // drifting out of place at anything but 100% zoom.
-    tag.style.fontSize = `${9 * state.zoom}px`
-    tag.style.padding = `${3 * state.zoom}px ${8 * state.zoom}px`
-    tag.style.marginBottom = `${8 * state.zoom}px`
+    tag.style.fontSize = `${10 * state.zoom}px`
+    tag.style.padding = `${2 * state.zoom}px ${7 * state.zoom}px`
+    tag.style.marginBottom = `${5 * state.zoom}px`
     tag.style.gap = `${3 * state.zoom}px`
-    slot.append(tag)
+    tag.style.maxWidth = `${(SLOT_STRIDE - TAG_GAP) * state.zoom}px`
+    // Zoomed far out the tag is a few px of unreadable text (or, under a
+    // browser minimum font size, a full-size pill piling onto its
+    // neighbours) — leave it to the tooltip until it can be read.
+    if (state.zoom >= TAG_MIN_ZOOM) slot.append(tag)
+    else slot.title = tag.title
     if (mountedNode) {
       // Snapped-in: render the plugged node as a nested chip — colored by
       // its resolved TYPE (not the slot's own decorative node color), so a
@@ -818,13 +833,15 @@ function updatePortEditor(pass = typePass()) {
       chip.className = 'param-chip'
       chip.style.background = colorForType(resolvedValueQual(mountedNode, activeNodes(), pass).type, labelNamer)
       chip.textContent = nodeDisplayText(mountedNode)
+      chip.style.fontSize = `${11 * state.zoom}px`
+      chip.style.padding = `0 ${10 * state.zoom}px`
       chip.title = '드래그해서 떼어내기'
       const unfold = document.createElement('button')
       unfold.className = 'chip-unfold'; unfold.type = 'button'
       unfold.textContent = mountedNode.unfolded ? '⤡' : '⤢'
       unfold.title = mountedNode.unfolded ? 'Fold back into the slot' : 'Unfold onto the canvas (it stays plugged in)'
       unfold.style.width = unfold.style.height = `${16 * state.zoom}px`
-      unfold.style.left = unfold.style.top = `${-6 * state.zoom}px`
+      unfold.style.left = unfold.style.top = '0'
       unfold.style.fontSize = `${11 * state.zoom}px`; unfold.style.lineHeight = `${16 * state.zoom}px`
       unfold.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
       unfold.addEventListener('click', (event) => { event.stopPropagation(); setUnfolded(mountedNode, !mountedNode.unfolded) })
@@ -854,7 +871,7 @@ function updatePortEditor(pass = typePass()) {
     const remove = document.createElement('button')
     remove.className = 'param-remove'; remove.type = 'button'; remove.textContent = '−'; remove.title = 'Remove parameter'
     remove.style.width = remove.style.height = `${16 * state.zoom}px`
-    remove.style.right = remove.style.top = `${-6 * state.zoom}px`
+    remove.style.right = remove.style.top = '0'
     remove.style.fontSize = `${12 * state.zoom}px`; remove.style.lineHeight = `${16 * state.zoom}px`
     remove.addEventListener('click', (event) => {
       event.stopPropagation()
@@ -869,7 +886,9 @@ function updatePortEditor(pass = typePass()) {
   visibleFunctions.forEach(node => {
     const add = document.createElement('button')
     add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = 'Add parameter'
-    const center = slotScreenCenter(node, node.params.length)
+    // Just past the block's right edge (not at the next slot's would-be
+    // center, which lands on the edge itself once the tail is wider).
+    const center = toScreen({ x: functionBlockRight(node) + 22, y: node.y })
     const addSize = 26 * state.zoom
     add.style.width = add.style.height = `${addSize}px`
     add.style.fontSize = `${18 * state.zoom}px`; add.style.lineHeight = `${20 * state.zoom}px`
@@ -1600,7 +1619,13 @@ document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
 document.querySelector('#fit').onclick = () => fitToView()
 document.querySelector('#unfold-all').onclick = () => setAllUnfolded(true)
 document.querySelector('#fold-all').onclick = () => setAllUnfolded(false)
-window.addEventListener('resize', resize)
+// The canvas bitmap has to track the element's CSS size, not just the
+// window's: the element also changes size without any window resize (the
+// inspector collapsing at the breakpoint, layout settling after fonts load),
+// and a stale bitmap gets stretched by CSS — the drawn blocks come out
+// squashed and no longer line up with the DOM slots laid over them.
+new ResizeObserver(resize).observe(canvas)
+window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
 document.querySelector('.add-node').addEventListener('click', createCustomFunction)
 document.querySelector('.add-type').addEventListener('click', () => openTypeDialog())
 document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
