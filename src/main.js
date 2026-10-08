@@ -1,7 +1,9 @@
 import './style.css'
-import { applySubst, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
+import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
 import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes } from './numericClasses.js'
+import { createEvaluator, EvalError, isClosure } from './evaluator.js'
+import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject } from './project.js'
 
 const app = document.querySelector('#app')
 
@@ -26,7 +28,7 @@ app.innerHTML = `
         <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong>GHC 9.6.3 <i>●</i></strong></div></div>
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved"><i></i> Saved just now</span></div><div class="toolbar-actions"><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
         <div class="canvas-wrap"><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
@@ -98,6 +100,14 @@ const functionBodies = {
   },
 }
 let outputId = 0
+// The function `Run graph` (and Ctrl+Enter) plays — a node id in `nodes`.
+let entryId = 'add'
+// Everything in `nodes`/`functionBodies` at startup is a builtin; kept so a
+// loaded project can be reconciled with this version's builtins.
+const builtinNodes = structuredClone(nodes)
+const builtinBodies = structuredClone(functionBodies)
+const evaluator = createEvaluator({ nodes, functionBodies })
+const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
 function renderFunctionLibrary() {
@@ -385,6 +395,9 @@ function draw() {
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
   document.querySelector('#back-graph').hidden = !state.activeFunction
+  // Every mutation ends in a draw(), so this is the one place that notices
+  // them — debounced, and skipped mid-drag so a drag records one step.
+  if (!state.drag) scheduleCheckpoint()
 }
 // A function node renders as one unified stadium block — the ƒ head badge
 // and every parameter slot live inside the SAME silhouette (no separate
@@ -457,9 +470,14 @@ function label(node, p, baseY, pass) {
 // The declared parameter name at this call site's index (e.g. `n`, `x`,
 // `condition`) when known, so a slot can label itself meaningfully instead
 // of a generic "input N".
+// A canonical definition node's `params` double as its slot *contents* (type
+// `3` into add's slot and params[0] becomes '3'), so the declared name comes
+// from the builtin as shipped, or a custom function's body parameter nodes.
 function paramDisplayName(node, index) {
-  const source = node.sourceFunctionId ? nodes[node.sourceFunctionId] : node
-  return source?.params?.[index] || `#${index + 1}`
+  const sourceId = node.sourceFunctionId || node.id
+  const declared = builtinNodes[sourceId]?.params?.[index]
+    ?? Object.values(functionBodies[sourceId] || {}).filter((n) => n.type === 'parameter')[index]?.label
+  return declared || nodes[sourceId]?.params?.[index] || `#${index + 1}`
 }
 // Unmounts whatever is plugged into `node`'s slot `index` and returns it
 // (or null) — used by both the "−" remove-parameter button and the
@@ -475,6 +493,12 @@ function detachMounted(node, index) {
   return moving
 }
 function updatePortEditor(pass = typePass()) {
+  // The overlay is rebuilt from scratch on every draw(), including the one a
+  // keystroke in a slot triggers — remember which slot had focus (and the
+  // caret) so typing `12` doesn't lose focus after the `1`.
+  const focused = editor.contains(document.activeElement) && document.activeElement.classList.contains('param-value')
+    ? { fn: document.activeElement.closest('.param-slot').dataset.functionId, index: document.activeElement.closest('.param-slot').dataset.index, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+    : null
   editor.innerHTML = ''
   Object.values(activeNodes()).filter(isFunction).forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
@@ -543,6 +567,7 @@ function updatePortEditor(pass = typePass()) {
       input.className = 'param-value'; input.type = 'text'
       input.placeholder = slotExpectsFunction(node, index, pass) ? 'ƒ' : '?'
       input.value = rawValue; input.title = `Parameter ${index + 1}`
+      if (pass.perNode.get(node.id)?.invalidSlots?.includes(index)) { input.classList.add('invalid'); input.title = `"${rawValue}" doesn't fit ${paramDisplayName(node, index)} :: ${expectedParamType(node, index, activeNodes(), labelNamer, pass)}` }
       input.style.fontSize = `${11 * state.zoom}px`
       input.style.paddingTop = `${4 * state.zoom}px`
       input.addEventListener('input', () => { node.params[index] = input.value; state.selected = node.id; updateInspector(); draw() })
@@ -574,6 +599,10 @@ function updatePortEditor(pass = typePass()) {
     add.addEventListener('click', () => { node.params.push(`p${node.params.length + 1}`); node.mounted.push(null); node.paramScopes.push('local'); state.selected = node.id; updateInspector(); draw() })
     editor.append(add)
   })
+  if (focused) {
+    const input = editor.querySelector(`.param-slot[data-function-id="${CSS.escape(focused.fn)}"][data-index="${focused.index}"] .param-value`)
+    if (input) { input.focus(); input.setSelectionRange(focused.start, focused.end) }
+  }
 }
 // After a `number` node's type annotation changes, any existing wire into it
 // may no longer type-check (e.g. it was plugged into an Int-only port, then
@@ -605,7 +634,46 @@ function renderValueInspector(n) {
   const annotateRow = isNumber
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label><input class="value-input" value="${n.value ?? 'partial'}" ${isNumber ? '' : 'readonly'} /></div>`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${n.value ?? 'partial'}" ${isNumber ? '' : 'readonly'} />`}</div>${deleteButton(n)}`
+}
+// Why `n` can't be deleted, or null if it can. Builtins are the language
+// itself; a function's Output and parameters are its signature, changed
+// through the function's own ports instead; a custom function still called
+// from some body would leave those calls dangling.
+function deleteBlocker(n) {
+  if (n.readonly) return "Builtin functions can't be deleted"
+  if (n.type === 'output' || n.type === 'parameter') return "A function's Output and parameters can't be deleted"
+  if (n.custom && nodes[n.id] === n) {
+    const callers = Object.values(functionBodies).flatMap((body) => Object.values(body)).filter((m) => m.sourceFunctionId === n.id).length
+    if (callers) return `${n.label} is still called ${callers} time${callers > 1 ? 's' : ''} — delete those calls first`
+  }
+  return null
+}
+function deleteButton(n) {
+  return deleteBlocker(n) ? '' : '<button class="delete-node" id="delete-node">Delete node <kbd>Del</kbd></button>'
+}
+// Removes `id` from the active graph, unplugging it from wherever it was
+// mounted and freeing whatever was mounted into it (placed beside it). A
+// custom function's definition takes its body with it.
+function deleteNode(id) {
+  const graph = activeNodes()
+  const n = graph[id]
+  if (!n) return
+  const blocker = deleteBlocker(n)
+  if (blocker) return showToast(blocker)
+  Object.values(graph).forEach((other) => {
+    if (other.type === 'function') other.mounted?.forEach((mountedId, i) => { if (mountedId === id) { other.mounted[i] = null; other.params[i] = '' } })
+    if (other.type === 'output' && other.source === id) { other.source = null; other.value = 'open' }
+  })
+  ;(n.mounted || []).forEach((mountedId, i) => {
+    const child = mountedId && graph[mountedId]
+    if (child) { child.mountedTo = null; child.connected = false; child.x = n.x + 150 + i * 40; child.y = n.y + 120 }
+  })
+  delete graph[id]
+  if (graph === nodes && n.custom) delete functionBodies[id]
+  if (entryId === id) entryId = null
+  state.selected = state.activeFunction ? 'output' : 'add'
+  renderFunctionLibrary(); updateInspector(); draw()
 }
 function updateInspector() {
   const n = activeNodes()[state.selected]
@@ -613,10 +681,16 @@ function updateInspector() {
   inspector.innerHTML = n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div><div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div><button class="evaluate" id="evaluate">▶ &nbsp; Play function</button><div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div><div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div><div class="property"><label>BODY · OUTPUT</label><div class="connection-tag">${n.expression || functionBodies[n.sourceFunctionId || n.id]?.output?.expression || 'Drop a node into Output to define this function'}</div></div><div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span><span>${value || `parameter ${i + 1}`}</span><select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
+  const entryToggle = document.querySelector('#entry-toggle')
+  if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
+  const deleteNodeButton = document.querySelector('#delete-node')
+  if (deleteNodeButton) deleteNodeButton.onclick = () => deleteNode(n.id)
+  const boolInput = document.querySelector('.bool-input')
+  if (boolInput) boolInput.onchange = () => { n.value = boolInput.value; updateInspector(); draw() }
   const scopeSelect = document.querySelector('#function-scope')
   if (scopeSelect) scopeSelect.onchange = () => { n.scope = scopeSelect.value; updateInspector(); draw() }
   document.querySelectorAll('.param-scope').forEach((select) => {
@@ -631,103 +705,44 @@ function updateInspector() {
   // line catches up next time something reselects this node.
   if (valueInput && n.type === 'number') valueInput.oninput = () => { n.value = valueInput.value; draw() }
 }
+// Plays `fn`: evaluates it as a value (callee applied to its applied slots —
+// see src/evaluator.js) and drops the result next to it. A fully-applied
+// call yields a number/boolean node; anything with open slots yields a
+// curried node carrying both its residual type and its runtime closure, so it
+// can be plugged in and played again later.
 function executeFunction(fn) {
   if (!isFunction(fn)) return
+  const graph = activeNodes()
+  const entry = typePass(graph).perNode.get(fn.id)
+  const bad = entry?.invalidSlots?.[0]
+  if (bad !== undefined) return showToast(`"${fn.params[bad]}" doesn't fit ${paramDisplayName(fn, bad)} :: ${expectedParamType(fn, bad, graph)}`)
+  let result
+  try {
+    result = evaluator.run(graph, fn.id)
+  } catch (error) {
+    if (error instanceof EvalError) return showToast(error.message)
+    throw error
+  }
   state.running = true
-  const values = fn.params.map(value => Number(value) || 0), filled = fn.params.filter(v => v !== '').length
   const id = `output-${++outputId}`
-  if (filled < fn.params.length) {
-    // Residual type after peeling off the already-filled params (left-to-right,
-    // same looseness as `filled` above — this app doesn't track which specific
-    // slots are filled, only how many).
-    const entry = typePass().perNode.get(fn.id)
-    const residual = entry?.paramTypes ? entry.paramTypes.slice(filled).reduceRight((acc, t) => tfun(t, acc), entry.resultType) : null
-    // Note: unlike a full signature, this residual doesn't carry the preds
-    // still pending on it (e.g. partially-applying `plus` loses its `AddSemigroup`
-    // obligation in this display) — an intentionally narrow scope limit,
-    // same spirit as leaving curried nodes untyped for reconnection below.
-    activeNodes()[id] = { id, type: 'curried', typeName: residual ? showQual([], residual) : functionSignature(fn), resolvedType: residual || undefined, x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45, label: `${fn.label} · ${filled}/${fn.params.length}`, value: 'ƒ', remaining: fn.params.length - filled, color: '#a96ef0' }
+  const position = { x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45 }
+  const valueType = entry ? valueTypeOfEntry(entry) : null
+  if (isClosure(result)) {
+    const appliedCount = entry?.applied?.filter(Boolean).length ?? 0
+    // Keep the residual's class constraints with it (`Semiring a ⇒ a → a`,
+    // not a bare `a → a`), generalized so each later pass instantiates it fresh.
+    const resolvedScheme = valueType ? generalize((entry.preds || []).filter((p) => ftv(valueType).has(p.type.id)), valueType) : undefined
+    graph[id] = { id, type: 'curried', typeName: valueType ? showQual(resolvedScheme.preds, valueType) : functionSignature(fn), resolvedScheme, closure: result, ...position, label: `${fn.label} · ${appliedCount}/${fn.params.length}`, value: 'ƒ', remaining: result.args.filter((a) => a === null).length, color: '#a96ef0' }
   } else {
-    const result = evaluateFunction(fn, values)
     const booleanResult = typeof result === 'boolean'
     // Inherit the function's actual resolved result type when it's concrete
     // (e.g. Play `sqrt` on a Double literal → the result node is Double too,
     // not a hardcoded Int) via the same annotation mechanism a literal uses.
-    const resultType = typePass().perNode.get(fn.id)?.resultType
-    const concreteType = !booleanResult && resultType?.kind === 'con' ? resultType.name : undefined
-    activeNodes()[id] = { id, type: booleanResult ? 'boolean' : 'number', typeName: booleanResult ? 'Bool' : (concreteType || 'Int'), annotation: concreteType, x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45, label: 'result', value: String(result), color: booleanResult ? '#ed6b84' : '#8c7cf2' }
+    const concreteType = !booleanResult && valueType?.kind === 'con' ? valueType.name : undefined
+    graph[id] = { id, type: booleanResult ? 'boolean' : 'number', typeName: booleanResult ? 'Bool' : (concreteType || 'Int'), annotation: concreteType, ...position, label: 'result', value: String(result), color: booleanResult ? '#ed6b84' : '#8c7cf2' }
   }
   state.selected = id; updateInspector(); draw()
   setTimeout(() => { state.running = false; draw() }, 300)
-}
-function evaluateFunction(fn, values, seen = new Set(), environment = {}) {
-  if (seen.has(fn.id)) throw new Error(`Circular function call: ${fn.label}`)
-  const source = fn.sourceFunctionId ? nodes[fn.sourceFunctionId] : fn
-  if (source?.builtin === 'succ') return (values[0] || 0) + 1
-  if (source?.builtin === 'plus') return (values[0] || 0) + (values[1] || 0)
-  if (source?.builtin === 'zero') return 0
-  if (source?.builtin === 'identity') return values[0] || 0
-  if (source?.builtin === 'isZero') return (values[0] || 0) === 0
-  if (source?.builtin === 'ifThenElse') return values[0] ? values[1] : values[2]
-  if (source?.builtin === 'negate') return -(values[0] || 0)
-  if (source?.builtin === 'divide') return (values[0] || 0) / (values[1] || 1) // avoid a bare-zero divisor producing a confusing Infinity by default
-  if (source?.builtin === 'sqrt') return Math.sqrt(values[0] || 0)
-  if (source?.builtin === 'toRational' || source?.builtin === 'fromIntegral') return values[0] || 0 // this app has no distinct runtime numeric representations — type-level only
-  if (source?.builtin === 'round') return Math.round(values[0] || 0) // Haskell rounds half-to-even; simplified here
-  if (source?.builtin === 'isNaN') return Number.isNaN(values[0]) // note: executeFunction launders every param through `Number(value) || 0` before this runs, so a real NaN can never actually arrive — this is a type-level demo of IEEEFloat, its Play result is always false
-  if (source?.builtin === 'minus') return (values[0] || 0) - (values[1] || 0)
-  if (source?.builtin === 'times') return (values[0] || 0) * (values[1] || 0)
-  if (source?.builtin === 'addZero') return 0
-  if (source?.builtin === 'mulOne') return 1
-  if (source?.builtin === 'geq') return (values[0] || 0) >= (values[1] || 0)
-  if (source?.builtin === 'eq') return (values[0] || 0) === (values[1] || 0)
-  // `values` has already been through `Number(value) || 0`, which turns the
-  // string 'true' into 0 — read the raw port text for the Bool condition.
-  if (source?.builtin === 'select') return fn.params?.[0] === 'true' || (fn.params?.[0] !== 'false' && Boolean(values[0])) ? values[1] || 0 : values[2] || 0
-  if (source?.builtin === 'apply') {
-    const target = findFunctionById(fn.mounted?.[0])
-    return target ? evaluateFunction(target, [values[1] || 0], new Set([...seen, fn.id]), environment) : values[1] || 0
-  }
-  if (source?.builtin === 'compose') {
-    const first = findFunctionById(fn.mounted?.[0])
-    const second = findFunctionById(fn.mounted?.[1])
-    if (first && second) {
-      const intermediate = evaluateFunction(second, [values[2] || 0], new Set([...seen, fn.id]), environment)
-      return evaluateFunction(first, [intermediate], new Set([...seen, fn.id]), environment)
-    }
-    return values[0] || 0
-  }
-  const body = functionBodies[fn.sourceFunctionId || fn.id]
-  const output = body && body.output
-  if (output && output.source) {
-    const source = body[output.source]
-    if (source && source.type === 'parameter') {
-      const index = bodyParameterIndex(body, source.id)
-      return values[index] || 0
-    }
-    if (source && source.type === 'function') {
-      const sourceFn = nodes[source.sourceFunctionId || source.id]
-      if (sourceFn) {
-        const args = source.params.map(value => {
-          const numeric = Number(value)
-          return Number.isNaN(numeric) ? (environment[value] || 0) : numeric
-        })
-        return evaluateFunction(sourceFn, args, new Set([...seen, fn.id]), environment)
-      }
-    }
-  }
-  return values[0] || 0
-}
-function bodyParameterIndex(body, id) {
-  return Object.values(body).filter(node => node.type === 'parameter').findIndex(node => node.id === id)
-}
-function findFunctionById(id) {
-  if (!id) return null
-  if (nodes[id] && isFunction(nodes[id])) return nodes[id]
-  for (const body of Object.values(functionBodies)) {
-    if (body[id] && isFunction(body[id])) return body[id]
-  }
-  return null
 }
 // Nodes currently snapped into a slot have no meaningful standalone
 // position/hitbox on the open canvas — they're only reachable through the
@@ -903,8 +918,120 @@ function enterFunction(id) {
   fitToView()
 }
 document.querySelector('#back-graph').onclick = () => { state.activeFunction = null; state.selected = 'add'; renderFunctionLibrary(); updateInspector(); fitToView() }
-document.querySelector('#run').onclick = () => executeFunction(activeNodes().add || nodes.add)
-document.querySelector('#reset').onclick = () => { Object.keys(nodes).filter(id => id.startsWith('output-') || id.startsWith('call-') || id.startsWith('number-')).forEach(id => delete nodes[id]); Object.values(functionBodies).forEach(body => Object.keys(body).filter(id => id.startsWith('call-')).forEach(id => delete body[id])); Object.values(nodes).forEach(node => { node.mountedTo = null; node.connected = false }); state.activeFunction = null; state.selected = 'add'; renderFunctionLibrary(); updateInspector(); fitToView() }
+// Plays the entry function (always in `main`), falling back to whichever
+// function is selected when no entry has been set.
+function runEntry() {
+  if (entryId && nodes[entryId]) {
+    if (state.activeFunction) { state.activeFunction = null; renderFunctionLibrary(); fitToView() }
+    return executeFunction(nodes[entryId])
+  }
+  const selected = activeNodes()[state.selected]
+  if (selected && isFunction(selected)) return executeFunction(selected)
+  showToast('Select a function, or make one the Run graph entry in the inspector')
+}
+document.querySelector('#run').onclick = runEntry
+// --- Toasts ---------------------------------------------------------------
+let toastTimer = null
+function showToast(message) {
+  let toast = document.querySelector('#toast')
+  if (!toast) { toast = document.createElement('div'); toast.id = 'toast'; toast.setAttribute('role', 'status'); document.body.append(toast) }
+  toast.textContent = message
+  toast.classList.add('visible')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200)
+}
+// --- Project snapshots, autosave, undo/redo ---------------------------------
+function currentSnapshot() { return serializeProject({ nodes, functionBodies, entry: entryId, outputId }) }
+// Replaces the live project with `project` (already parsed + merged) in place
+// — `nodes`/`functionBodies` are shared with the evaluator, so they're
+// refilled rather than reassigned.
+function loadProject(project) {
+  Object.keys(nodes).forEach((id) => delete nodes[id])
+  Object.assign(nodes, project.nodes)
+  Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
+  Object.assign(functionBodies, project.functionBodies)
+  entryId = project.entry
+  outputId = project.outputId
+  if (state.activeFunction && !functionBodies[state.activeFunction]) state.activeFunction = null
+  if (!activeNodes()[state.selected]) state.selected = state.activeFunction ? 'output' : 'add'
+  renderFunctionLibrary(); updateInspector(); draw()
+}
+function restoreSnapshot(snapshot) { loadProject(parseProject(snapshot)) }
+const defaultSnapshot = currentSnapshot()
+let checkpointTimer = null
+function scheduleCheckpoint() {
+  clearTimeout(checkpointTimer)
+  checkpointTimer = setTimeout(flushCheckpoint, 300)
+}
+function flushCheckpoint() {
+  clearTimeout(checkpointTimer)
+  checkpointTimer = null
+  const snapshot = currentSnapshot()
+  if (history.record(snapshot)) persist(snapshot)
+  updateHistoryButtons()
+}
+function persist(snapshot) {
+  const status = document.querySelector('#saved-status span')
+  try {
+    localStorage.setItem(STORAGE_KEY, snapshot)
+    status.textContent = `Saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+  } catch {
+    status.textContent = 'Not saved (storage unavailable)'
+  }
+}
+function updateHistoryButtons() {
+  document.querySelector('#undo').disabled = !history.canUndo
+  document.querySelector('#redo').disabled = !history.canRedo
+}
+function undo() {
+  flushCheckpoint()
+  const snapshot = history.undo()
+  if (snapshot) { restoreSnapshot(snapshot); persist(snapshot) }
+  updateHistoryButtons()
+}
+function redo() {
+  flushCheckpoint()
+  const snapshot = history.redo()
+  if (snapshot) { restoreSnapshot(snapshot); persist(snapshot) }
+  updateHistoryButtons()
+}
+document.querySelector('#undo').onclick = undo
+document.querySelector('#redo').onclick = redo
+// Reset is an ordinary (undoable) edit back to the built-in starting graph.
+document.querySelector('#reset').onclick = () => { state.activeFunction = null; restoreSnapshot(defaultSnapshot); fitToView() }
+document.querySelector('#export').onclick = () => {
+  const url = URL.createObjectURL(new Blob([currentSnapshot()], { type: 'application/json' }))
+  const link = Object.assign(document.createElement('a'), { href: url, download: 'hs-simulate-project.json' })
+  link.click()
+  URL.revokeObjectURL(url)
+}
+const importFile = document.querySelector('#import-file')
+document.querySelector('#import').onclick = () => importFile.click()
+importFile.onchange = async () => {
+  const file = importFile.files[0]
+  importFile.value = ''
+  if (!file) return
+  try {
+    state.activeFunction = null
+    loadProject(mergeBuiltins(parseProject(await file.text()), builtinNodes, builtinBodies))
+    fitToView()
+    showToast(`Imported ${file.name}`)
+  } catch (error) {
+    if (error instanceof ProjectError) return showToast(`Import failed: ${error.message}`)
+    throw error
+  }
+}
+// --- Keyboard ---------------------------------------------------------------
+window.addEventListener('keydown', (event) => {
+  const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
+  const mod = event.ctrlKey || event.metaKey
+  if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
+  if (typing || document.querySelector('#function-dialog')) return
+  const key = event.key.toLowerCase()
+  if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
+  else if (mod && key === 'y') { event.preventDefault(); redo() }
+  else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteNode(state.selected) }
+})
 document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
 document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
 document.querySelector('#fit').onclick = () => fitToView()
@@ -920,4 +1047,14 @@ document.querySelectorAll('.node-library > .library-item[data-type]').forEach((i
   updateInspector()
   draw()
 }))
+// Restore the autosaved project, if any, then start history from whatever
+// is on screen.
+try {
+  const saved = localStorage.getItem(STORAGE_KEY)
+  if (saved) loadProject(mergeBuiltins(parseProject(saved), builtinNodes, builtinBodies))
+} catch (error) {
+  showToast(`Couldn't restore the saved project: ${error.message}`)
+}
 renderFunctionLibrary(); updateInspector(); resize(); fitToView()
+history.reset(currentSnapshot())
+updateHistoryButtons()
