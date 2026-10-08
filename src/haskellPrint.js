@@ -18,8 +18,25 @@ const identifier = (s) => /^[a-z_][A-Za-z0-9_']*$/.test(s)
  */
 export function printDefinition(fnId, definitions, functionBodies) {
   const def = definitions[fnId]
+  const printed = printBody(fnId, definitions, functionBodies)
+  if (!def || !printed) return null
+  const lhs = [def.label, ...printed.params].join(' ')
+  const where = printed.bindings.length ? `\n  where\n${printed.bindings.map((b) => `    ${b.name} = ${b.value}`).join('\n')}` : ''
+  return `${lhs} = ${printed.rhs}${where}`
+}
+
+/** A λ node's function as a lambda term: `\x y -> e` (shared values as `let … in`). */
+function printLambda(fnId, definitions, functionBodies) {
+  const printed = printBody(fnId, definitions, functionBodies)
+  if (!printed) return 'undefined'
+  const body = printed.bindings.length ? `let ${printed.bindings.map((b) => `${b.name} = ${b.value}`).join('; ')} in ${printed.rhs}` : printed.rhs
+  return printed.params.length ? `\\${printed.params.join(' ')} -> ${body}` : body
+}
+
+/** The pieces of a function body: parameter names, the right-hand side, and shared bindings. */
+function printBody(fnId, definitions, functionBodies) {
   const body = functionBodies[fnId]
-  if (!def || !body) return null
+  if (!body) return null
   const params = Object.values(body).filter((n) => n.type === 'parameter')
   const shared = new Map() // node id -> where-bound name
   const bindings = []
@@ -74,7 +91,9 @@ export function printDefinition(fnId, definitions, functionBodies) {
     if (n.type === 'output') return n.source ? expr(n.source) : atom('undefined')
     if (n.type !== 'function') return atom(n.label || '?')
     const callee = definitions[n.sourceFunctionId || n.id]
-    const label = callee?.label || n.label
+    // A λ node is a call to its (lambda-lifted) function: print the lambda
+    // itself, applied to whatever its slots capture — a β-redex.
+    const label = callee?.lambda ? `(${printLambda(callee.id, definitions, functionBodies)})` : callee?.label || n.label
     const holes = []
     const args = (n.params || []).map((text, i) => {
       const mounted = n.mounted?.[i]
@@ -110,9 +129,7 @@ export function printDefinition(fnId, definitions, functionBodies) {
 
   const output = body.output
   const rhs = output?.source ? expr(output.source).text : 'undefined'
-  const lhs = [def.label, ...params.map((p) => p.label)].join(' ')
-  const where = bindings.length ? `\n  where\n${bindings.map((b) => `    ${b.name} = ${b.value.text}`).join('\n')}` : ''
-  return `${lhs} = ${rhs}${where}`
+  return { params: params.map((p) => p.label), rhs, bindings: bindings.map((b) => ({ name: b.name, value: b.value.text })) }
 }
 
 /** A type as Haskell source (ASCII arrows). */
