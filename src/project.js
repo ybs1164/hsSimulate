@@ -74,7 +74,7 @@ const BUILTIN_FIELDS = ['type', 'label', 'builtin', 'readonly', 'expression', 'c
 export function mergeBuiltins(project, builtinNodes, builtinBodies) {
   const nodes = {}
   for (const [id, node] of Object.entries(project.nodes)) {
-    if (node.builtin && !builtinNodes[id]) continue
+    if (node.builtin && !builtinNodes[id] && !node.library) continue // a library node (main.js) is rebuilt from code, keeping its place
     nodes[id] = builtinNodes[id] ? { ...node, ...pick(builtinNodes[id], BUILTIN_FIELDS) } : node
   }
   for (const [id, node] of Object.entries(builtinNodes)) if (!nodes[id]) nodes[id] = structuredClone(node)

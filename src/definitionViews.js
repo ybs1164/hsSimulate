@@ -398,3 +398,15 @@ export function overrideFromView(viewId, defs, bodies) {
   }
   return { body: copy(bodies[viewId], defId), lambdas, lambdaBodies }
 }
+
+/**
+ * Whether library function `def` has a definition written as a graph — the
+ * functions that aren't primitives, so they can be opened and edited (the
+ * same ones isEditableView accepts, decided without building the view).
+ */
+export function hasDefinitionGraph(def) {
+  if (!def || !isOverridableId(def.id)) return false
+  if (def.instance) return true // instanceDefinitions only makes the ones it can write
+  if (def.derived) return ['get', 'set', 'over', 'fold'].includes(def.derived.op)
+  return def.builtin !== 'listOf' && Boolean(GRAPHS[def.builtin])
+}

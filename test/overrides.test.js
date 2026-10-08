@@ -3,12 +3,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
-import { buildDefinitionView, isEditableView, overrideFromView } from '../src/definitionViews.js'
+import { buildDefinitionView, hasDefinitionGraph, isEditableView, overrideFromView } from '../src/definitionViews.js'
 import { createEvaluator } from '../src/evaluator.js'
 import { inferGraph } from '../src/inferGraph.js'
 import { preludeDefs, preludeTypeDefs } from '../src/library.js'
 import { createGame } from '../src/runtime.js'
-import { derivedDefinitions } from '../src/typeDecls.js'
+import { derivedDefinitions, instanceDefinitions } from '../src/typeDecls.js'
 import { drawSignature } from '../src/typeGraph.js'
 
 const fn = (id, builtin, label, params) => ({ id, type: 'function', builtin, label, params, mounted: params.map(() => null), readonly: true })
@@ -93,4 +93,17 @@ test('primitives and the protected builtins have nothing to edit', () => {
     const view = buildDefinitionView(definitions[id], (x) => definitions[x])
     assert.equal(isEditableView(view.viewId, view.defs), false, id)
   }
+})
+
+test('the functions put on the top level are exactly the ones with a definition graph', () => {
+  const { project, definitions } = clickCounter()
+  Object.assign(definitions, Object.fromEntries(instanceDefinitions(project.types).map((d) => [d.id, d])))
+  const library = Object.values(definitions).filter((d) => /^(prelude|type|instance):/.test(d.id))
+  for (const def of library) {
+    const view = buildDefinitionView(def, (id) => definitions[id], { slots: 2 })
+    assert.equal(hasDefinitionGraph(def), isEditableView(view.viewId, view.defs), def.id)
+  }
+  const top = library.filter(hasDefinitionGraph).map((d) => d.label)
+  for (const label of ['map', '(++)', 'program', 'set stepsPerSecond', 'text', 'over wallet', 'clicks', '(+) @Wallet', '(==) @Msg', 'foldWidget']) assert.ok(top.includes(label), label)
+  for (const label of ['foldr', 'show', 'Wallet', 'caseMsg', 'Text', 'caseProgram', '[ , , ]']) assert.ok(!top.includes(label), label)
 })

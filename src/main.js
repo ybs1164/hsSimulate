@@ -10,7 +10,7 @@ import { createGame, isProgram } from './runtime.js'
 import { asciiType, identifier, printDefinitionTokens, printLambdaText } from './haskellPrint.js'
 import { parseLiteral } from './literals.js'
 import { PRELUDE, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
-import { buildDefinitionView, isEditableView, overrideFromView, viewIdOf } from './definitionViews.js'
+import { buildDefinitionView, hasDefinitionGraph, isEditableView, overrideFromView, viewIdOf } from './definitionViews.js'
 import { drawSignature, makeTypeNode, readSignature, typeNodeLabel, typeSlotName } from './typeGraph.js'
 import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
@@ -54,7 +54,7 @@ app.innerHTML = `
         <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong>GHC 9.6.3 <i>●</i></strong></div></div>
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><button class="crumb-action" id="edit-definition" title="Take this definition over: edit its graph — every call runs your version" hidden>✎ Edit definition</button><button class="crumb-action" id="reset-definition" title="Drop your edits and go back to the built-in definition" hidden>↺ Original</button><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><button class="crumb-action" id="reset-definition" title="Drop your edits and go back to the built-in definition" hidden>↺ Original</button><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
         <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Unfold every plugged-in expression onto the canvas">⤢</button><button id="fold-all" title="Fold every expression back into its slot">⤡</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
@@ -97,7 +97,7 @@ const nodes = {
 function activeNodes() { return state.activeFunction ? allBodies[state.activeFunction] : nodes }
 // A read-only definition view (or a λ inside one) is on screen: look, don't touch.
 function viewingReadonly() { return Boolean(state.activeFunction && viewBodies[state.activeFunction]) }
-function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : editingOverride() ? ' · edited' : '') : '⌂ top level' }
+function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : isEdited(state.activeFunction) ? ' · edited' : '') : '⌂ top level' }
 const functionBodies = {
   add: {
     inputX: { id: 'add-input-x', type: 'parameter', typeName: 'Int', x: 110, y: 180, label: 'x', value: 'x', color: '#4f8ef7' },
@@ -150,9 +150,10 @@ const instanceDefs = {}
 // uses; they're never saved.
 const viewDefs = {}
 const viewBodies = {}
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? instanceDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] ?? viewDefs[id] })
+const definitions = new Proxy({}, { get: (_, id) => (nodes[id]?.library ? null : nodes[id]) ?? derivedDefs[id] ?? instanceDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] ?? viewDefs[id] })
 const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
 function applyTypes(next) {
+  prunePristine()
   types = next
   setDeclaredArities(declaredArities(types))
   clearViews()
@@ -160,6 +161,7 @@ function applyTypes(next) {
   derivedDefinitions(types).forEach((def) => { derivedDefs[def.id] = def })
   Object.keys(instanceDefs).forEach((id) => delete instanceDefs[id])
   instanceDefinitions(types).forEach((def) => { instanceDefs[def.id] = def })
+  syncLibraryNodes()
   setDynamicInstances(derivedInstances(types))
 }
 const evaluator = createEvaluator({ nodes: definitions, functionBodies: allBodies, get types() { return types } })
@@ -181,6 +183,7 @@ function ensureView(defId, slots = 0) {
 function openDefinitionView(defId, slots = 0) {
   if (isOverride(defId)) return enterFunction(defId)
   const viewId = ensureView(defId, slots)
+  if (viewId && isEditableView(viewId, viewDefs)) return editDefinition(defId) // not a primitive: open it to edit
   if (viewId) enterFunction(viewId)
 }
 // An edited library definition (see evaluator.js's isOverridableId): a
@@ -191,6 +194,38 @@ function openDefinitionView(defId, slots = 0) {
 // body is checked against it — so no caller can break.
 function isOverride(id) { return Boolean(id && isOverridableId(id) && functionBodies[id] && definitions[id]) }
 function editingOverride() { return isOverride(state.activeFunction) }
+// An opened library definition counts as edited only once it differs from
+// the library's — ignoring where its nodes sit (and its locked signature).
+const pristineKeys = new Map()
+function definitionKey(body, lambdas, lambdaBodies) {
+  const strip = (graph) => Object.entries(graph).filter(([, n]) => !isTypeLevel(n) && n.type !== 'header').sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, n]) => {
+    const { x, y, unfolded, connected, ...rest } = n
+    return [id, rest]
+  })
+  return JSON.stringify([strip(body), Object.keys(lambdas).sort().map((id) => [id, strip({ def: lambdas[id] }), strip(lambdaBodies[id] || {})])])
+}
+function isEdited(defId) {
+  if (!isOverride(defId)) return false
+  if (!pristineKeys.has(defId)) {
+    const viewId = ensureView(defId)
+    if (!viewId) return true
+    const fresh = overrideFromView(viewId, viewDefs, viewBodies)
+    pristineKeys.set(defId, definitionKey(fresh.body, fresh.lambdas, fresh.lambdaBodies))
+  }
+  const own = Object.keys(nodes).filter((id) => id.startsWith(`${defId}/λ`))
+  return definitionKey(functionBodies[defId], Object.fromEntries(own.map((id) => [id, nodes[id]])), Object.fromEntries(own.map((id) => [id, functionBodies[id]]))) !== pristineKeys.get(defId)
+}
+// Drop the copies of library definitions that were opened but not changed
+// (and aren't on screen): calls go back to the built-in implementation.
+function prunePristine() {
+  const open = new Set([...state.functionStack, state.activeFunction])
+  for (const id of Object.keys(functionBodies)) {
+    if (!isOverridableId(id) || id.includes('/λ') || [...open].some((o) => o === id || o?.startsWith(`${id}/λ`))) continue
+    if (isOverride(id) && isEdited(id)) continue
+    delete functionBodies[id]
+    for (const own of Object.keys(nodes)) if (own.startsWith(`${id}/λ`)) { delete nodes[own]; delete functionBodies[own] }
+  }
+}
 // Whether `n` is a type node of an edited definition's (locked) signature.
 function lockedType(n) { return isTypeLevel(n) && editingOverride() }
 // Turn the definition view of `defId` into the definition itself, opened in place.
@@ -205,7 +240,6 @@ function editDefinition(defId) {
   state.activeFunction = defId
   state.selected = 'output'
   renderFunctionLibrary(); updateInspector(); draw()
-  showToast(`Editing ${definitions[defId].label} — every call now runs this graph (↺ Original undoes it)`)
 }
 // Drop the edits of `defId`: calls run the built-in definition again.
 function resetDefinition(defId) {
@@ -221,6 +255,72 @@ function resetDefinition(defId) {
   renderFunctionLibrary(); updateInspector(); fitToView()
   showToast(`${definitions[defId]?.label ?? defId} is the built-in definition again`)
 }
+// --- The library on the top level -------------------------------------------
+// A Prelude or type item in the sidebar: on the top level, a function with a
+// definition graph opens it (like your own functions do); inside a body —
+// or for a primitive — it adds a call.
+function onLibraryItem(id) {
+  if (!state.activeFunction && hasDefinitionGraph(definitions[id])) openDefinitionView(id)
+  else addFunctionCall(id)
+}
+// Every library function written as a graph — the Prelude's, the ones
+// derived from your types, the instance methods; everything but the
+// primitives — is a definition node on the top level, next to the builtins
+// and your own functions: double-click it (or Open definition) to go in and
+// edit it. They live in `nodes` marked `library`, rebuilt from their
+// definitions whenever the types change; only where they sit and what is
+// plugged into their slots belong to the project.
+function libraryGroup(def) {
+  if (def.derived || def.instance) return `type ${(def.derived || def.instance).type}`
+  return PRELUDE.find(([, fns]) => fns.some(([builtin]) => `prelude:${builtin}` === def.id))?.[0] ?? 'Prelude'
+}
+function syncLibraryNodes() {
+  const wanted = [...Object.values(preludeDefs), ...Object.values(preludeTypeDefs), ...Object.values(derivedDefs), ...Object.values(instanceDefs)].filter(hasDefinitionGraph)
+  const ids = new Set(wanted.map((def) => def.id))
+  for (const [id, n] of Object.entries(nodes)) if (n.library && !ids.has(id)) delete nodes[id]
+  const placed = []
+  for (const def of wanted) {
+    const old = nodes[def.id]
+    const same = old?.params?.length === def.params.length
+    nodes[def.id] = {
+      ...structuredClone(def), library: true, readonly: true, group: libraryGroup(def),
+      params: same ? old.params : [...def.params], mounted: same ? old.mounted : def.params.map(() => null), paramScopes: def.params.map(() => 'local'),
+      x: old?.x, y: old?.y,
+    }
+    if (old?.x === undefined) placed.push(nodes[def.id])
+  }
+  // Whatever was plugged into a slot that's gone is free again.
+  for (const n of Object.values(nodes)) {
+    const [host, slot] = (n.mountedTo || '').split(':')
+    if (host && nodes[host]?.mounted?.[Number(slot)] !== n.id) { n.mountedTo = null; n.connected = false }
+  }
+  if (placed.length) layoutLibraryNodes(placed)
+}
+// New library nodes go below everything else, one column per group (a
+// Prelude group, or a type's functions); a group that already has a column
+// grows at its bottom.
+function layoutLibraryNodes(placed) {
+  const step = FN_H + 110
+  const placedSet = new Set(placed)
+  const settled = Object.values(nodes).filter((n) => n.library && !placedSet.has(n))
+  const others = Object.values(nodes).filter((n) => isFunction(n) && !n.lambda && !n.library && n.x !== undefined)
+  const columns = new Map()
+  for (const n of settled) {
+    const c = columns.get(n.group)
+    columns.set(n.group, { x: c?.x ?? n.x, bottom: Math.max(c?.bottom ?? -Infinity, n.y) })
+  }
+  const top = settled.length ? Math.min(...settled.map((n) => n.y)) : others.length ? Math.max(...others.map((n) => n.y)) + step + 160 : 0
+  let nextLeft = settled.length ? Math.max(...settled.map(functionBlockRight)) + 160 : others.length ? Math.min(...others.map(functionBlockLeft)) : 0
+  for (const group of [...new Set(placed.map((n) => n.group))]) {
+    const members = placed.filter((n) => n.group === group)
+    const column = columns.get(group)
+    members.forEach((n, i) => {
+      n.x = column ? column.x : nextLeft + FN_LEFT
+      n.y = column ? column.bottom + step * (i + 1) : top + step * i
+    })
+    if (!column) nextLeft = Math.max(...members.map(functionBlockRight)) + 160
+  }
+}
 // λs (made inside an edited definition, say) that no graph calls any more.
 function dropUncalledLambdas() {
   for (let changed = true; changed;) {
@@ -234,6 +334,7 @@ function clearViews() {
   Object.keys(viewDefs).forEach((id) => delete viewDefs[id])
   Object.keys(viewBodies).forEach((id) => delete viewBodies[id])
   laidOutViews.clear()
+  pristineKeys.clear()
   if ([state.activeFunction, ...state.functionStack].some((id) => id && !functionBodies[id])) { state.activeFunction = null; state.functionStack = [] }
 }
 // A view is built without positions: lay its term out right to left from
@@ -268,7 +369,7 @@ const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
 function renderFunctionLibrary() {
-  functionLibrary.innerHTML = Object.values(nodes).filter((n) => isFunction(n) && !n.lambda).map((node) => `
+  functionLibrary.innerHTML = Object.values(nodes).filter((n) => isFunction(n) && !n.lambda && !n.library).map((node) => `
     <button class="library-item function-library-item ${state.activeFunction === node.id ? 'active' : ''}" data-function-id="${node.id}">
       <span class="lib-icon function-icon">ƒ</span>
       <span><b>${node.label}</b><small>${functionSignature(node, nodes)}</small></span>
@@ -307,12 +408,12 @@ function renderPreludeLibrary() {
   document.querySelector('#prelude-library').innerHTML = PRELUDE.map(([group, fns]) => `<div class="prelude-group">${group}</div>${fns.map(([builtin]) => {
     const def = preludeDefs[`prelude:${builtin}`]
     const sch = builtin === 'listOf' ? listOfScheme(3) : builtinSchemes[builtin]
-    return `<button class="derived-item${isOverride(def.id) ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${isOverride(def.id) ? ' · edited definition' : ''}"><b>${def.label}${isOverride(def.id) ? ' ✎' : ''}</b><small>${showQual(sch.preds, sch.type)}</small></button>`
+    return `<button class="derived-item${isEdited(def.id) ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${isEdited(def.id) ? ' · edited definition' : ''}"><b>${def.label}${isEdited(def.id) ? ' ✎' : ''}</b><small>${showQual(sch.preds, sch.type)}</small></button>`
   }).join('')}`).join('')
   // The Prelude's data types (library.js): their constructors and eliminators.
   const byType = Object.groupBy(Object.values(preludeTypeDefs), (def) => def.derived.type)
   document.querySelector('#prelude-library').insertAdjacentHTML('beforeend', Object.values(preludeTypes).map((d) => `<div class="prelude-group" title="${escapeAttr(d.source)}">${d.keyword} ${escapeAttr([d.name, ...d.params].join(' '))}</div>${byType[d.name].map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}`).join(''))
-  document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+  document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => onLibraryItem(item.dataset.functionId) })
   applySearch()
 }
 // --- Search ---------------------------------------------------------------
@@ -365,10 +466,10 @@ function renderTypeLibrary() {
         <span class="lib-icon type-icon">T</span>
         <span><b>${d.name}</b><small>${d.constructors.map((c) => c.name).join(' | ')}${d.deriving.length ? ` · deriving (${d.deriving.flatMap((c) => c.classes).join(', ')})` : ''}</small></span>
       </button>
-      ${(byType[d.name] || []).map((def) => `<button class="derived-item${isOverride(def.id) ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${isOverride(def.id) ? ' · edited definition' : ''}"><b>${def.label}${isOverride(def.id) ? ' ✎' : ''}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}
+      ${(byType[d.name] || []).map((def) => `<button class="derived-item${isEdited(def.id) ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${isEdited(def.id) ? ' · edited definition' : ''}"><b>${def.label}${isEdited(def.id) ? ' ✎' : ''}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}
     </div>`).join('')
   typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeEditor(item.dataset.typeName) })
-  typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+  typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => onLibraryItem(item.dataset.functionId) })
 }
 // The laws of every algebraic instance a declared type has, checked on
 // samples by actually running them (src/laws.js).
@@ -421,7 +522,7 @@ function closeTypeEditor() {
 // Check the draft; apply it if valid. Returns the error message, or ''.
 function applyTypeDraft() {
   try {
-    const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId), ...Object.values(preludeDefs)].map((n) => n.label)
+    const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !n.library), ...Object.values(preludeDefs)].map((n) => n.label)
     const next = declareTypes(types, draftToSource(typeEditor.draft), { replacing: typeEditor.original, functionLabels: labels })
     applyTypes(next)
     typeEditor.original = typeEditor.draft.name
@@ -974,8 +1075,8 @@ function draw() {
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
   document.querySelector('#back-graph').hidden = !state.activeFunction
-  document.querySelector('#edit-definition').hidden = !isEditableView(state.activeFunction, viewDefs)
-  document.querySelector('#reset-definition').hidden = !editingOverride()
+  document.querySelector('#graph-name').dataset.fn = state.activeFunction || ''
+  document.querySelector('#reset-definition').hidden = !isEdited(state.activeFunction)
   document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
@@ -1763,18 +1864,18 @@ function definitionBlock(id, title = 'DEFINITION') {
 // A library function's definition in the inspector: the edited one, or the
 // view of the built-in one — with what can be done about it.
 function libraryDefinitionBlock(defId, slots = 0) {
-  if (isOverride(defId)) return `${definitionBlock(defId, 'DEFINITION · edited')}<button class="use-again" id="open-definition">Open definition → <small>(edited graph)</small></button><button class="use-again" id="reset-library-definition">↺ Back to the original <small>(drops the edits)</small></button>`
+  if (isEdited(defId)) return `${definitionBlock(defId, 'DEFINITION · edited')}<button class="use-again" id="open-definition">Open definition → <small>(edited graph)</small></button><button class="use-again" id="reset-library-definition">↺ Back to the original <small>(drops the edits)</small></button>${instancesBlock(definitions[defId])}`
   const viewId = ensureView(defId, slots)
   if (!viewId) return ''
   const editable = isEditableView(viewId, viewDefs)
-  return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>(read-only graph)</small></button>${editable ? '<button class="use-again" id="edit-library-definition">✎ Edit definition <small>(every call runs your graph)</small></button>' : ''}${instancesBlock(definitions[defId])}`
+  return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>${editable ? '(edit its graph)' : '(a primitive · read-only)'}</small></button>${instancesBlock(definitions[defId])}`
 }
 // A class method's instances at the declared types — each a definition of
 // its own that can be opened and edited (then the method runs it at that type).
 function instancesBlock(def) {
   const at = Object.values(instanceDefs).filter((d) => def?.builtin && d.instance.method === def.builtin && !def.instance)
   if (!at.length) return ''
-  return `<div class="property"><label>INSTANCES · at your types</label>${at.map((d) => `<button class="use-again instance-link" data-instance="${escapeAttr(d.id)}">${escapeAttr(d.label)}${isOverride(d.id) ? ' ✎ <small>(edited)</small>' : ' <small>(derived)</small>'}</button>`).join('')}</div>`
+  return `<div class="property"><label>INSTANCES · at your types</label>${at.map((d) => `<button class="use-again instance-link" data-instance="${escapeAttr(d.id)}">${escapeAttr(d.label)}${isEdited(d.id) ? ' ✎ <small>(edited)</small>' : ' <small>(derived)</small>'}</button>`).join('')}</div>`
 }
 function tokensHtml(tokens) {
   const graph = activeNodes()
@@ -1910,8 +2011,6 @@ function updateInspector() {
   const openDefinition = document.querySelector('#open-definition')
   if (openDefinition) openDefinition.onclick = () => openDefinitionView(n.sourceFunctionId || n.id, n.params.length)
   document.querySelectorAll('.instance-link').forEach((b) => { b.onclick = () => openDefinitionView(b.dataset.instance) })
-  const editLibrary = document.querySelector('#edit-library-definition')
-  if (editLibrary) editLibrary.onclick = () => editDefinition(n.sourceFunctionId || n.id)
   const resetLibrary = document.querySelector('#reset-library-definition')
   if (resetLibrary) resetLibrary.onclick = () => resetDefinition(n.sourceFunctionId || n.id)
   const openBody = document.querySelector('#open-body')
@@ -2244,15 +2343,16 @@ function enterFunction(id) {
   state.functionStack = (def.lambda || viewBodies[id] || isOverride(id)) && state.activeFunction ? [...state.functionStack, state.activeFunction] : []
   state.activeFunction = id
   if (viewBodies[id] && !laidOutViews.has(id)) layoutView(id)
+  prunePristine()
   state.selected = 'output'
   renderFunctionLibrary()
   updateInspector()
   fitToView()
 }
-document.querySelector('#edit-definition').onclick = () => { const viewed = viewDefs[state.activeFunction]?.view; if (viewed) editDefinition(viewed) }
 document.querySelector('#reset-definition').onclick = () => resetDefinition(state.activeFunction)
 document.querySelector('#back-graph').onclick = () => {
   state.activeFunction = state.functionStack.pop() || null
+  prunePristine(); dropUncalledLambdas()
   state.selected = state.activeFunction ? 'output' : 'add'
   renderFunctionLibrary(); updateInspector(); fitToView()
 }
@@ -2467,7 +2567,7 @@ window.addEventListener('keydown', (event) => {
 // Lay a template's custom functions out in a grid to the right of the
 // builtins (the template can't know where the builtins sit).
 function layoutCustomDefinitions() {
-  const builtins = Object.values(nodes).filter((n) => n.readonly && isFunction(n))
+  const builtins = Object.values(nodes).filter((n) => n.readonly && isFunction(n) && !n.library)
   const customs = Object.values(nodes).filter((n) => n.custom && !n.lambda)
   if (!customs.length) return
   const left = Math.max(...builtins.map(functionBlockRight)) + 220
@@ -2695,6 +2795,7 @@ try {
 } catch (error) {
   showToast(`Couldn't restore the saved project: ${error.message}`)
 }
+syncLibraryNodes()
 renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
 history.reset(currentSnapshot())
 updateHistoryButtons()

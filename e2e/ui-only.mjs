@@ -63,10 +63,8 @@ async function activeGraph() {
   const p = await project()
   if (await js(`document.querySelector('#back-graph').hidden`)) return { p, graph: p.nodes }
   const crumb = await js(`document.querySelector('#graph-name').textContent`)
-  if (crumb.endsWith(' · edited')) { // an edited library definition: its body is saved under the library id
-    const [, body] = Object.entries(p.functionBodies).find(([id, body]) => /^(prelude|type|instance):[^/]*$/.test(id) && body.header)
-    return { p, graph: body }
-  }
+  const fnId = await js(`document.querySelector('#graph-name').dataset.fn`)
+  if (/^(prelude|type|instance):/.test(fnId)) return { p, graph: p.functionBodies[fnId] } // a library definition opened to edit: saved under its id
   const name = crumb.split(' / ').pop().replace(/^ƒ /, '')
   const fn = Object.values(p.nodes).find((n) => n.custom && n.label === name && !n.lambda) || Object.values(p.nodes).find((n) => n.lambda && name === 'λ')
   return { p, graph: p.functionBodies[fn.id] }
@@ -334,15 +332,31 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(text.includes('showFFloat 0 n') && text.endsWith('where\n    n = count m'), text)
     return text.split('\n').slice(-2).join(' ').trim()
   })
-  await check('a Prelude call opens its definition as a read-only graph', async () => {
+  await check('a Prelude call opens its definition, ready to edit; a primitive stays read-only', async () => {
     await clickToken('++')
     await js(`document.querySelector('#open-definition').click()`); await sleep(700)
     const crumb = await js(`document.querySelector('#graph-name').textContent`)
     const text = await definitionText()
-    const locked = await js(`[...document.querySelectorAll('#port-editor input')].every((e) => e.disabled || e.readOnly)`)
+    const editable = await js(`[...document.querySelectorAll('#port-editor .param-value')].some((e) => !e.disabled && !e.readOnly)`)
+    await back() // back in view
+    await clickToken('showFFloat')
+    await js(`document.querySelector('#open-definition').click()`); await sleep(700)
+    const primitive = await js(`document.querySelector('#graph-name').textContent`)
     await back(); await back()
-    expect(crumb.endsWith('read-only') && text.includes('foldr (:) ys xs') && locked, `${crumb} / ${text} / locked ${locked}`)
+    expect(crumb === 'ƒ view / ƒ (++)' && text.includes('foldr (:) ys xs') && editable && primitive.endsWith('showFFloat · read-only'), `${crumb} / ${text} / editable ${editable} / ${primitive}`)
     return text.split('\n')[1]
+  })
+  await check('every library function but the primitives is a node on the top level; double-click goes in', async () => {
+    const p = await project()
+    const library = Object.values(p.nodes).filter((n) => n.library).map((n) => n.id)
+    const expected = ['prelude:map', 'prelude:append', 'prelude:program', 'prelude:wText', 'type:Model:count', 'type:Model:over count', 'type:Picture:foldPicture']
+    const primitives = ['prelude:foldr', 'prelude:show', 'type:Model:Model', 'type:Msg:caseMsg']
+    await js(`(() => { const r = document.querySelector('.param-slot[data-function-id="prelude:map"][data-index="0"]').getBoundingClientRect(); document.querySelector('#graph-canvas').dispatchEvent(new MouseEvent('dblclick', { clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, bubbles: true })) })()`); await sleep(700)
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    await back()
+    const kept = Object.keys((await project()).functionBodies).filter((id) => id.startsWith('prelude:map'))
+    expect(expected.every((id) => library.includes(id)) && primitives.every((id) => !library.includes(id)) && crumb === 'ƒ map' && !kept.length, `${library.length} library nodes / missing ${expected.filter((id) => !library.includes(id))} / ${crumb} / kept ${kept}`)
+    return `${library.length} library nodes; map opened, left untouched, not kept`
   })
   const playText = async () => {
     await js(`document.querySelector('#run').click()`); await sleep(800)
@@ -353,14 +367,14 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await check('a Prelude definition is edited as a graph; every call runs it until ↺ Original', async () => {
     await openBody('view')
     await clickToken('++')
-    await js(`document.querySelector('#edit-library-definition').click()`); await sleep(700)
-    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    await js(`document.querySelector('#open-definition').click()`); await sleep(700)
     const typeLocked = await js(`document.querySelector('#tnode-library').hidden`)
     // (++) xs ys = xs: pull xs out of foldr's last slot, then wire it to Output
     const fold = Object.values((await activeGraph()).graph).find((n) => n.sourceFunctionId === 'prelude:foldr').id
     const chip = JSON.parse(await js(`JSON.stringify(document.querySelector('.param-slot[data-function-id="${fold}"][data-index="2"] .param-chip').getBoundingClientRect())`))
     await drag({ x: chip.x + chip.width / 2, y: chip.y + chip.height / 2 }, { x: chip.x + chip.width / 2, y: chip.y + 200 })
     await toOutput(await paramId('xs'))
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
     const text = await definitionText()
     await back(); await back()
     const edited = await playText()
