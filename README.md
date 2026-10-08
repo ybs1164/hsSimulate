@@ -21,7 +21,8 @@ npm run dev
 ### 테스트
 
 ```bash
-npm test
+npm test          # 단위 테스트
+npm run test:e2e  # UI만으로 게임을 만들어 보는 브라우저 테스트(로컬 Chrome 필요, CHROME=경로로 지정 가능)
 ```
 
 ### 프로덕션 빌드 및 미리보기
@@ -42,7 +43,7 @@ npm run preview
 7. 좌측 `+` 버튼으로 함수 이름과 매개변수를 입력하면 커스텀 함수가 생성됩니다. 함수 목록에서 생성한 함수를 열고, 본체의 매개변수 노드 또는 다른 함수 호출 노드를 `Output`에 연결해 동작을 정의합니다.
 8. 선택한 노드는 `Delete`/`Backspace` 키 또는 Inspector의 `Delete node`로 지웁니다. 기초 함수, 함수의 `Output`·매개변수, 아직 호출되고 있는 커스텀 함수는 지울 수 없습니다.
 9. `↶`/`↷`(`Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`)로 실행 취소·다시 실행합니다. 프로젝트는 브라우저(localStorage)에 자동 저장되어 새로고침해도 유지되며, `Export`/`Import`로 JSON 파일로 내보내고 불러올 수 있습니다.
-10. 좌측 `TYPES`의 `+`로 하스켈 문법 그대로 타입을 선언합니다. 예: `data Model = Model { clicks :: Double, perClick :: Double } deriving (Eq, Show)`, `data Event = Click | Tick Double | Buy Int`. 선언 하나는 곱(필드)들의 쌍대곱(생성자)이며, 다음 함수가 자동으로 만들어져 타입 아래에 표시됩니다(클릭하면 캔버스에 호출 노드 추가).
+10. 좌측 `TYPES`의 `+`로 타입을 만들면 **타입 편집기**가 열립니다. 타입은 그것을 이루는 생성자 함수들로 표시됩니다: 생성자마다 함수 블록이 있고, 필드는 블록 안에 `이름 :: 타입`으로 적습니다(모두 이름을 붙이면 레코드). 필드·생성자 추가/삭제, `data`/`newtype`, `deriving`(stock · 점별 anyclass · via Generically · newtype)을 고르면 생성자 시그니처와 유도 함수가 바로 갱신되고, 유효한 편집은 즉시 적용됩니다(실행 취소 가능). 다음 함수가 만들어져 타입 아래에 표시됩니다(클릭하면 캔버스에 호출 노드 추가).
     - 생성자(주입) `Model :: Double → Double → Model`, `Tick :: Double → Event`
     - 레코드 필드의 사영 `clicks :: Model → Double`과 lens식 갱신 `set clicks :: Double → Model → Model`, `over clicks :: (Double → Double) → Model → Model`
     - 분기 함수(쌍대짝) `caseEvent :: a → (Double → a) → (Int → a) → Event → a` — `maybe`/`either`/`bool`과 같은 모양
@@ -53,6 +54,10 @@ npm run preview
 14. 게임 만들기(`src/runtime.js`): PRELUDE의 `Game` 그룹에 하스켈 gloss의 `play`와 같은 모양의 `program :: m → (m → Widget e) → (e → m → m) → (Double → m → m) → Program m e`와 위젯(`text`, `button 라벨 메시지`, `column`, `row`, `progress`)이 있습니다. 진입 함수(`ENTRY POINT`)가 `Program` 값이면 `Run graph`가 게임을 실행합니다: 캔버스 위 패널에 `view`가 그려지고, 버튼은 메시지를 `handle`로 보내며, 시간은 0.1초 단위로 `step`을 거칩니다. 일시정지·`+1s`·배속·게임 리셋, 현재 모델과 메시지 기록이 함께 표시됩니다. 게임 상태는 시각과 함께 저장되어, 다시 열면 지나간 시간이 적용됩니다 — `step`이 (ℝ≥0, +)의 모노이드 작용 법칙을 통과하면 한 번의 호출로, 아니면 잘게 나눠 시뮬레이션합니다. 상단 `Templates…`에서 그래프만으로 만든 클릭 카운터 예제나 가장 작은 빈 게임을 불러와 시작할 수 있습니다(실행 취소 가능).
 15. 슬롯 안에 들어간 식은 칩 왼쪽 위의 `⤢`로 캔버스에 펼칠 수 있습니다(슬롯에 연결된 채로, 연결선과 함께 표시되며 그 노드의 슬롯도 편집 가능). 확대/축소 컨트롤의 `⤢`/`⤡`는 현재 그래프의 모든 식을 트리 모양(인자가 왼쪽)으로 펼치거나 다시 접습니다. 커스텀 함수를 선택하거나 함수 본체에서 Output을 선택하면 인스펙터의 `DEFINITION`에 그 함수가 하스켈 정의로 표시됩니다(`src/haskellPrint.js` — 중위 연산자와 섹션, 여러 번 쓰인 값은 `where`로 공유, 중간 슬롯이 빈 부분 적용은 람다). 게임 실행 중 메시지 기록의 항목을 누르면 그 메시지 직후의 상태로 되감깁니다(시간 여행).
 16. 상단 `⬇ Game`은 진입 함수의 게임을 **HTML 파일 하나**로 내보냅니다(`src/exportHtml.js`, `src/player.js`). 편집기 없이 어느 브라우저에서나 열어 플레이할 수 있고, 게임 상태 저장과 방치 보상도 그대로 동작합니다. 게임 실행 중 MODEL의 `Edit`으로 모델을 하스켈 문법(`show`가 출력하는 그대로, 예: `Model {wallet = Wallet {clicks = 1500}, perClick = 1, rate = 0}`)으로 직접 고칠 수 있으며, 모델 타입에 맞는지 검사하고 틀린 위치를 알려 줍니다(`src/valueParser.js`). 큰 수는 `showCompact`(`1.2K`, `3.4M` …)로 표시할 수 있습니다.
+17. 프로그램 설정과 입력도 그래프로 정합니다. `program`의 설정은 레코드 갱신처럼 `set stepsPerSecond 20 (program …)`, `set maxOffline 3600 …`으로 바꿉니다. 바깥 입력은 Elm의 구독처럼 `set subscriptions subs …`로 연결하며, `subs :: Model → Sub Msg`는 `every 1 Tick`(타이머)과 `onKey (\k -> …)`(키보드)를 `<>`로 합칩니다(`Sub`는 모노이드이자 함자). 클릭 카운터 템플릿에서는 Space로도 클릭됩니다.
+18. **λ 노드**(사이드바 `Lambda`): 이름 없는 함수를 그 자리에서 만들고, 더블클릭으로 본체를 편집합니다(경로에 `ƒ 함수 / ƒ λ`로 표시, Back으로 복귀). 람다 리프팅으로 구현되어 있어, λ의 슬롯에 바깥 값을 꽂으면 그 값을 포획하고 비워 둔 슬롯이 λ의 매개변수가 됩니다. 하스켈로는 `(\c x -> x + c) c`처럼 출력됩니다.
+19. 함수 정의 노드의 `+`/`−`와 인스펙터의 매개변수 이름 칸은 함수의 **시그니처**를 바꾸며, 본체의 매개변수 노드와 모든 호출 노드에 함께 반영됩니다. 이름이 바뀌거나 슬롯 수가 맞지 않게 된 호출 노드는 빨간 테두리로 표시되고, 인스펙터에서 슬롯을 맞출 수 있습니다.
+20. 그 밖에: 검색창(입력하면 사이드바를 거르고 Enter로 추가, `Ctrl/⌘+K`), Shift+클릭 다중 선택(함께 끌기·삭제), `Ctrl/⌘+C`/`V` 복사·붙여넣기(꽂힌 하위 식까지), 튜플 `(a, b)`와 `fst`/`snd`, 순수 난수(`mkStdGen`, `randomR`, `randomRInt` — 생성기를 모델에 보관), gloss식 그림(`circle`, `rectangleSolid`, `translate`, `color`, `<>`로 겹치기)과 `drawing`/`heading`/`spacer`/`withColor` 위젯, 함수 옆에 고정하는 법칙 노드(📌, 편집할 때마다 ✓/✗ 재검사). 템플릿에 주사위 예제(난수·그림)가 추가되었습니다.
 
 ## 캔버스 조작
 
@@ -87,10 +92,12 @@ npm run preview
 - `src/laws.js`: 클래스 법칙과 함수 법칙(준동형·작용·팽창)을 표본으로 검사하는 법칙 검사기
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임(메시지·시간·방치 보상·되감기)
 - `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력하는 프린터
-- `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임)와 그 빌더
+- `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임, 주사위)와 그 빌더
 - `src/player.js`: 위젯 렌더러와 내보낸 게임의 독립 플레이어
 - `src/exportHtml.js`: 플레이어 모듈 번들러와 독립 HTML 생성
 - `src/valueParser.js`: 하스켈 값 문법을 타입에 맞춰 읽는 파서(모델 편집)
+- `src/signature.js`: 함수 시그니처 편집(정의·본체·호출 노드 동기화)
+- `e2e/ui-only.mjs`: UI 조작만으로 게임을 만들고 실행하는 브라우저 e2e 테스트
 - `src/project.js`: 프로젝트 직렬화·불러오기 검증·기초 함수 병합·실행 취소 기록
 - `src/style.css`: 레이아웃과 반응형 스타일
 - `index.html`: 앱 진입 HTML
