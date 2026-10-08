@@ -167,6 +167,7 @@ function renderFunctionLibrary() {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
   })
   renderTypeLibrary()
+  applySearch()
 }
 // Clicking a function in the library: a custom function opens its body when
 // you're on `main`; anything else (or inside a body) drops a call to it.
@@ -181,7 +182,49 @@ function renderPreludeLibrary() {
     return `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${def.label}</b><small>${showQual(sch.preds, sch.type)}</small></button>`
   }).join('')}`).join('')
   document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+  applySearch()
 }
+// --- Search ---------------------------------------------------------------
+// Filters every sidebar entry — functions, functions derived from types,
+// the Prelude — by name or signature. Enter adds the first hit to the graph
+// you're looking at (a custom function on `main` opens its body instead).
+const searchInput = document.querySelector('.search input')
+function searchHits() {
+  return [...document.querySelectorAll('.function-library-item, #type-library .derived-item, #prelude-library .derived-item')].filter((item) => !item.hidden)
+}
+function applySearch() {
+  const q = searchInput.value.trim().toLowerCase()
+  const matches = (el) => !q || el.textContent.toLowerCase().includes(q)
+  document.querySelectorAll('.function-library-item, #prelude-library .derived-item').forEach((item) => { item.hidden = !matches(item) })
+  document.querySelectorAll('#type-library .type-entry').forEach((entry) => {
+    const typeHit = matches(entry.querySelector('.type-item'))
+    const items = [...entry.querySelectorAll('.derived-item')]
+    items.forEach((item) => { item.hidden = !(typeHit || matches(item)) })
+    entry.hidden = !typeHit && items.every((item) => item.hidden)
+  })
+  // A Prelude group heading shows only while one of its entries does.
+  document.querySelectorAll('#prelude-library .prelude-group').forEach((heading) => {
+    let el = heading.nextElementSibling
+    let any = false
+    while (el && !el.classList.contains('prelude-group')) { if (!el.hidden) any = true; el = el.nextElementSibling }
+    heading.hidden = !any
+  })
+}
+searchInput.addEventListener('input', applySearch)
+searchInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    const hit = searchHits()[0]
+    if (!hit) return showToast(`Nothing matches "${searchInput.value}"`)
+    hit.click()
+    searchInput.value = ''
+    applySearch()
+    searchInput.blur()
+  } else if (event.key === 'Escape') {
+    searchInput.value = ''
+    applySearch()
+    searchInput.blur()
+  }
+})
 const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
   const byType = Object.groupBy(Object.values(derivedDefs), (def) => def.derived.type)
@@ -1644,6 +1687,7 @@ window.addEventListener('keydown', (event) => {
   const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
   const mod = event.ctrlKey || event.metaKey
   if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
+  if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); searchInput.focus(); searchInput.select(); return }
   if (typing || document.querySelector('#function-dialog') || play) return // no editing shortcuts while a game is playing
   const key = event.key.toLowerCase()
   if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }

@@ -275,3 +275,4 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .play-side [data-play="edit-model"]{float:right;margin-top:-26px}
 .play-model-editor textarea{width:100%;box-sizing:border-box;font:11px/1.5 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:8px}
 .param-rename{width:110px;font:11px 'DM Mono';border:1px solid var(--line);border-radius:6px;padding:3px 6px;background:var(--panel);color:var(--ink)}
+.sidebar [hidden]{display:none!important}
