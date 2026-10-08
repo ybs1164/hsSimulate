@@ -6,6 +6,8 @@ import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, s
 import { createEvaluator, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from './typeDecls.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
+import { createGame, isProgram } from './runtime.js'
+import { buildClickCounter } from './examples/clickCounter.js'
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 
 const app = document.querySelector('#app')
@@ -35,8 +37,8 @@ app.innerHTML = `
         <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong>GHC 9.6.3 <i>●</i></strong></div></div>
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button></div></div>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><button class="tool-button" id="example" title="Load the click-counter example (undoable)">✦ <span>Example</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
       <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
@@ -126,11 +128,12 @@ const derivedDefs = {}
 const PRELUDE = [
   ['Lists', [['listOf', '[ , , ]', ['x1', 'x2', 'x3']], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
-  ['Text', [['show', 'show', ['x']]]],
+  ['Text', [['show', 'show', ['x']], ['showFFloat', 'showFFloat', ['digits', 'x']]]],
   ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']], ['mkSum', 'Sum', ['x']], ['getSum', 'getSum', ['s']], ['mkProduct', 'Product', ['x']], ['getProduct', 'getProduct', ['p']], ['mkEndo', 'Endo', ['f']], ['appEndo', 'appEndo', ['e', 'x']]]],
   ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
   ['Lattice', [['leq', 'leq', ['x', 'y']], ['join', '(\\/)', ['x', 'y']], ['meet', '(/\\)', ['x', 'y']]]],
   ['VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
+  ['Game', [['program', 'program', ['initial', 'view', 'handle', 'step']], ['wText', 'text', ['s']], ['wButton', 'button', ['label', 'msg']], ['wColumn', 'column', ['widgets']], ['wRow', 'row', ['widgets']], ['wProgress', 'progress', ['fraction']]]],
 ]
 const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).map(([builtin, label, params]) => [`prelude:${builtin}`, { id: `prelude:${builtin}`, type: 'function', builtin, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#5fa8e8' }]))
 const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] })
@@ -1178,6 +1181,7 @@ document.querySelector('#back-graph').onclick = () => { state.activeFunction = n
 // Plays the entry function (always in `main`), falling back to whichever
 // function is selected when no entry has been set.
 function runEntry() {
+  if (entryId && nodes[entryId] && startGameIfProgram(entryId)) return
   if (entryId && nodes[entryId]) {
     if (state.activeFunction) { state.activeFunction = null; renderFunctionLibrary(); fitToView() }
     return executeFunction(nodes[entryId])
@@ -1187,6 +1191,175 @@ function runEntry() {
   showToast('Select a function, or make one the Run graph entry in the inspector')
 }
 document.querySelector('#run').onclick = runEntry
+// --- Playing a Program ------------------------------------------------------
+// When the entry point evaluates to a `Program m e` (see builtinSchemes.js'
+// `program` and src/runtime.js), Run graph plays it: the view is rendered in
+// a panel over the canvas, buttons send their messages through `handle`,
+// and time runs through `step` in fixed slices. The game state is saved
+// with a timestamp; reopening it applies the time away — in one call if
+// `step` passes the monoid-action law, otherwise slice by slice.
+const GAME_KEY = 'hs-simulate:game'
+const SLICE = 0.1 // seconds of game time per step call while playing
+const playPanel = document.querySelector('#play-panel')
+let play = null // { game, entry, modelType, speed, running, last, acc, frame, saveTimer, law }
+
+function startGameIfProgram(id) {
+  let program
+  try {
+    program = evaluator.run(nodes, id)
+  } catch (error) {
+    if (error instanceof EvalError) return false
+    throw error
+  }
+  if (!isProgram(program)) return false
+  const programType = valueTypeOfEntry(typePass(nodes).perNode.get(id))
+  const modelType = programType?.kind === 'app' && programType.fn.kind === 'app' ? programType.fn.arg : null
+  // Is `step` an action of (ℝ≥0, +) on the model? Then any span of time is one call.
+  const law = modelType && !ftv(modelType).size
+    ? checkFunctionLaw('action', program.args[3], tfun(tcon('Double'), tfun(modelType, modelType)), { ev: evaluator, types })
+    : { ok: false, counterexample: 'the model type is not concrete' }
+  stopGame()
+  const game = createGame(evaluator, program, { exactTime: law.ok })
+  play = { game, entry: id, modelType: modelType ? showQual([], modelType) : '?', speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
+  let offline = null
+  try {
+    const saved = JSON.parse(localStorage.getItem(GAME_KEY) || 'null')
+    if (saved && saved.entry === id && saved.modelType === play.modelType) {
+      game.restore(saved)
+      const away = Math.min(7 * 24 * 3600, Math.max(0, (Date.now() - saved.savedAt) / 1000))
+      if (away > 1) offline = { away, ...game.advance(away, SLICE) }
+    }
+  } catch (error) {
+    if (!(error instanceof EvalError) && !(error instanceof SyntaxError)) throw error
+    game.reset()
+  }
+  playPanel.hidden = false
+  buildPlayPanel()
+  renderPlay()
+  if (offline) showToast(offline.exact ? `While you were away: ${formatSeconds(offline.away)} applied in one step (step is a monoid action)` : `While you were away: ${formatSeconds(offline.away)} simulated in ${offline.calls} slices`)
+  play.saveTimer = setInterval(saveGame, 2000)
+  play.frame = requestAnimationFrame(loop)
+  return true
+}
+
+function formatSeconds(t) {
+  if (t < 90) return `${Math.round(t)}s`
+  if (t < 5400) return `${Math.round(t / 60)}m`
+  return `${(t / 3600).toFixed(1)}h`
+}
+
+function loop(now) {
+  if (!play) return
+  if (play.running && play.last !== null) {
+    play.acc += Math.min(1, (now - play.last) / 1000) * play.speed
+    let ticked = false
+    try {
+      while (play.acc >= SLICE) { play.game.tick(SLICE); play.acc -= SLICE; ticked = true }
+    } catch (error) {
+      gameError(error)
+    }
+    if (ticked) renderPlay()
+  }
+  play.last = now
+  play.frame = requestAnimationFrame(loop)
+}
+
+function gameError(error) {
+  if (!(error instanceof EvalError)) throw error
+  play.running = false
+  showToast(`Game stopped: ${error.message}`)
+  renderPlay()
+}
+
+function saveGame() {
+  if (!play) return
+  try {
+    localStorage.setItem(GAME_KEY, JSON.stringify({ ...play.game.snapshot(), entry: play.entry, modelType: play.modelType, savedAt: Date.now() }))
+  } catch {}
+}
+
+function stopGame() {
+  if (!play) return
+  saveGame()
+  cancelAnimationFrame(play.frame)
+  clearInterval(play.saveTimer)
+  play = null
+  playPanel.hidden = true
+  playPanel.innerHTML = ''
+}
+
+// Widgets render to plain DOM. Buttons carry the index of their message in
+// `play.msgs`; one pointerdown listener on the (persistent) view container
+// dispatches it — the view is rebuilt on every tick, so a per-button click
+// handler could lose a click whose press and release straddle a rebuild.
+function renderWidget(w, msgs) {
+  if (w.kind === 'text') return Object.assign(document.createElement('p'), { className: 'w-text', textContent: w.text })
+  if (w.kind === 'button') {
+    const b = Object.assign(document.createElement('button'), { className: 'w-button', textContent: w.label, type: 'button' })
+    b.dataset.msg = msgs.push(w.msg) - 1
+    return b
+  }
+  if (w.kind === 'progress') {
+    const bar = Object.assign(document.createElement('div'), { className: 'w-progress' })
+    bar.append(Object.assign(document.createElement('i'), { style: `width:${(w.value * 100).toFixed(1)}%` }))
+    return bar
+  }
+  const box = Object.assign(document.createElement('div'), { className: `w-${w.kind}` })
+  box.append(...w.children.map((c) => renderWidget(c, msgs)))
+  return box
+}
+
+function buildPlayPanel() {
+  playPanel.innerHTML = `<div class="play-bar"><b></b><span class="play-time"></span><button class="tool-button icon-only" data-play="toggle" title="Pause / resume"></button><button class="tool-button" data-play="step" title="Advance one second">+1s</button><select data-play="speed" title="Speed">${[1, 2, 10, 60].map((x) => `<option value="${x}">${x}×</option>`).join('')}</select><button class="tool-button" data-play="reset">Reset game</button><button class="tool-button icon-only" data-play="close" title="Back to the editor">×</button></div><div class="play-body"><div class="play-view"></div><aside class="play-side"><label class="play-model-label"></label><pre class="play-model"></pre><label>TIME</label><p class="play-law"></p><label class="play-log-label"></label><ol class="play-log"></ol></aside></div>`
+  playPanel.querySelector('[data-play="toggle"]').onclick = () => { play.running = !play.running; play.last = null; renderPlay() }
+  playPanel.querySelector('[data-play="step"]').onclick = () => { try { play.game.tick(1) } catch (error) { return gameError(error) } renderPlay() }
+  playPanel.querySelector('[data-play="speed"]').onchange = (event) => { play.speed = Number(event.target.value) }
+  playPanel.querySelector('[data-play="reset"]').onclick = () => { play.game.reset(); saveGame(); renderPlay() }
+  playPanel.querySelector('[data-play="close"]').onclick = stopGame
+  playPanel.querySelector('.play-view').addEventListener('pointerdown', (event) => {
+    const button = event.target.closest('.w-button')
+    if (!button || !play) return
+    event.preventDefault()
+    try { play.game.dispatch(play.msgs[Number(button.dataset.msg)]) } catch (error) { return gameError(error) }
+    renderPlay()
+  })
+}
+
+function renderPlay() {
+  if (!play) return
+  const { game } = play
+  const $ = (sel) => playPanel.querySelector(sel)
+  play.msgs = []
+  let view
+  try {
+    view = renderWidget(game.view(), play.msgs)
+  } catch (error) {
+    if (!(error instanceof EvalError)) throw error
+    view = Object.assign(document.createElement('p'), { className: 'w-error', textContent: `view failed: ${error.message}` })
+  }
+  $('.play-view').replaceChildren(view)
+  $('.play-bar b').textContent = `▶ ${nodes[play.entry]?.label || play.entry}`
+  $('.play-time').textContent = `t = ${game.time.toFixed(1)}s`
+  $('[data-play="toggle"]').textContent = play.running ? '⏸' : '▶'
+  $('[data-play="speed"]').value = String(play.speed)
+  $('.play-model-label').textContent = `MODEL :: ${play.modelType}`
+  $('.play-model').textContent = showValue(game.model, types)
+  const law = $('.play-law')
+  law.className = `play-law ${play.law.ok ? 'ok' : ''}`
+  law.textContent = play.law.ok ? '✓ step is a monoid action of (ℝ≥0, +): time away is applied in one step' : `step is not a monoid action (${play.law.counterexample || play.law.law}): time away is simulated in slices`
+  $('.play-log-label').textContent = `LOG · ${game.log.length} messages`
+  $('.play-log').start = Math.max(1, game.log.length - 11)
+  $('.play-log').replaceChildren(...game.log.slice(-12).map((m) => Object.assign(document.createElement('li'), { textContent: showValue(m, types) })))
+}
+window.addEventListener('beforeunload', saveGame)
+document.querySelector('#example').onclick = () => {
+  stopGame()
+  state.activeFunction = null
+  const example = buildClickCounter()
+  loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(example))), builtinNodes, builtinBodies))
+  fitToView()
+  showToast('Loaded the click-counter example — Run graph to play it (undo to go back)')
+}
 // --- Toasts ---------------------------------------------------------------
 let toastTimer = null
 function showToast(message) {
@@ -1284,7 +1457,7 @@ window.addEventListener('keydown', (event) => {
   const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
   const mod = event.ctrlKey || event.metaKey
   if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
-  if (typing || document.querySelector('#function-dialog')) return
+  if (typing || document.querySelector('#function-dialog') || play) return // no editing shortcuts while a game is playing
   const key = event.key.toLowerCase()
   if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
   else if (mod && key === 'y') { event.preventDefault(); redo() }

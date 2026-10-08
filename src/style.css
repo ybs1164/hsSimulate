@@ -238,3 +238,25 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .law-row{display:flex;gap:8px;align-items:baseline;margin-bottom:6px;flex-wrap:wrap}
 .law-check{border:1.5px solid var(--line);border-radius:var(--radius-full);background:var(--panel);padding:3px 10px;font:10px 'DM Mono';color:var(--muted);cursor:pointer}
 .law-check:hover{background:var(--accent-soft);color:var(--accent-ink)}
+#play-panel{position:absolute;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column}
+#play-panel[hidden]{display:none}
+.play-bar{display:flex;gap:9px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel);font:11px 'DM Mono'}
+.play-bar b{color:var(--accent-ink);margin-right:auto}
+.play-bar select{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-full);padding:6px 10px;background:var(--panel)}
+.play-time{color:var(--muted)}
+.play-body{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}
+.play-view{padding:36px;overflow:auto;display:flex;justify-content:center;align-items:flex-start}
+.play-side{border-left:1px solid var(--line);padding:18px;overflow:auto;background:var(--panel)}
+.play-side label{display:block;font:600 9px 'DM Mono';letter-spacing:1.4px;color:var(--muted);margin:14px 0 6px}
+.play-side pre{font:11px/1.5 'DM Mono';white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px;margin:0}
+.play-side ol{font:11px/1.6 'DM Mono';margin:0;padding-left:22px;color:var(--ink)}
+.play-law{font:10px/1.5 'DM Mono';color:var(--muted);margin:0}
+.play-law.ok{color:#1f8f74}
+.w-column{display:flex;flex-direction:column;gap:12px;min-width:320px;max-width:520px;width:100%}
+.w-row{display:flex;gap:12px;flex-wrap:wrap}
+.w-text{margin:0;font:16px 'DM Mono';color:var(--ink)}
+.w-button{border:0;border-radius:var(--radius-full);background:var(--accent);color:#fff;padding:13px 18px;font:600 13px 'DM Mono';cursor:pointer;box-shadow:0 3px 0 var(--accent-ink)}
+.w-button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--accent-ink)}
+.w-progress{height:12px;border-radius:var(--radius-full);background:var(--accent-soft);overflow:hidden}
+.w-progress i{display:block;height:100%;background:var(--accent);transition:width .15s}
+.w-error{color:#c0335e;font:12px 'DM Mono'}

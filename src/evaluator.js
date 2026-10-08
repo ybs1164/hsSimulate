@@ -261,6 +261,7 @@ export function createEvaluator(registry) {
       return v.ctorIndex === 0 ? force(b) : applyValue(f, [v.args[0]])
     }],
     show: [1, (x) => fromJsString(showValue(serializeValue(x), registry.types || {}))],
+    showFFloat: [2, (d, x) => fromJsString(num(x).toFixed(Math.max(0, Math.min(20, num(d)))))],
     listOf: [null, (...xs) => xs.reduceRight((tail, x) => cons(x, now(tail)), nil)], // arity = the node's slot count
 
     // Category classes (categoryClasses.js).
@@ -296,6 +297,13 @@ export function createEvaluator(registry) {
     mkProduct: [1, (x) => ({ kind: 'data', type: 'Product', ctor: 'Product', ctorIndex: 0, args: [x] })],
     getProduct: [1, (s) => newtypeField(s, 'Product', 1)],
     mkEndo: [1, (f) => ({ kind: 'data', type: 'Endo', ctor: 'Endo', ctorIndex: 0, args: [f] })],
+    // Games (runtime.js): a Program and its widgets are plain lazy data.
+    program: [4, (model, view, handle, step) => ({ kind: 'data', type: 'Program', ctor: 'Program', ctorIndex: 0, args: [model, view, handle, step] })],
+    wText: [1, (s) => ({ kind: 'data', type: 'Widget', ctor: 'Text', ctorIndex: 0, args: [s] })],
+    wButton: [2, (label, msg) => ({ kind: 'data', type: 'Widget', ctor: 'Button', ctorIndex: 1, args: [label, msg] })],
+    wColumn: [1, (ws) => ({ kind: 'data', type: 'Widget', ctor: 'Column', ctorIndex: 2, args: [ws] })],
+    wRow: [1, (ws) => ({ kind: 'data', type: 'Widget', ctor: 'Row', ctorIndex: 3, args: [ws] })],
+    wProgress: [1, (x) => ({ kind: 'data', type: 'Widget', ctor: 'Progress', ctorIndex: 4, args: [x] })],
     appEndo: [2, (e, x) => {
       const v = force(e)
       if (isMempty(v)) return force(x) // mempty :: Endo a is the identity

@@ -37,6 +37,8 @@ const m = tvar('m')
 const Double = tcon('Double')
 const ap = (h, x) => tapp(h, x)
 const newtype = (name, x) => tapp(tcon(name), x)
+const e = tvar('e')
+const widget = (msg) => tapp(tcon('Widget'), msg)
 
 export const builtinSchemes = {
   zero: scheme([], [], Int),
@@ -78,6 +80,8 @@ export const builtinSchemes = {
   just: scheme(['a'], [], tfun(a, Maybe(a))),
   maybe: scheme(['a', 'b'], [], tfun(b, tfun(tfun(a, b), tfun(Maybe(a), b)))),
   show: scheme(['a'], [pred('Show', a)], tfun(a, String)),
+  // Numeric.showFFloat (Just digits) x "" — simplified to take the digit count directly.
+  showFFloat: scheme(['a'], [pred('IEEEFloat', a)], tfun(Int, tfun(a, String))), // Haskell's RealFloat a
 
   // Category classes (src/categoryClasses.js), Haskell names.
   mappend: scheme(['a'], [pred('Semigroup', a)], tfun(a, tfun(a, a))),
@@ -95,6 +99,17 @@ export const builtinSchemes = {
   getProduct: scheme(['a'], [], tfun(newtype('Product', a), a)),
   mkEndo: scheme(['a'], [], tfun(tfun(a, a), newtype('Endo', a))),
   appEndo: scheme(['a'], [], tfun(newtype('Endo', a), tfun(a, a))),
+
+  // A game, shaped like gloss's `play` (and Elm's Browser.element): the
+  // initial model, a view, a message handler and a time step. The view is a
+  // declarative widget tree over the message type, like Elm's `Html msg`.
+  // The runtime (src/runtime.js) runs a Program when it is the entry point.
+  program: scheme(['m', 'e'], [], tfun(m, tfun(tfun(m, widget(e)), tfun(tfun(e, tfun(m, m)), tfun(tfun(Double, tfun(m, m)), tapp(tapp(tcon('Program'), m), e)))))),
+  wText: scheme(['e'], [], tfun(String, widget(e))),
+  wButton: scheme(['e'], [], tfun(String, tfun(e, widget(e)))),
+  wColumn: scheme(['e'], [], tfun(tlist(widget(e)), widget(e))),
+  wRow: scheme(['e'], [], tfun(tlist(widget(e)), widget(e))),
+  wProgress: scheme(['e'], [], tfun(Double, widget(e))),
 }
 
 /** `[x₁, …, xₙ] :: a → … → a → [a]` for a list node with `n` slots. */
