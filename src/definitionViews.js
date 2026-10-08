@@ -23,6 +23,7 @@
 // Views are pure data: `{ defs, bodies, viewId }`, in the same shape as
 // main.js's `nodes` and `functionBodies`, never saved.
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
+import { isOverridableId } from './evaluator.js'
 
 /** The id of the view of function `defId`. */
 export const viewIdOf = (defId) => `view:${defId}`
@@ -252,4 +253,46 @@ function graph(fnId, params, resolve, defs, bodies) {
     },
   }
   return api
+}
+
+/**
+ * Whether the view `viewId` (in `defs`) can be turned into an edited
+ * definition: a library function written as a graph. A primitive's view is
+ * the primitive applied to its parameters — there is nothing to edit — and
+ * the builtins on the main canvas (the protected ones of CLAUDE.md, the
+ * class methods) are never overridden.
+ */
+export function isEditableView(viewId, defs) {
+  const view = defs[viewId]
+  return Boolean(view && !view.note && isOverridableId(view.view) && !view.view.startsWith('prelude:listOf'))
+}
+
+/**
+ * The view `viewId` turned into an edited definition of the function it
+ * shows: `{ body, lambdas, lambdaBodies }` — the body (header and signature
+ * included, positions kept) to store under the function's own id, and its
+ * λs as ordinary editable λs with ids `<function id>/λn`. Everything is a
+ * fresh copy.
+ */
+export function overrideFromView(viewId, defs, bodies) {
+  const defId = defs[viewId].view
+  const lambdaIds = Object.keys(defs).filter((id) => id.startsWith(`${viewId}/λ`))
+  const rename = new Map([[viewId, defId], ...lambdaIds.map((id, i) => [id, `${defId}/λ${i + 1}`])])
+  const copy = (body, fnId) => {
+    const out = structuredClone(body)
+    for (const n of Object.values(out)) {
+      if (n.sourceFunctionId && rename.has(n.sourceFunctionId)) n.sourceFunctionId = rename.get(n.sourceFunctionId)
+      if (n.type === 'header') n.fn = fnId
+    }
+    return out
+  }
+  const lambdas = {}
+  const lambdaBodies = {}
+  for (const id of lambdaIds) {
+    const to = rename.get(id)
+    const { readonly, ...def } = defs[id]
+    lambdas[to] = { ...structuredClone(def), id: to, x: -9999, y: -9999 }
+    lambdaBodies[to] = copy(bodies[id], to)
+  }
+  return { body: copy(bodies[viewId], defId), lambdas, lambdaBodies }
 }

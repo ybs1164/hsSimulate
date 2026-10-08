@@ -19,6 +19,15 @@ import { cons, just, nil, nothing, pair, stdGen } from './dataTypes.js'
 
 export class EvalError extends Error {}
 
+/**
+ * Library definitions — the Prelude (`prelude:…`), the functions derived
+ * from a type declaration (`type:…`) and class instances (`instance:…`) —
+ * can be edited as graphs: an edited one has its own body in
+ * `functionBodies` under the same id (an *override*), and every call runs
+ * that body instead of the built-in implementation.
+ */
+export const isOverridableId = (id) => /^(prelude|type|instance):/.test(id)
+
 const MAX_STEPS = 1_000_000
 
 class Thunk {
@@ -466,8 +475,15 @@ export function createEvaluator(registry) {
     return def
   }
 
+  /** The edited body of library definition `callee`, if it has one. */
+  function overrideOf(callee) {
+    return isOverridableId(callee) ? registry.functionBodies[callee] : undefined
+  }
+
   function arityOf(callee) {
     const def = definition(callee)
+    const edited = overrideOf(callee)
+    if (edited) return Object.values(edited).filter((n) => n.type === 'parameter').length
     if (def.derived) return def.derived.arity
     if (def.builtin) {
       const impl = builtins[def.builtin]
@@ -481,9 +497,10 @@ export function createEvaluator(registry) {
   function call(callee, args) {
     if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
     const def = definition(callee)
-    if (def.derived) return runDerived(def.derived, args)
-    if (def.builtin) return builtins[def.builtin][1](...args)
-    const body = registry.functionBodies[callee]
+    const edited = overrideOf(callee)
+    if (!edited && def.derived) return runDerived(def.derived, args)
+    if (!edited && def.builtin) return builtins[def.builtin][1](...args)
+    const body = edited || registry.functionBodies[callee]
     const output = body?.output
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)
     return force(nodeValue(body, output.source, { args, memo: new Map() }))

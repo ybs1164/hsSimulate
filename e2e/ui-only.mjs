@@ -62,7 +62,12 @@ const project = async () => { await sleep(450); return JSON.parse(await js(`loca
 async function activeGraph() {
   const p = await project()
   if (await js(`document.querySelector('#back-graph').hidden`)) return { p, graph: p.nodes }
-  const name = (await js(`document.querySelector('#graph-name').textContent`)).split(' / ').pop().replace(/^ƒ /, '')
+  const crumb = await js(`document.querySelector('#graph-name').textContent`)
+  if (crumb.endsWith(' · edited')) { // an edited library definition: its body is saved under the library id
+    const [, body] = Object.entries(p.functionBodies).find(([id, body]) => /^(prelude|type|instance):[^/]*$/.test(id) && body.header)
+    return { p, graph: body }
+  }
+  const name = crumb.split(' / ').pop().replace(/^ƒ /, '')
   const fn = Object.values(p.nodes).find((n) => n.custom && n.label === name && !n.lambda) || Object.values(p.nodes).find((n) => n.lambda && name === 'λ')
   return { p, graph: p.functionBodies[fn.id] }
 }
@@ -335,6 +340,35 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await back(); await back()
     expect(crumb.endsWith('read-only') && text.includes('foldr (:) ys xs') && locked, `${crumb} / ${text} / locked ${locked}`)
     return text.split('\n')[1]
+  })
+  const playText = async () => {
+    await js(`document.querySelector('#run').click()`); await sleep(800)
+    const text = await js(`document.querySelector('#play-panel .w-text').textContent`)
+    await js(`document.querySelector('[data-play="close"]').click()`); await sleep(200)
+    return text
+  }
+  await check('a Prelude definition is edited as a graph; every call runs it until ↺ Original', async () => {
+    await openBody('view')
+    await clickToken('++')
+    await js(`document.querySelector('#edit-library-definition').click()`); await sleep(700)
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    const typeLocked = await js(`document.querySelector('#tnode-library').hidden`)
+    // (++) xs ys = xs: pull xs out of foldr's last slot, then wire it to Output
+    const fold = Object.values((await activeGraph()).graph).find((n) => n.sourceFunctionId === 'prelude:foldr').id
+    const chip = JSON.parse(await js(`JSON.stringify(document.querySelector('.param-slot[data-function-id="${fold}"][data-index="2"] .param-chip').getBoundingClientRect())`))
+    await drag({ x: chip.x + chip.width / 2, y: chip.y + chip.height / 2 }, { x: chip.x + chip.width / 2, y: chip.y + 200 })
+    await toOutput(await paramId('xs'))
+    const text = await definitionText()
+    await back(); await back()
+    const edited = await playText()
+    await openBody('view')
+    await clickToken('++')
+    await js(`document.querySelector('#reset-library-definition').click()`); await sleep(400)
+    await back()
+    const restored = await playText()
+    const saved = (await project()).functionBodies['prelude:append']
+    expect(crumb.endsWith('(++) · edited') && typeLocked && text.split('\n')[1] === '(++) xs ys = xs' && edited === 'Count: ' && /^Count: [0-9]+$/.test(restored) && !saved, `${crumb} / locked ${typeLocked} / ${text} / ${edited} / ${restored} / ${!saved}`)
+    return `${edited} → ${restored}`
   })
   await check('the type is declared as a graph of type nodes and checked against the body', async () => {
     await openBody('handle')

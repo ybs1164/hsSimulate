@@ -174,3 +174,15 @@ export function typeNodes(preds, type, newId, namer = createNamer()) {
   const context = preds.map((p) => make('class', p.cls, [go(p.type)]))
   return { nodes, root, context }
 }
+
+/** Draw `preds => type` into `body` as its signature: the type nodes and the `::` block holding them. */
+export function drawSignature(body, preds, type, newId) {
+  const drawn = typeNodes(preds, type, newId)
+  Object.assign(body, drawn.nodes)
+  body.signature = makeSignatureNode(drawn.context.length)
+  ;[drawn.root, ...drawn.context].forEach((kid, i) => {
+    body.signature.mounted[i] = kid
+    body.signature.params[i] = drawn.nodes[kid].label
+    Object.assign(drawn.nodes[kid], { mountedTo: `signature:${i}`, connected: true, unfolded: true })
+  })
+}

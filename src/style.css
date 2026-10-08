@@ -168,6 +168,8 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .parameter-icon{background:#e8effe;color:#4f7fe0;font-family:'Space Grotesk';font-size:16px;font-weight:700}
 .crumb-back{border:0;background:none;color:var(--muted);font:10px 'DM Mono';cursor:pointer;padding:0}
 .crumb-back:hover{color:var(--accent-ink)}
+.crumb-action{border:1px solid var(--line);border-radius:var(--radius-full);background:var(--panel);color:var(--accent-ink);font:600 10px 'DM Mono';cursor:pointer;padding:3px 9px}
+.crumb-action:hover{background:var(--bg)}
 .output-icon{background:#e6f8ee;color:#2f9e6b;font:600 16px 'DM Mono'}
 
 /* ---------------------------------------------------------------------- *
