@@ -21,6 +21,7 @@ import { applySubst, freshVar, ftv, generalize, instantiate, pred, tcon, tfun, t
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { literalClass, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
+import { checkSignature, readSignature } from './typeGraph.js'
 
 const Int = tcon('Int')
 const Bool = tcon('Bool')
@@ -103,10 +104,16 @@ function customSchemeOf(id, ctx) {
   if (!def) return scheme([], [], freshVar())
   if (def.scheme) return def.scheme
   if (def.builtin) return builtinSchemes[def.builtin]
-  if (ctx.visiting.has(id)) return scheme([], [], freshVar()) // recursive custom function: monomorphic fallback, not cached
-  ctx.visiting.add(id)
   const body = ctx.functionBodiesRegistry[id]
-  const sch = body ? inferCustomFunctionScheme(body, ctx) : scheme([], [], freshVar())
+  // A declared signature (a type drawn in the body, see typeGraph.js) that
+  // the body really has is the function's type — narrower than the inferred
+  // one if it says so, and known up front for a recursive call.
+  const declared = body && readSignature(body)
+  const usable = declared && !declared.errors.length ? declared.scheme : null
+  if (ctx.visiting.has(id)) return usable || scheme([], [], freshVar()) // recursive custom function: its signature, else a monomorphic fallback, not cached
+  ctx.visiting.add(id)
+  const inferred = body ? inferCustomFunctionScheme(body, ctx) : scheme([], [], freshVar())
+  const sch = usable && !checkSignature(usable, inferred) ? usable : inferred
   ctx.visiting.delete(id)
   ctx.customCache.set(id, sch)
   return sch
@@ -274,6 +281,7 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
   const memo = new Map()
   const perNode = new Map()
   const entries = Object.keys(activeGraph).map((id) => [id, resolveNodeType(id, activeGraph, ctx, memo)])
+  const signature = checkActiveSignature(activeGraph, ctx, memo)
   settleLiterals(ctx, 0)
   // Read every type back only now, against the final substitution, so an
   // edge resolved late still refines a node resolved early.
@@ -316,5 +324,32 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
     // constructor class), so "mentions one of this node's variables" is the test.
     entry.preds = reducedPreds.filter((p) => [...ftv(p.type)].some((v) => ownVars.has(v)))
   })
-  return { perNode, subst: ctx.subst, preds: resolvedPreds }
+  return { perNode, subst: ctx.subst, preds: resolvedPreds, signature }
+}
+
+/**
+ * The signature declared in the body on screen, checked against the body:
+ * `{ errors, mismatch }` (null if there's none). One that holds pins the
+ * body's own types — its parameters and its Output take the declared types.
+ */
+function checkActiveSignature(graph, ctx, memo) {
+  const declared = readSignature(graph)
+  if (!declared) return null
+  const result = { errors: declared.errors, mismatch: null }
+  if (declared.errors.length || !graph.output) return result
+  // Infer the body on its own (a scratch context), as a callee would see it.
+  const scratch = { ...ctx, subst: new Map(), preds: [], pendingLiterals: [], invalid: new Map(), visiting: new Set(), customCache: new Map() }
+  result.mismatch = checkSignature(declared.scheme, inferCustomFunctionScheme(graph, scratch))
+  if (result.mismatch) return result
+  const inst = instantiate(declared.scheme)
+  ctx.preds.push(...inst.preds)
+  let rest = inst.type
+  const pin = (entry, t) => { try { ctx.subst = unify(valueTypeOfEntry(entry), t, ctx.subst) } catch {} }
+  for (const p of Object.values(graph).filter((n) => n.type === 'parameter')) {
+    if (rest.kind !== 'fun') break
+    pin(memo.get(p.id), rest.from)
+    rest = rest.to
+  }
+  pin(memo.get('output'), rest)
+  return result
 }
