@@ -12,7 +12,7 @@ const round = (text, type) => showValue(parseValue(text, type, all), all)
 
 test('reads back exactly what show prints', () => {
   for (const [text, type] of [
-    ['Model {wallet = Wallet {clicks = 5}, perClick = 2, rate = 0.5}', tcon('Model')],
+    ['Model {wallet = Wallet {clicks = 5}, perClick = 2, rate = 3, elapsed = 250}', tcon('Model')],
     ['Tick 0.5', tcon('Event')],
     ['Press', tcon('Event')],
     ['Spend (Just (Sum 3))', tcon('Event')],
@@ -25,15 +25,15 @@ test('reads back exactly what show prints', () => {
 })
 
 test('record fields may come in any order, with spaces', () => {
-  assert.equal(round('Model { rate = 1 , perClick = 3 , wallet = Wallet { clicks = 9 } }', tcon('Model')), 'Model {wallet = Wallet {clicks = 9}, perClick = 3, rate = 1}')
+  assert.equal(round('Model { elapsed = 0 , rate = 1 , perClick = 3 , wallet = Wallet { clicks = 9 } }', tcon('Model')), 'Model {wallet = Wallet {clicks = 9}, perClick = 3, rate = 1, elapsed = 0}')
   assert.equal(round('Wallet 7', tcon('Wallet')), 'Wallet {clicks = 7}', 'positional syntax works for records too')
 })
 
 test('mistakes are reported with where they are', () => {
   const bad = (text, type, re) => assert.throws(() => parseValue(text, type, all), (e) => e instanceof ParseError && re.test(e.message))
-  bad('Model {wallet = Wallet {clicks = 5}, perClick = 2}', tcon('Model'), /missing rate/)
-  bad('Model {wallet = Wallet {clicks = 5}, perClik = 2, rate = 0}', tcon('Model'), /no field "perClik"/)
-  bad('Wallet {clicks = True}', tcon('Wallet'), /Expected a number \(Double\) at position 18/)
+  bad('Model {wallet = Wallet {clicks = 5}, perClick = 2, elapsed = 0}', tcon('Model'), /missing rate/)
+  bad('Model {wallet = Wallet {clicks = 5}, perClik = 2, rate = 0, elapsed = 0}', tcon('Model'), /no field "perClik"/)
+  bad('Wallet {clicks = True}', tcon('Wallet'), /Expected a number \(Int\) at position 18/)
   bad('Jump', tcon('Event'), /constructor of Event \(Press, Tick, Spend\)/)
   bad('Spend Just (Sum 3)', tcon('Event'), /parentheses around Just/)
   bad('2.5', tcon('Int'), /whole number/)

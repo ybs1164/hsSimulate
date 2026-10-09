@@ -40,7 +40,11 @@ const PRIMITIVE_NOTES = {
   select: 'primitive · the eliminator of Bool: select c a b = if c then a else b',
   plus: METHOD('AddSemigroup'), negate: METHOD('AddGroup'), minus: METHOD('AddGroup'), times: METHOD('MulSemigroup'),
   addZero: METHOD('AddMonoid'), mulOne: METHOD('MulMonoid'), divide: METHOD('Field'), sqrt: METHOD('Transcendental'),
-  toRational: METHOD('OrderedRing'), fromIntegral: 'primitive · the unique ring map ℤ → a (ℤ is the initial ring)', round: METHOD('OrderedField'),
+  toRational: METHOD('OrderedRing'),
+  fromInteger: 'primitive · a method of the class Ring: the unique ring map ℤ → a (ℤ is the initial ring)',
+  toInteger: 'primitive · a method of the class EuclideanRing: the embedding of an integral type in ℤ',
+  fromRational: METHOD('Field'), properFraction: 'primitive · a method of the class OrderedField: x = n + r with n integral and r between -1 and 1, of the sign of x',
+  div: 'primitive · a method of the class EuclideanRing: the quotient, rounded down', mod: 'primitive · a method of the class EuclideanRing: the remainder of div, of the sign of the divisor',
   isNaN: METHOD('IEEEFloat'), geq: METHOD('Ord'), eq: METHOD('Eq'),
   nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
@@ -65,6 +69,12 @@ const setProgramField = (index) => (g) => g.call('type:Program:caseProgram', [
 ])
 // getSum s = caseSum (\x -> x) s
 const unwrap = (type) => (g) => g.call(`type:${type}:case${type}`, [g.lambda(['x'], (l) => l.param(0)), g.param(0)])
+// The integral and fractional parts of x — (n, r) = properFraction x — as
+// nodes of `g`, each usable once more through g.ref.
+const fraction = (g) => {
+  const p = g.named(g.call('prelude:properFraction', [g.param(0)]), 'p')
+  return [g.named(g.call('prelude:fst', [p]), 'n'), g.named(g.call('prelude:snd', [g.ref(p)]), 'r')]
+}
 const COLOURS = { red: ['1', '0', '0'], green: ['0', '0.7', '0'], blue: ['0', '0', '1'], yellow: ['1', '0.85', '0'], black: ['0', '0', '0'], white: ['1', '1', '1'] }
 // The functions written as graphs, by builtin name. Each gets a builder
 // (see `graph` below) and returns the node feeding Output.
@@ -96,6 +106,40 @@ const GRAPHS = {
     ]),
     g.param(1),
   ]),
+  // The numeric conversions, as the Haskell Report defines them.
+  // fromIntegral x = fromInteger (toInteger x)
+  fromIntegral: (g) => g.call('prelude:fromInteger', [g.call('prelude:toInteger', [g.param(0)])]),
+  // realToFrac x = fromRational (toRational x)
+  realToFrac: (g) => g.call('prelude:fromRational', [g.call('toRational', [g.param(0)])]),
+  // abs x = select (x >= 0) x (negate x)
+  abs: (g) => g.call('select', [g.call('geq', [g.param(0), { lit: '0' }]), g.param(0), g.call('negate', [g.param(0)])]),
+  // truncate x = fst (properFraction x)
+  truncate: (g) => g.call('prelude:fst', [g.call('prelude:properFraction', [g.param(0)])]),
+  // floor x = select (r >= 0) n (n - 1)   where p = properFraction x; n = fst p; r = snd p
+  floor: (g) => {
+    const [n, r] = fraction(g)
+    return g.call('select', [g.call('geq', [r, { lit: '0' }]), n, g.call('minus', [g.ref(n), { lit: '1' }])])
+  },
+  // ceiling x = select (0 >= r) n (n + 1)
+  ceiling: (g) => {
+    const [n, r] = fraction(g)
+    return g.call('select', [g.call('geq', [{ lit: '0' }, r]), n, g.call('plus', [g.ref(n), { lit: '1' }])])
+  },
+  // round x: to the nearer of n and m (the integer on r's side), and on a
+  // half to the even one —
+  //   select (a == 0.5) (select (n `mod` 2 == 0) n m) (select (a >= 0.5) m n)
+  //   where (n, r) = properFraction x; a = abs r; m = select (r >= 0) (n + 1) (n - 1)
+  round: (g) => {
+    const [n, r] = fraction(g)
+    const m = g.named(g.call('select', [g.call('geq', [r, { lit: '0' }]), g.call('plus', [n, { lit: '1' }]), g.call('minus', [g.ref(n), { lit: '1' }])]), 'm')
+    const a = g.named(g.call('prelude:abs', [g.ref(r)]), 'a')
+    const even = g.call('eq', [g.call('prelude:mod', [g.ref(n), { lit: '2' }]), { lit: '0' }])
+    return g.call('select', [
+      g.call('eq', [a, { lit: '0.5' }]),
+      g.call('select', [even, g.ref(n), m]),
+      g.call('select', [g.call('geq', [g.ref(a), { lit: '0.5' }]), g.ref(m), g.ref(n)]),
+    ])
+  },
   maybe: (g) => g.call('type:Maybe:caseMaybe', [g.param(0), g.param(1), g.param(2)]),
   getSum: unwrap('Sum'),
   getProduct: unwrap('Product'),
@@ -292,7 +336,8 @@ function fieldNames(ctor, taken) {
  * `param(i)` uses a parameter (a second use is a reference to it — the
  * diagonal Δ), `call(id, args)` adds a call node with `args` plugged into its
  * slots (a node id, `{ lit }` for an inline literal, or null for an open
- * slot), `lambda(params, build, captures)` adds a λ — a lambda-lifted
+ * slot), `named(id, name)` gives a shared node its where-name,
+ * `lambda(params, build, captures)` adds a λ — a lambda-lifted
  * function, its first slots filled with `captures` — and `output(id)` feeds
  * Output. Every plugged node is unfolded, so the whole term is on the canvas.
  */
@@ -322,6 +367,11 @@ function graph(fnId, params, resolve, defs, bodies) {
     param: (i) => use(paramIds[i]),
     /** Another use of node `id` already plugged somewhere: a reference to it. */
     ref: (id) => use(id),
+    /** Node `id`, shared under `name` (`where name = …`). */
+    named(id, name) {
+      body[id].bindName = name
+      return id
+    },
     /** A Bool value node. */
     bool(value) {
       const id = fresh('bool')

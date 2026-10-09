@@ -2,7 +2,7 @@
 // exactly what the builtin does, and a primitive is shown as itself.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDefinitionView, viewIdOf } from '../src/definitionViews.js'
+import { buildDefinitionView, hasDefinitionGraph, viewIdOf } from '../src/definitionViews.js'
 import { preludeDefs, preludeTypeDefs } from '../src/library.js'
 import { createEvaluator, showValue } from '../src/evaluator.js'
 import { printDefinition } from '../src/haskellPrint.js'
@@ -91,7 +91,10 @@ test('a primitive is shown as its parameters applied to it, with a note', () => 
 })
 
 // The whole library, as the app holds it.
-const library = { ...base, ...preludeDefs, ...preludeTypeDefs, mappend: base['prelude:mappend'] }
+const library = {
+  ...base, ...preludeDefs, ...preludeTypeDefs, mappend: base['prelude:mappend'],
+  geq: fn('geq', 'geq', '(>=)', ['x', 'y']), negate: fn('negate', 'negate', 'negate', ['x']), times: fn('times', 'times', '(*)', ['x', 'y']), toRational: fn('toRational', 'toRational', 'toRational', ['x']),
+}
 const libraryPrint = (defId) => {
   const view = buildDefinitionView(library[defId], (id) => library[id])
   return printDefinition(view.viewId, { ...library, ...view.defs }, view.bodies)
@@ -141,6 +144,49 @@ test('…and mean what the builtins do', () => {
   const [viewed, builtin] = run('prelude:setStepsPerSecond', ['30', { id: 'p' }], { p: prog })
   assert.deepEqual(viewed.args.slice(4, 6), [30, 604800])
   assert.deepEqual(builtin.args.slice(4, 6), [30, 604800])
+})
+
+test('the numeric conversions are written with the class methods, as the Haskell Report does', () => {
+  assert.equal(libraryPrint('prelude:fromIntegral'), 'fromIntegral x = fromInteger (toInteger x)')
+  assert.equal(libraryPrint('prelude:realToFrac'), 'realToFrac x = fromRational (toRational x)')
+  assert.equal(libraryPrint('prelude:truncate'), 'truncate x = fst (properFraction x)')
+  assert.equal(libraryPrint('prelude:floor'), 'floor x = select (snd p >= 0) n (n - 1)\n  where\n    p = properFraction x\n    n = fst p')
+  assert.equal(libraryPrint('prelude:round'), 'round x = select (a == 0.5) (select (mod n 2 == 0) n m) (select (a >= 0.5) m n)\n  where\n    a = abs r\n    r = snd p\n    p = properFraction x\n    n = fst p\n    m = select (r >= 0) (n + 1) (n - 1)')
+  const conversions = ['fromIntegral', 'realToFrac', 'abs', 'truncate', 'floor', 'ceiling', 'round'].map((name) => `prelude:${name}`)
+  for (const id of conversions) {
+    assert.ok(hasDefinitionGraph(library[id]), `${id} opens as an editable graph`)
+    const view = buildDefinitionView(library[id], (x) => library[x])
+    assert.equal(view.defs[view.viewId].note, undefined, `${id} is not a primitive`)
+    const pass = inferGraph({ ...library, ...view.defs }, view.bodies, { v: view.defs[view.viewId] })
+    const declared = view.defs[view.viewId].scheme
+    assert.equal(showQual(pass.perNode.get('v').preds, valueTypeOfEntry(pass.perNode.get('v'))), showQual(declared.preds, declared.type), id)
+  }
+  for (const name of ['toInteger', 'fromInteger', 'fromRational', 'properFraction', 'div', 'mod']) assert.equal(hasDefinitionGraph(library[`prelude:${name}`]), false, `${name} is a primitive`)
+})
+
+test('…and mean what the builtins do: halves round to even, floor and ceiling below zero', () => {
+  const run = (defId, args) => {
+    const view = buildDefinitionView(library[defId], (id) => library[id])
+    const ev = createEvaluator({ nodes: { ...library, ...view.defs }, functionBodies: view.bodies })
+    const call = (sourceFunctionId) => ({ call: { id: 'call', type: 'function', sourceFunctionId, params: args, mounted: args.map(() => null) } })
+    return [ev.run(call(view.viewId), 'call'), ev.run(call(defId), 'call')]
+  }
+  const fractions = ['2.5', '3.5', '-2.5', '-3.5', '0.5', '-0.5', '1.4', '-1.6', '2.7', '-2.7', '3', '-3', '0']
+  const expected = {
+    round: [2, 4, -2, -4, 0, 0, 1, -2, 3, -3, 3, -3, 0],
+    truncate: [2, 3, -2, -3, 0, 0, 1, -1, 2, -2, 3, -3, 0],
+    floor: [2, 3, -3, -4, 0, -1, 1, -2, 2, -3, 3, -3, 0],
+    ceiling: [3, 4, -2, -3, 1, 0, 2, -1, 3, -2, 3, -3, 0],
+    abs: [2.5, 3.5, 2.5, 3.5, 0.5, 0.5, 1.4, 1.6, 2.7, 2.7, 3, 3, 0],
+  }
+  for (const [name, want] of Object.entries(expected)) {
+    fractions.forEach((x, i) => {
+      const [viewed, builtin] = run(`prelude:${name}`, [x])
+      assert.deepEqual([viewed, builtin], [want[i], want[i]], `${name} ${x}`)
+    })
+  }
+  for (const x of ['5', '-7', '0']) assert.deepEqual(...run('prelude:fromIntegral', [x]), `fromIntegral ${x}`)
+  assert.deepEqual(...run('prelude:realToFrac', ['0.25']))
 })
 
 test('projections, updates and the recursor of a declared type are written with its eliminator', () => {

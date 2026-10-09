@@ -74,3 +74,18 @@ test('older saves that hid the Output source are migrated', () => {
   assert.equal(body.c.mountedTo, null)
   assert.equal(body.d.mountedTo, 'c:0', 'slot mounts are untouched')
 })
+
+test('fromIntegral and round moved from the main canvas to the Prelude: older saves call them there', () => {
+  const nodes = {
+    fromIntegral: { id: 'fromIntegral', type: 'function', builtin: 'fromIntegral', readonly: true, params: ['x'], mounted: [null] },
+    round: { id: 'round', type: 'function', label: 'round', params: ['x'], mounted: [null], custom: true }, // the project's own function
+    c: { id: 'c', type: 'function', sourceFunctionId: 'fromIntegral', params: ['3'], mounted: [null] },
+  }
+  const functionBodies = { round: { d: { id: 'd', type: 'function', sourceFunctionId: 'fromIntegral', params: [''], mounted: [null] }, e: { id: 'e', type: 'function', sourceFunctionId: 'round', params: [''], mounted: [null] } } }
+  const project = upgradeProject(parseProject(JSON.stringify({ version: 2, nodes, functionBodies, types: {}, entry: null, outputId: 0 })))
+  assert.equal(project.nodes.fromIntegral, undefined)
+  assert.equal(project.nodes.c.sourceFunctionId, 'prelude:fromIntegral')
+  assert.equal(project.functionBodies.round.d.sourceFunctionId, 'prelude:fromIntegral')
+  assert.ok(project.nodes.round, 'a function of your own named round stays')
+  assert.equal(project.functionBodies.round.e.sourceFunctionId, 'round', '…and calls to it too')
+})

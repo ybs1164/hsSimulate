@@ -5,7 +5,7 @@ import { printDefinition } from '../src/haskellPrint.js'
 import { derivedDefinitions } from '../src/typeDecls.js'
 
 const ex = buildClickCounter()
-const labels = { plus: '(+)', minus: '(-)', select: 'select', apply: 'apply', divide: '(/)', 'prelude:scale': '(*^)', 'prelude:leq': 'leq', 'prelude:show': 'show', 'prelude:showFFloat': 'showFFloat', 'prelude:showCompact': 'showCompact', 'prelude:append': '(++)', 'prelude:wText': 'text', 'prelude:wButton': 'button', 'prelude:wColumn': 'column', 'prelude:wProgress': 'progress', 'prelude:listOf': '[ , , ]', 'prelude:program': 'program', eq: '(==)', 'prelude:just': 'Just', 'prelude:nothing': 'Nothing', 'prelude:onKey': 'onKey', 'prelude:setSubscriptions': 'set subscriptions', 'prelude:setStepsPerSecond': 'set stepsPerSecond' }
+const labels = { plus: '(+)', times: '(*)', 'prelude:round': 'round', 'prelude:div': 'div', 'prelude:mod': 'mod', 'prelude:fromIntegral': 'fromIntegral', minus: '(-)', select: 'select', apply: 'apply', divide: '(/)', 'prelude:scale': '(*^)', 'prelude:leq': 'leq', 'prelude:show': 'show', 'prelude:showFFloat': 'showFFloat', 'prelude:showCompact': 'showCompact', 'prelude:append': '(++)', 'prelude:wText': 'text', 'prelude:wButton': 'button', 'prelude:wColumn': 'column', 'prelude:wProgress': 'progress', 'prelude:listOf': '[ , , ]', 'prelude:program': 'program', eq: '(==)', 'prelude:just': 'Just', 'prelude:nothing': 'Nothing', 'prelude:onKey': 'onKey', 'prelude:setSubscriptions': 'set subscriptions', 'prelude:setStepsPerSecond': 'set stepsPerSecond' }
 const defs = { ...Object.fromEntries(Object.entries(labels).map(([id, label]) => [id, { id, label }])), ...Object.fromEntries(derivedDefinitions(ex.types).map((d) => [d.id, d])), ...ex.nodes }
 const print = (f) => printDefinition(f, defs, ex.functionBodies)
 
@@ -17,7 +17,7 @@ test('applications, sections and Haskell\'s subtract', () => {
 
 test('functions as values, zero-argument definitions', () => {
   assert.equal(print('handle'), 'handle msg = caseMsg onClick buyClick buyAuto msg')
-  assert.equal(print('initial'), 'initial = Model (Wallet 0) 1 0')
+  assert.equal(print('initial'), 'initial = Model (Wallet 0) 1 0 0')
   assert.equal(print('main'), 'main = set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick))')
   assert.equal(print('keys'), 'keys k = select (k == " ") (Just Click) Nothing')
 })
@@ -25,7 +25,8 @@ test('functions as values, zero-argument definitions', () => {
 test('a value used twice is shared with where; lists print as literals', () => {
   const view = print('view')
   assert.match(view, /^view m = column \[text \("Clicks: " \+\+ showCompact cl\), /)
-  assert.match(view, /progress \(cl \/ 25\)\]\n  where\n    cl = clicks \(wallet m\)$/)
+  assert.match(view, /progress \(cl \/ 25\)\]\n  where\n    cl = fromIntegral \(clicks \(wallet m\)\)$/)
+  assert.equal(print('onTick'), 'onTick dt m = set elapsed t (over wallet (Wallet (rate m * (div t 1000 - div e 1000)) +) m)\n  where\n    t = e + round (dt * 1000)\n    e = elapsed m')
 })
 
 test('a gap before an applied slot becomes a lambda', () => {

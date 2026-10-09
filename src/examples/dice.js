@@ -29,7 +29,7 @@ const FUNCTIONS = {
     ref('m2', 'm'),
     call('h', P('wHeading'), 'heading', ['"Dice"']),
     call('red', P('red'), 'red'), call('sq', P('pRectangleSolid'), 'rectangleSolid', ['120', '120']), call('back', P('pColor'), 'color', [n('red'), n('sq')]),
-    call('fc', T('Model', 'face'), 'face', [n('m')]), ref('fc2', 'fc'), call('fd', 'fromIntegral', 'fromIntegral', [n('fc')]), call('rad', 'times', '(*)', [n('fd'), '8']),
+    call('fc', T('Model', 'face'), 'face', [n('m')]), ref('fc2', 'fc'), call('fd', P('fromIntegral'), 'fromIntegral', [n('fc')]), call('rad', 'times', '(*)', [n('fd'), '8']),
     call('dot', P('pCircleSolid'), 'circleSolid', [n('rad')]), call('white', P('white'), 'white'), call('pip', P('pColor'), 'color', [n('white'), n('dot')]),
     call('pic', P('mappend'), '(<>)', [n('back'), n('pip')]), call('dr', P('wDrawing'), 'drawing', ['160', '160', n('pic')]),
     call('sh', P('show'), 'show', [n('fc2')]), call('tx', P('append'), '(++)', ['"You rolled "', n('sh')]), call('t', P('wText'), 'text', [n('tx')]),

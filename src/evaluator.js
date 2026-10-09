@@ -155,6 +155,11 @@ const num = (t) => {
   if (typeof v !== 'number') throw new EvalError(`Expected a number, got ${show(v)}`)
   return v
 }
+const nonZero = (t) => {
+  const v = num(t)
+  if (v === 0) throw new EvalError('divide by zero')
+  return v
+}
 const bool = (t) => {
   const v = force(t)
   if (typeof v !== 'boolean') throw new EvalError(`Expected a Bool, got ${show(v)}`)
@@ -248,8 +253,6 @@ export function createEvaluator(registry) {
     divide: [2, (x, y) => num(x) / num(y)],
     sqrt: [1, (x) => Math.sqrt(num(x))],
     toRational: [1, (x) => num(x)], // no distinct runtime numeric representations — type-level only
-    fromIntegral: [1, (x) => num(x)],
-    round: [1, (x) => roundHalfEven(num(x))],
     isNaN: [1, (x) => Number.isNaN(num(x))],
     geq: [2, (x, y) => compareValues(x, y) >= 0],
     eq: [2, (x, y) => compareValues(x, y) === 0],
@@ -291,6 +294,30 @@ export function createEvaluator(registry) {
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1]), n--) if (n === 0) return just(l.args[0])
       return nothing
     }],
+    // Numeric conversions (builtinSchemes.js). The primitives are class
+    // methods; the rest have definitions written with them as graphs
+    // (definitionViews.js) and run natively here unless edited.
+    toInteger: [1, (x) => num(x)],
+    fromInteger: [1, (n) => num(n)],
+    fromRational: [1, (r) => num(r)],
+    properFraction: [1, (x) => {
+      const v = num(x)
+      const n = Math.trunc(v) + 0 // + 0: no -0
+      return pair(now(n), now(v - n))
+    }],
+    div: [2, (x, y) => Math.floor(num(x) / nonZero(y)) + 0],
+    mod: [2, (x, y) => {
+      const a = num(x)
+      const b = nonZero(y)
+      return a - b * Math.floor(a / b) + 0
+    }],
+    abs: [1, (x) => Math.abs(num(x))],
+    fromIntegral: [1, (x) => num(x)],
+    realToFrac: [1, (x) => num(x)],
+    truncate: [1, (x) => Math.trunc(num(x)) + 0],
+    floor: [1, (x) => Math.floor(num(x))],
+    ceiling: [1, (x) => Math.ceil(num(x)) + 0],
+    round: [1, (x) => roundHalfEven(num(x)) + 0],
     pair: [2, (a, b) => pair(a, b)],
     fst: [1, (p) => force(force(p).args[0])],
     snd: [1, (p) => force(force(p).args[1])],

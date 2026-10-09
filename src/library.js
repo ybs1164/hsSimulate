@@ -7,6 +7,7 @@
 // definitionViews.js.
 import { declareTypes, derivedDefinitions } from './typeDecls.js'
 export const PRELUDE = [
+  ['Numeric', [['toInteger', 'toInteger', ['x']], ['fromInteger', 'fromInteger', ['n']], ['fromRational', 'fromRational', ['r']], ['properFraction', 'properFraction', ['x']], ['div', 'div', ['x', 'y']], ['mod', 'mod', ['x', 'y']], ['abs', 'abs', ['x']], ['fromIntegral', 'fromIntegral', ['x']], ['realToFrac', 'realToFrac', ['x']], ['truncate', 'truncate', ['x']], ['floor', 'floor', ['x']], ['ceiling', 'ceiling', ['x']], ['round', 'round', ['x']]]],
   ['Lists', [['listOf', '[ , , ]', []], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
   ['Text', [['show', 'show', ['x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],

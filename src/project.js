@@ -48,10 +48,22 @@ export function parseProject(text) {
  * only — undo/redo snapshots are always current. Older saves hid whatever
  * fed a body's Output (mountedTo `…:source`); Output no longer swallows its
  * source, so it's un-hidden. A body's Output had id `<fn>-output` under the
- * key `output`; ids now equal keys, so lookups by id find it. (Builtin
- * bodies are replaced from code by mergeBuiltins right after.)
+ * key `output`; ids now equal keys, so lookups by id find it. The
+ * conversions `fromIntegral` and `round` were builtins on the main canvas;
+ * they're Prelude functions now (written as graphs), so calls to them are
+ * pointed there. (Builtin bodies are replaced from code by mergeBuiltins
+ * right after.)
  */
+const MOVED_TO_PRELUDE = { fromIntegral: 'prelude:fromIntegral', round: 'prelude:round' }
 export function upgradeProject(project) {
+  for (const [from, to] of Object.entries(MOVED_TO_PRELUDE)) {
+    const old = project.nodes[from]
+    if (old && !old.builtin) continue // a function of the project's own by that id
+    delete project.nodes[from]
+    for (const graph of [project.nodes, ...Object.values(project.functionBodies)]) {
+      for (const node of Object.values(graph)) if (node?.sourceFunctionId === from) node.sourceFunctionId = to
+    }
+  }
   for (const graph of [project.nodes, ...Object.values(project.functionBodies)]) {
     for (const node of Object.values(graph)) if (typeof node?.mountedTo === 'string' && node.mountedTo.endsWith(':source')) node.mountedTo = null
   }
