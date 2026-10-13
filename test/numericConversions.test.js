@@ -23,7 +23,7 @@ function project(types) {
   setDynamicInstances(derivedInstances(types))
   const builtin = (b) => ({ id: b, type: 'function', builtin: b, label: b, params: ['x'], mounted: [null] })
   const main = {}
-  const defs = Object.fromEntries(['fromIntegral', 'toInteger', 'toRational', 'round', 'sqrt', 'isNaN', 'plus', 'times', 'geq', 'eq', 'negate', 'mulOne'].map((b) => [b, builtin(b)]))
+  const defs = Object.fromEntries(['fromIntegral', 'toInteger', 'toRational', 'round', 'sqrt', 'isNaN', 'plus', 'times', 'geq', 'eq', 'negate', 'mulOne', 'div', 'mod'].map((b) => [b, builtin(b)]))
   derivedDefinitions(types).forEach((d) => { defs[d.label] = d })
   const registry = new Proxy({}, { get: (_, id) => main[id] ?? defs[id] })
   const bodies = {}
@@ -50,9 +50,10 @@ function project(types) {
 // A score: an ordered ring whose embedding into ℤ is hand-written.
 function score(intBody = 'points') {
   let types = declareTypes({}, `data Score = Score { points :: Int } deriving stock (Eq, Ord, Show) deriving anyclass (${RING.join(', ')})`)
-  types = withInstances(types, 'Score', [{ cls: 'OrderedRing', methods: { toRational: 'ratScore' } }, { cls: 'EuclideanRing', methods: { toInteger: 'intScore' } }])
+  types = withInstances(types, 'Score', [{ cls: 'OrderedRing', methods: { toRational: 'ratScore' } }, { cls: 'EuclideanRing', methods: { toInteger: 'intScore', div: 'divScore', mod: 'modScore' } }])
   const p = project(types)
   p.define('ratScore', ['s'], [p.call('out', 'points', [n('s')])], 'out')
+  for (const op of ['div', 'mod']) p.define(`${op}Score`, ['x', 'y'], [p.call('a', 'points', [n('x')]), p.call('b', 'points', [n('y')]), p.call('q', op, [n('a'), n('b')]), p.call('out', 'Score', [n('q')])], 'out')
   if (intBody === 'points') p.define('intScore', ['s'], [p.call('out', 'points', [n('s')])], 'out')
   if (intBody === 'double') p.define('intScore', ['s'], [p.call('k', 'points', [n('s')]), p.call('out', 'times', [n('k'), '2'])], 'out')
   if (intBody === 'half') p.define('intScore', ['s'], [p.call('out', 'toRational', ['2.5'])], 'out')
@@ -85,7 +86,7 @@ test('the law checker checks the conversions: ring maps, faithful, agreeing', ()
   setDynamicInstances(derivedInstances(good.types))
   const { results } = checkClassLaws('EuclideanRing', tcon('Score'), { ev: good.p.ev, types: good.types })
   const conversions = results.filter((r) => ['OrderedRing', 'EuclideanRing'].includes(r.cls))
-  assert.equal(conversions.length, 5)
+  assert.equal(conversions.length, 6)
   assert.ok(conversions.every((r) => r.ok), JSON.stringify(conversions.filter((r) => !r.ok)))
   // toInteger s = 2 · points s respects + but not *, nor agrees with toRational.
   const bad = score('double')

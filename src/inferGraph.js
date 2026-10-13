@@ -38,11 +38,12 @@
 //   made of that node; a mismatch, a class the pinned type lacks, or a named
 //   variable that the body specializes (signature variables are rigid) is
 //   reported on that node, and that annotation is left out.
-// - Conversions into the numeric tower (`fromIntegral`, `round`) are
-//   elaborated with their result type when it is a user type: the evaluator
-//   then builds the value by that type's fromInteger (the unique ring map
-//   from ℤ). At a type variable nothing is passed — the number stands for
-//   the integer in whatever ring it later meets, like a literal.
+// - Conversions into the numeric tower (`fromInteger`, `fromIntegral`,
+//   `round` …, `fromRational`, `realToFrac`) are elaborated with their result
+//   type when it is a user type: the evaluator then builds the value by that
+//   type's fromInteger (the unique ring map from ℤ) or fromRational. At a
+//   type variable nothing is passed — the number stands for itself in
+//   whatever ring it later meets, like a literal.
 import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, unify, scheme } from './typeSystem.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { evidence, isUserClass, literalClass, numericTypes, pickDefault, reduce } from './prelude.js'
@@ -52,8 +53,8 @@ import { annotationType, typeText } from './typeExpr.js'
 const Int = tcon('Int')
 const Bool = tcon('Bool')
 
-/** Builtins whose result is `fromInteger` of an integer, at a type the caller picks. */
-const FROM_INTEGER = ['fromIntegral', 'round']
+/** Builtins whose result is `fromInteger` of an integer (or `fromRational` of a rational), at a type the caller picks. */
+const CONVERSIONS = { fromInteger: 'fromInteger', fromIntegral: 'fromInteger', truncate: 'fromInteger', floor: 'fromInteger', ceiling: 'fromInteger', round: 'fromInteger', fromRational: 'fromRational', realToFrac: 'fromRational' }
 
 /** The user type a conversion's (resolved) result type names, or null for a number type or a variable. */
 function fromIntegerTarget(t) {
@@ -328,7 +329,7 @@ function elaborateCalls(calls, given, ctx, selfId = null) {
     const into = call.target && fromIntegerTarget(applySubst(ctx.subst, call.target))
     if (!wanted.length && !into) continue
     out[call.id] = wanted.map((p) => evidence(given, p) || { error: `No instance for ${p.cls} ${showType(p.type)}${ftv(p.type).size ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` })
-    if (into) out[call.id].push({ fromInteger: into })
+    if (into) out[call.id].push({ [call.conversion]: into })
   }
   return out
 }
@@ -423,7 +424,8 @@ function resolveNodeType(id, graph, ctx, memo) {
         paramTypes.push(freshVar()) // defensive: node has more ports than its scheme declares
       }
     }
-    if (FROM_INTEGER.includes(node.builtin || ctx.nodesRegistry[calleeId]?.builtin)) call.target = rest
+    const conversion = CONVERSIONS[node.builtin || ctx.nodesRegistry[calleeId]?.builtin]
+    if (conversion) Object.assign(call, { target: rest, conversion })
     const applied = paramTypes.map(() => false)
     const entry = { kind: 'function', paramTypes, resultType: rest, applied }
     memo.set(id, entry) // set before recursing so a stray self-mount can't loop

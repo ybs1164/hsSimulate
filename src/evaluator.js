@@ -165,6 +165,7 @@ export function concreteMempty(like) {
   if (like.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'None', ctorIndex: 0, args: [] }
   if (like.type === 'Sum') return { ...like, args: [now(0)] }
   if (like.type === 'Product') return { ...like, args: [now(1)] }
+  if (like.type === 'Endo') return { ...like, args: [now({ kind: 'closure', callee: 'identity', args: [null] })] } // End(a)'s identity
   return { ...like, args: like.args.map(() => now(MEMPTY)) }
 }
 
@@ -172,6 +173,10 @@ const num = (t) => {
   const v = force(t)
   if (typeof v !== 'number') throw new EvalError(`Expected a number, got ${show(v)}`)
   return v
+}
+const nonZero = (b) => {
+  if (b === 0) throw new EvalError('divide by zero')
+  return b
 }
 const bool = (t) => {
   const v = force(t)
@@ -240,17 +245,48 @@ export function createEvaluator(registry) {
     mulOne: [0, () => 1],
     divide: [2, (x, y) => lift2((a, b) => a / b, x, y, 'divide')],
     sqrt: [1, (x) => lift1(Math.sqrt, x, 'sqrt')],
-    // The conversions. Number types share one runtime representation, so on
-    // a number they're type-level only; a value of a user type converts
-    // through its hand-written instance (or, for a newtype, its field's).
-    // A result the type pass knows to be a user type is built there by
-    // fromInteger (see `call`); otherwise it stays a number, standing for
-    // that integer in whatever ring it meets, as a literal does.
+    // The numeric conversions, the Haskell Report way (builtinSchemes.js).
+    // The class methods — toRational, toInteger, div/mod, properFraction,
+    // isNaN — take a value of a user type through its hand-written instance
+    // (or a newtype's field); on a number they're the host's arithmetic
+    // (number types share one representation, so a change of type is
+    // type-level only). fromInteger and fromRational aren't methods: ℤ is
+    // the initial ring (ℚ the initial field of characteristic 0), so they're
+    // fixed by the target's instance — built at a user type the type pass
+    // names (see `call`), else a number standing for itself in whatever ring
+    // it meets, as a literal does. The rest are written with these as graphs
+    // (definitionViews.js) and run natively here, the same way, unless edited.
     toRational: [1, (x) => convert(x, 'toRational', (n) => n)],
     toInteger: [1, (x) => integer(convert(x, 'toInteger', (n) => n), 'toInteger')],
-    round: [1, (x) => convert(x, 'round', roundHalfEven)],
+    fromInteger: [1, (n) => integer(n, 'fromInteger')],
+    fromRational: [1, (r) => num(r)],
+    properFraction: [1, (x) => convert(x, 'properFraction', (v) => {
+      const n = Math.trunc(v) + 0 // + 0: no -0
+      return pair(now(n), now(v - n))
+    })],
+    div: [2, (x, y) => lift2((a, b) => Math.floor(a / nonZero(b)) + 0, x, y, 'div')],
+    mod: [2, (x, y) => lift2((a, b) => a - nonZero(b) * Math.floor(a / b) + 0, x, y, 'mod')],
     isNaN: [1, (x) => convert(x, 'isNaN', Number.isNaN)],
+    abs: [1, (x) => (builtins.geq[1](x, now(0)) ? force(x) : builtins.negate[1](x))], // select (x >= 0) x (negate x)
     fromIntegral: [1, (x) => builtins.toInteger[1](x)], // fromInteger . toInteger
+    realToFrac: [1, (x) => builtins.toRational[1](x)], // fromRational . toRational
+    truncate: [1, (x) => fraction(x)[0]], // fst (properFraction x)
+    floor: [1, (x) => {
+      const [n, r] = fraction(x)
+      return builtins.geq[1](r, now(0)) ? n : builtins.minus[1](now(n), now(1))
+    }],
+    ceiling: [1, (x) => {
+      const [n, r] = fraction(x)
+      return builtins.geq[1](now(0), r) ? n : builtins.plus[1](now(n), now(1))
+    }],
+    // To the nearer of n and the integer on r's side, and on a half to the even one.
+    round: [1, (x) => {
+      const [n, r] = fraction(x)
+      const m = delay(() => (builtins.geq[1](r, now(0)) ? builtins.plus[1](now(n), now(1)) : builtins.minus[1](now(n), now(1))))
+      const a = now(builtins.abs[1](r))
+      if (builtins.eq[1](a, now(0.5))) return builtins.eq[1](now(builtins.mod[1](now(n), now(2))), now(0)) ? n : force(m)
+      return builtins.geq[1](a, now(0.5)) ? force(m) : n
+    }],
     geq: [2, (x, y) => compareValues(x, y, 'geq') >= 0],
     eq: [2, (x, y) => compareValues(x, y, 'eq') === 0],
     select: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
@@ -467,6 +503,12 @@ export function createEvaluator(registry) {
     return onNumber(num(now(a)))
   }
 
+  /** `properFraction x` taken apart: the integral part (forced) and the fractional part (a thunk). */
+  function fraction(x) {
+    const p = force(builtins.properFraction[1](x))
+    return [force(p.args[0]), p.args[1]]
+  }
+
   /** `v` checked to be an Integer — what a hand-written toInteger must give. */
   function integer(v, what) {
     const n = force(v)
@@ -487,6 +529,19 @@ export function createEvaluator(registry) {
     const only = decl.constructors.length === 1 ? decl.constructors[0] : null
     const like = only ? { kind: 'data', type, ctor: only.name, ctorIndex: 0, args: only.fields.map(() => now(0)) } : { kind: 'data', type, args: [] }
     return spread(n, like)
+  }
+
+  /**
+   * `fromRational q` at user type `type`: q = n / m (exactly — a host number
+   * is dyadic), so it's fromInteger n / fromInteger m by the type's Field.
+   */
+  function fromRationalAt(v, type) {
+    const q = force(v)
+    if (typeof q !== 'number' || !registry.types?.[type]) return q
+    let m = 1
+    while (!Number.isInteger(q * m) && m < 2 ** 53) m *= 2
+    if (!Number.isInteger(q * m)) return q
+    return m === 1 ? fromIntegerAt(q, type) : builtins.divide[1](now(fromIntegerAt(q * m, type)), now(fromIntegerAt(m, type)))
   }
 
   /** MEMPTY made concrete in the shape of `like` — through a hand-written Monoid when there is one. */
@@ -659,8 +714,9 @@ export function createEvaluator(registry) {
   // A dictionary is plain data `{ kind: 'dict', key, sub }` — instance `key`
   // and the dictionaries of its context — or `{ kind: 'dict', error }` when
   // the type pass found no evidence; that error is raised only if it's used.
-  // A conversion into a user type gets `{ kind: 'dict', fromInteger: type }`:
-  // the one thing its Ring dictionary is needed for (see fromIntegerAt).
+  // A conversion into a user type gets `{ kind: 'dict', fromInteger: type }`
+  // (or `fromRational`): the one thing its Ring (Field) dictionary is needed
+  // for (see fromIntegerAt, fromRationalAt).
   let elab = null // the elaboration index, fetched once per run
 
   /** Build the dictionary evidence `e` describes, in `env` ({ dicts, ctx, self, extra }). */
@@ -673,6 +729,7 @@ export function createEvaluator(registry) {
     if ('extra' in e) return env.extra[e.extra]
     if (e.inst) return { kind: 'dict', key: e.inst, sub: e.sub.map((s) => dictionary(s, env)) }
     if (e.fromInteger) return { kind: 'dict', fromInteger: e.fromInteger }
+    if (e.fromRational) return { kind: 'dict', fromRational: e.fromRational }
     if (e.super) {
       const d = dictionary(e.of, env)
       if (d.error) return d
@@ -728,8 +785,8 @@ export function createEvaluator(registry) {
     if (def.derived) return runDerived(def.derived, args)
     if (def.builtin) {
       const v = builtins[def.builtin][1](...args)
-      const into = dicts.find((d) => d.fromInteger) // a conversion whose result type is a user type
-      return into ? fromIntegerAt(v, into.fromInteger) : v
+      const into = dicts.find((d) => d.fromInteger || d.fromRational) // a conversion whose result type is a user type
+      return !into ? v : into.fromInteger ? fromIntegerAt(v, into.fromInteger) : fromRationalAt(v, into.fromRational)
     }
     const body = registry.functionBodies[callee]
     const output = body?.output
@@ -745,8 +802,10 @@ export function createEvaluator(registry) {
       const like = { kind: 'data', type: d.type, args: [] }
       if (typeof v === 'number' && hasWritten(like, ARITHMETIC)) return record(now(literalAt(v, like)))
       if (isMempty(v) && hasWritten(like, ['Monoid'])) return record(now(memptyAt(like)))
-      // A broadcast number or MEMPTY standing for a whole record: every field is that same value.
-      if ((typeof v === 'number' || isMempty(v)) && d.fieldCount !== undefined) return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount }, () => now(v)) }
+      // MEMPTY standing for a value of the type: its identity (`Sum 0`, `Nothing`, `Endo id`, a record of MEMPTYs).
+      if (isMempty(v)) return concreteMempty({ kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount ?? 0 }, () => now(MEMPTY)) })
+      // A broadcast number standing for a whole record: every field is that same value.
+      if (typeof v === 'number' && d.fieldCount !== undefined) return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount }, () => now(v)) }
       if (!isData(v) || v.type !== d.type) throw new EvalError(`Expected a ${d.type}, got ${show(v)}`)
       return v
     }

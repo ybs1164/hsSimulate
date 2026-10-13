@@ -20,7 +20,9 @@
 - `src/dataTypes.js`: 내장 유도 타입(리스트, Maybe, Char, ())의 인스턴스와 런타임 표현.
 - `src/laws.js`: 클래스·함수 법칙 검사기.
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.
-- `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력.
+- `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력(토큰마다 원래 노드를 가리킴).
+- `src/definitionViews.js`: 기초·Prelude·유도 함수의 읽기 전용 정의 그래프와, Prelude 함수를 같은 id의 사용자 함수로 넘겨받기.
+- `src/library.js`: Prelude 함수 표와 하스켈로 선언한 Prelude 타입(생성자·분기 함수).
 - `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임, 주사위)와 빌더.
 - `src/player.js`: 위젯 렌더러와 독립 플레이어.
 - `src/exportHtml.js`: 독립 HTML 내보내기(번들러).

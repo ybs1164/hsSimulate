@@ -65,7 +65,7 @@ test('the example plays as shipped', () => {
 
 test('renaming a field renames its projection and lens calls everywhere', () => {
   const project = buildClickCounter()
-  const n = edit(project, 'Model', MODEL('purse :: Wallet, perClick :: Double, rate :: Double'), { ctors: [0], fields: [[0, 1, 2]] })
+  const n = edit(project, 'Model', MODEL('purse :: Wallet, perClick :: Int, rate :: Int, elapsed :: Int'), { ctors: [0], fields: [[0, 1, 2, 3]] })
   assert.ok(n > 0)
   assert.equal(calls(project, 'type:Model:wallet').length, 0)
   assert.ok(calls(project, 'type:Model:purse').length > 0)
@@ -76,9 +76,9 @@ test('renaming a field renames its projection and lens calls everywhere', () => 
 
 test('adding a field gives every constructor call an empty slot in the right place', () => {
   const project = buildClickCounter()
-  edit(project, 'Model', MODEL('wallet :: Wallet, bonus :: Double, perClick :: Double, rate :: Double'), { ctors: [0], fields: [[0, 2, 3]] })
+  edit(project, 'Model', MODEL('wallet :: Wallet, bonus :: Int, perClick :: Int, rate :: Int, elapsed :: Int'), { ctors: [0], fields: [[0, 2, 3, 4]] })
   const [ctor] = calls(project, 'type:Model:Model')
-  assert.deepEqual(ctor.params, ['', '', '1', '0'], 'perClick and rate keep their literals, bonus is new')
+  assert.deepEqual(ctor.params, ['', '', '1', '0', '0'], 'perClick, rate and elapsed keep their literals, bonus is new')
   assert.ok(ctor.mounted[0], 'the Wallet stays plugged into wallet')
   // Fill the new slot and the game plays again.
   ctor.params[1] = '0'
@@ -99,7 +99,7 @@ test('adding a constructor gives every case call a new branch slot before the sc
 
 test('removing a field drops its constructor slot and unplugs what was in it', () => {
   const project = buildClickCounter()
-  edit(project, 'Model', MODEL('wallet :: Wallet, perClick :: Double'), { ctors: [0], fields: [[0, 1]] })
+  edit(project, 'Model', MODEL('wallet :: Wallet, perClick :: Int'), { ctors: [0], fields: [[0, 1]] })
   const [ctor] = calls(project, 'type:Model:Model')
   assert.deepEqual(ctor.params, ['', '1'])
   assert.ok(calls(project, 'type:Model:rate').length > 0, 'calls to the removed projection are left for the editor to flag as broken')
@@ -154,7 +154,7 @@ test('customizations follow type edits: an untouched one is re-made, a changed o
   customizeDerived(project, defs.find((d) => d.id === 'type:Model:perClick'))
   customizeDerived(project, defs.find((d) => d.id === 'type:Model:rate'))
   project.functionBodies['type:Model:rate'].marker = { id: 'marker', type: 'number', value: '7', label: '7' } // a user change
-  edit(project, 'Model', MODEL('wallet :: Wallet, perTap :: Double, speed :: Double'), { ctors: [0], fields: [[0, 1, 2]] })
+  edit(project, 'Model', MODEL('wallet :: Wallet, perTap :: Int, speed :: Int, elapsed :: Int'), { ctors: [0], fields: [[0, 1, 2, 3]] })
   assert.ok(!project.nodes['type:Model:perClick'] && project.nodes['type:Model:perTap'].override)
   assert.equal(project.functionBodies['type:Model:perTap'].prim.sourceFunctionId, 'prim:type:Model:perTap')
   assert.ok(project.functionBodies['type:Model:speed'].marker, 'the changed body moved along')
@@ -166,7 +166,7 @@ test("a changed customization whose definition is removed becomes an ordinary fu
   const project = buildClickCounter()
   customizeDerived(project, derivedDefinitions(project.types).find((d) => d.id === 'type:Model:rate'))
   project.functionBodies['type:Model:rate'].marker = { id: 'marker', type: 'number', value: '7', label: '7' }
-  edit(project, 'Model', MODEL('wallet :: Wallet, perClick :: Double'), { ctors: [0], fields: [[0, 1]] })
+  edit(project, 'Model', MODEL('wallet :: Wallet, perClick :: Int'), { ctors: [0], fields: [[0, 1]] })
   const kept = Object.values(project.nodes).find((n) => n.custom && n.label === 'rate')
   assert.ok(kept && !kept.override)
   assert.ok(calls(project, kept.id).length > 0, 'its callers now call the ordinary function')

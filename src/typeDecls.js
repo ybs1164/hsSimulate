@@ -303,13 +303,13 @@ const lowerFirst = (s) => s[0].toLowerCase() + s.slice(1)
  * types, duplicate names, clashes with existing function names, and
  * underivable `deriving` clauses.
  */
-export function declareTypes(types, text, { replacing = null, functionLabels = [], instances = null } = {}) {
+export function declareTypes(types, text, { replacing = null, functionLabels = [], instances = null, builtin = false } = {}) {
   const parsed = parseDecls(text)
   const next = { ...types }
   if (replacing) delete next[replacing]
   for (const d of parsed) {
     if (next[d.name]) throw new DeclError(`Type "${d.name}" is already declared`)
-    if (builtinTypeNames.includes(d.name) || d.name === '()') throw new DeclError(`"${d.name}" is a built-in type`)
+    if (!builtin && (builtinTypeNames.includes(d.name) || d.name === '()')) throw new DeclError(`"${d.name}" is a built-in type`) // (the Prelude declares its own: library.js)
     if (d.params.includes('r')) throw new DeclError(`Type parameter "r" is kept for the result of case${d.name} — use another letter`)
     // Hand-written instances aren't part of the `data` syntax: they come
     // from the editor's draft, or stay with the declaration being replaced.

@@ -410,3 +410,12 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .type-chain.big .tc-seg{--d:16px;flex-direction:column;gap:3px;min-height:52px;min-width:84px;padding:6px calc(var(--d) + 12px) 8px calc(var(--d) + 14px)}
 .type-chain.big>.tc-seg:first-child{padding-left:16px}
 .type-chain.big .tc-seg.editable:hover{filter:brightness(.93) saturate(1.4)}
+
+/* DEFINITION text linked to the graph: hover a token to find its node, click to go there. */
+.haskell .tok{cursor:pointer;border-radius:3px;transition:background .1s ease}
+.haskell .tok:hover{background:#f0a02033;box-shadow:0 0 0 1px #f0a02066}
+.haskell .tok.linked{background:var(--accent-soft-2);color:var(--accent);font-weight:600}
+.haskell .tok.hole{font-style:italic}
+.haskell .tok.binding{color:#1f8f74}
+.param-move{border:1px solid var(--line,#e6e3f0);background:#fff;border-radius:6px;font:inherit;font-size:11px;line-height:1;padding:3px 6px;cursor:pointer;color:var(--muted,#6f6a86)}
+.param-move:hover{color:var(--accent);border-color:var(--accent)}
