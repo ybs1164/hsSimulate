@@ -81,7 +81,22 @@ export function removeParameter(project, fnId, index) {
     node.params.splice(index, 1)
     node.mounted.splice(index, 1)
     node.paramScopes?.splice(index, 1)
+    // later slots moved down one: what's plugged into them follows
+    node.mounted.forEach((childId, i) => { if (childId && graph[childId]) graph[childId].mountedTo = `${node.id}:${i}` })
   }
+  return true
+}
+
+/**
+ * Rename custom function `fnId` to `label`. A call refers to its function
+ * by id, so only the labels change: the definition's, and each call's copy.
+ * (Main checks the name is free first.)
+ */
+export function renameFunction(project, fnId, label) {
+  const def = project.nodes[fnId]
+  if (!def?.custom || def.lambda || def.override) return false
+  def.label = label
+  for (const { node } of callsTo(project, fnId)) node.label = label
   return true
 }
 

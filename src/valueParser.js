@@ -9,7 +9,7 @@
 // type, every field of a record, a number for a numeric type …), and every
 // error says where. Functions, Endo and widgets have no written form.
 import { cons, just, nil, nothing, pair, stdGen } from './dataTypes.js'
-import { showType } from './typeSystem.js'
+import { applySubst, showType } from './typeSystem.js'
 
 export class ParseError extends Error {}
 
@@ -125,8 +125,13 @@ export function parseValue(text, type, types = {}) {
       i++
       return { kind: 'data', type: head, ctor: head, ctorIndex: 0, args: [value(t.arg, true)] }
     }
-    const decl = t.kind === 'con' && types[t.name]
+    const decl = types[head]
     if (!decl) throw new ParseError(`A ${showType(t)} can't be written as a value`)
+    // `Pair Double`: the fields of `Pair a` at a = Double.
+    const typeArgs = []
+    for (let u = t; u.kind === 'app'; u = u.fn) typeArgs.unshift(u.arg)
+    const at = new Map((decl.params || []).map((p, k) => [p, typeArgs[k]]).filter(([, a]) => a))
+    const fieldType = (fl) => applySubst(at, fl.type)
     const ctorIndex = decl.constructors.findIndex((c) => c.name === tok.text)
     if (ctorIndex < 0) throw new ParseError(`Expected a constructor of ${decl.name} (${decl.constructors.map((c) => c.name).join(', ')}) ${where()}`)
     const ctor = decl.constructors[ctorIndex]
@@ -142,7 +147,7 @@ export function parseValue(text, type, types = {}) {
         if (given.has(f.name)) throw new ParseError(`Field "${f.name}" given twice ${where()}`)
         i++
         expect('=')
-        given.set(f.name, value(f.type))
+        given.set(f.name, value(fieldType(f)))
         if (peek()?.text === ',') i++
         else if (peek()?.text !== '}') throw new ParseError(`Expected "," or "}" ${where()}`)
       }
@@ -152,7 +157,7 @@ export function parseValue(text, type, types = {}) {
       args = ctor.fields.map((f) => given.get(f.name))
     } else {
       if (ctor.fields.length && atomic) throw new ParseError(`Put parentheses around ${ctor.name} … ${where()}`)
-      args = ctor.fields.map((f) => value(f.type, true))
+      args = ctor.fields.map((f) => value(fieldType(f), true))
     }
     return { kind: 'data', type: decl.name, ctor: ctor.name, ctorIndex, args }
   }

@@ -14,13 +14,49 @@
 // leaves the context's predicates as new obligations.
 import { pred, showType, tcon } from './typeSystem.js'
 
-const classes = new Map() // name -> { supers: string[], numeric: boolean }
+const staticClasses = new Map() // name -> { supers: string[], numeric: boolean, arity }
+let dynamicClasses = new Map() // user-declared classes (classDecls.js), replaced wholesale
 const staticInstances = []
 let dynamicInstances = [] // replaced wholesale whenever user type declarations change
+const classes = {
+  get: (name) => staticClasses.get(name) ?? dynamicClasses.get(name),
+  has: (name) => staticClasses.has(name) || dynamicClasses.has(name),
+  keys: () => [...staticClasses.keys(), ...dynamicClasses.keys()],
+}
 
-/** Declare a class with its direct superclasses. `numeric` classes take part in defaulting. */
-export function declareClass(name, supers = [], { numeric = false } = {}) {
-  classes.set(name, { supers, numeric })
+/**
+ * Declare a class with its direct superclasses. `numeric` classes take part
+ * in defaulting; `arity` is how many arguments the class's type takes (0 for
+ * a class of types, 1 for a constructor class like Functor).
+ */
+export function declareClass(name, supers = [], { numeric = false, arity = 0 } = {}) {
+  staticClasses.set(name, { supers, numeric, arity })
+}
+
+/** Replace the user-declared classes: `[{ name, supers, arity }]`. They carry dictionaries at runtime (see evidence). */
+export function setDynamicClasses(list) {
+  dynamicClasses = new Map(list.map((c) => [c.name, { supers: c.supers, numeric: false, arity: c.arity || 0, user: true }]))
+}
+
+/** Run `fn` with `list` as the user-declared classes, then restore the previous ones. */
+export function withDynamicClasses(list, fn) {
+  const before = dynamicClasses
+  setDynamicClasses(list)
+  try {
+    return fn()
+  } finally {
+    dynamicClasses = before
+  }
+}
+
+/** Is `name` a user-declared class (passed as a dictionary) rather than a builtin one (dispatched on values)? */
+export function isUserClass(name) {
+  return !staticClasses.has(name) && !!dynamicClasses.get(name)?.user
+}
+
+/** How many arguments class `name`'s type takes (0 for a class of types). */
+export function classArity(name) {
+  return classes.get(name)?.arity || 0
 }
 
 /**
@@ -67,7 +103,7 @@ export function classClosure(cls) {
 
 /** Every declared class name. */
 export function classNames() {
-  return [...classes.keys()]
+  return classes.keys()
 }
 
 /**
@@ -133,10 +169,54 @@ function substitutePattern(s, t) {
  * never has an instance, so it fails cleanly at toHnf.
  */
 function byInst(p) {
+  return findInstance(p)?.obligations ?? null
+}
+
+/** The instance that applies to `p` and the obligations using it leaves, or null. */
+function findInstance(p) {
   for (const inst of allInstances()) {
     if (inst.cls !== p.cls) continue
     const s = match(inst.head, p.type)
-    if (s) return inst.context.map((q) => pred(q.cls, substitutePattern(s, q.type)))
+    if (s) return { inst, obligations: inst.context.map((q) => pred(q.cls, substitutePattern(s, q.type))) }
+  }
+  return null
+}
+
+/**
+ * Evidence for `p` — how to build its dictionary — or null if there is
+ * none. Only user classes have dictionaries (builtin classes dispatch on
+ * runtime values), so obligations of builtin classes are just checked.
+ * `given` are the dictionaries in hand: `[{ pred, expr }]`. Evidence is
+ * JSON data the evaluator interprets:
+ *
+ *   given.expr                 a dictionary in hand (a function's dictionary parameter, …)
+ *   { super: cls, of: e }      the superclass `cls` dictionary inside dictionary e
+ *   { inst: key, sub: [e…] }   instance `key`'s dictionary, from its context's dictionaries
+ */
+export function evidence(given, p) {
+  for (const g of given) {
+    const path = superPath(g.pred, p)
+    if (path) return path.reduce((e, cls) => ({ super: cls, of: e }), g.expr)
+  }
+  const found = findInstance(p)
+  if (!found || !found.inst.key) return null
+  const sub = []
+  for (const q of found.obligations) {
+    if (isUserClass(q.cls)) {
+      const e = evidence(given, q)
+      if (!e) return null
+      sub.push(e)
+    } else if (!entails(given.map((g) => g.pred), q)) return null
+  }
+  return { inst: found.inst.key, sub }
+}
+
+// The superclasses to step through to get from `have` to `want` (same type), or null.
+function superPath(have, want) {
+  if (have.cls === want.cls && sameType(have.type, want.type)) return []
+  for (const sup of superclassesOf(have.cls)) {
+    const rest = superPath(pred(sup, have.type), want)
+    if (rest) return [sup, ...rest]
   }
   return null
 }
@@ -210,5 +290,7 @@ export const defaultTypes = ['Integer', 'Double']
 export function pickDefault(preds, varId) {
   const qs = predsOnVar(preds, varId)
   if (!qs.length || !qs.some((p) => classes.get(p.cls)?.numeric)) return null
+  // Only standard classes default (Haskell Report §4.3.4): never a user class.
+  if (qs.some((p) => isUserClass(p.cls))) return null
   return defaultTypes.find((t) => qs.every((p) => entails([], pred(p.cls, tcon(t))))) || null
 }

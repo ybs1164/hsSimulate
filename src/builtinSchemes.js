@@ -68,6 +68,10 @@ export const builtinSchemes = {
   geq: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
   eq: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(a, Bool))),
   select: scheme(['a'], [], tfun(Bool, tfun(a, tfun(a, a)))),
+  // Bool = 1 + 1: (&&), (||) and not, each a copairing of Bool (`p && q = select p q False`).
+  and: scheme([], [], tfun(Bool, tfun(Bool, Bool))),
+  or: scheme([], [], tfun(Bool, tfun(Bool, Bool))),
+  not: scheme([], [], tfun(Bool, Bool)),
 
   // Prelude functions on the built-in inductive types (src/dataTypes.js),
   // under their Haskell names. `foldr` and `maybe` are the recursors of
@@ -84,6 +88,8 @@ export const builtinSchemes = {
   just: scheme(['a'], [], tfun(a, Maybe(a))),
   maybe: scheme(['a', 'b'], [], tfun(b, tfun(tfun(a, b), tfun(Maybe(a), b)))),
   show: scheme(['a'], [pred('Show', a)], tfun(a, String)),
+  // showsPrec d x "" — simplified to return the String, like showFFloat below.
+  showsPrec: scheme(['a'], [pred('Show', a)], tfun(Int, tfun(a, String))),
   // Numeric.showFFloat (Just digits) x "" — simplified to take the digit count directly.
   showFFloat: scheme(['a'], [pred('IEEEFloat', a)], tfun(Int, tfun(a, String))), // Haskell's RealFloat a
   // Big numbers the way idle games show them: 999, 1.2K, 3.4M, 5.6B, 7.8T, 1.2Qa …

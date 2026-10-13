@@ -1,14 +1,18 @@
 import './style.css'
-import { applySubst, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred } from './typeSystem.js'
-import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
+import { applySubst, constructorArity, ftv, generalize, showQual, tcon, tfun, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
+import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
-import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicInstances, productLiftable } from './prelude.js'
-import { createEvaluator, EvalError, isClosure, isData, showValue } from './evaluator.js'
-import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource } from './typeDecls.js'
+import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicClasses, setDynamicInstances, productLiftable } from './prelude.js'
+import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
+import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, showHead } from './classDecls.js'
+import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, methodTypeProblem, renameTypeReferences, typeArities } from './typeDecls.js'
+import { customizeDerived, isPristineOverride, migrateTypeEdit, primLabel, primitiveDefinitions, resetDerived } from './typeEdits.js'
+import { CLASS_METHODS, CONSTRUCTOR_CLASSES, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
+import { graphFingerprint, graphableDerivings, instanceGraphs, lambdasOf } from './deriveGraphs.js'
 import { FUNCTION_LAWS, checkClassLaws, checkFunctionLaw, lawfulClassesOf } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, printDefinition } from './haskellPrint.js'
-import { addParameter, hasVariadicSlots, removeParameter, renameParameter } from './signature.js'
+import { addParameter, hasVariadicSlots, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
@@ -17,7 +21,7 @@ import { renderWidget } from './player.js'
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
-const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
+const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 
 const app = document.querySelector('#app')
@@ -37,6 +41,8 @@ app.innerHTML = `
           <div id="function-library"></div>
           <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
           <div id="type-library"></div>
+          <div class="library-title types-title"><span>CLASSES</span><button class="add-class" aria-label="Declare a class" title="Declare a class — methods each instance implements">+</button></div>
+          <div id="class-library"></div>
           <div class="library-title types-title"><span>PRELUDE</span></div>
           <div id="prelude-library"></div>
           <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>Numbers</b><small>Int · Float</small></span></button>
@@ -126,11 +132,14 @@ let entryId = 'add'
 // loaded project can be reconciled with this version's builtins.
 const builtinNodes = structuredClone(nodes)
 const builtinBodies = structuredClone(functionBodies)
-// User type declarations (see typeDecls.js) and the read-only functions
-// derived from them — constructors, field projections and updates, and
-// each type's eliminator. Derived definitions don't live in `nodes` (that
-// would put them on the main canvas); `definitions` is the lookup the type
-// pass and the evaluator use: every function definition, real or derived.
+// User type declarations (see typeDecls.js) and the functions derived from
+// them — constructors, field projections and updates, and each type's
+// eliminator — plus each one's primitive (`prim:<id>`, see typeEdits.js).
+// Derived definitions don't live in `nodes` (that would put them on the
+// main canvas); `definitions` is the lookup the type pass and the
+// evaluator use: every function definition, real or derived. A customized
+// derived function is a hidden custom function in `nodes` under the same
+// id, so it shadows the derived one everywhere.
 let types = {}
 const derivedDefs = {}
 // Prelude functions on lists, Maybe and text (src/dataTypes.js), by their
@@ -138,8 +147,9 @@ const derivedDefs = {}
 // rather than drawn on the main canvas.
 const PRELUDE = [
   ['Lists', [['listOf', '[ , , ]', []], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
+  ['Bool', [['and', '(&&)', ['p', 'q']], ['or', '(||)', ['p', 'q']], ['not', 'not', ['p']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
-  ['Text', [['show', 'show', ['x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
+  ['Text', [['show', 'show', ['x']], ['showsPrec', 'showsPrec', ['d', 'x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
   ['Pairs · Random', [['pair', '(,)', ['a', 'b']], ['fst', 'fst', ['p']], ['snd', 'snd', ['p']], ['mkStdGen', 'mkStdGen', ['seed']], ['randomR', 'randomR', ['range', 'gen']], ['randomRInt', 'randomRInt', ['range', 'gen']]]],
   ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']], ['mkSum', 'Sum', ['x']], ['getSum', 'getSum', ['s']], ['mkProduct', 'Product', ['x']], ['getProduct', 'getProduct', ['p']], ['mkEndo', 'Endo', ['f']], ['appEndo', 'appEndo', ['e', 'x']]]],
   ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
@@ -149,19 +159,131 @@ const PRELUDE = [
   ['Pictures', [['pCircle', 'circle', ['r']], ['pCircleSolid', 'circleSolid', ['r']], ['pRectangleSolid', 'rectangleSolid', ['w', 'h']], ['pTranslate', 'translate', ['x', 'y', 'picture']], ['pColor', 'color', ['color', 'picture']], ['rgb', 'rgb', ['r', 'g', 'b']], ['red', 'red', []], ['green', 'green', []], ['blue', 'blue', []], ['yellow', 'yellow', []], ['black', 'black', []], ['white', 'white', []]]],
 ]
 const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).map(([builtin, label, params]) => [`prelude:${builtin}`, { id: `prelude:${builtin}`, type: 'function', builtin, label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', readonly: true, color: '#5fa8e8' }]))
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? preludeDefs[id] })
-function applyTypes(next) {
+// User class declarations (classDecls.js): stored as written, resolved
+// against the types; their methods are definitions too (`class:C:m`).
+let classes = {}
+let resolvedClasses = []
+const classDefs = {}
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? preludeDefs[id] })
+function applyTypes(next, nextClasses = classes) {
   types = next
   Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
-  derivedDefinitions(types).forEach((def) => { derivedDefs[def.id] = def })
-  setDynamicInstances(derivedInstances(types))
+  const derived = derivedDefinitions(types)
+  ;[...derived, ...primitiveDefinitions(derived)].forEach((def) => { derivedDefs[def.id] = def })
+  setUserTypeArities(typeArities(types))
+  classes = nextClasses
+  try {
+    resolvedClasses = declareClasses(classes, types, classLabelsTaken())
+  } catch (e) {
+    if (!(e instanceof DeclError)) throw e
+    resolvedClasses = []
+    showToast(`Classes not loaded: ${e.message}`)
+  }
+  Object.keys(classDefs).forEach((id) => delete classDefs[id])
+  classMethodDefinitions(resolvedClasses).forEach((def) => { classDefs[def.id] = { ...def, expression: `${def.label} :: ${showQual(def.scheme.preds, def.scheme.type)} — a method of ${def.method.cls}; the instance is picked from the types` } })
+  const env = classEnvironment(resolvedClasses)
+  setDynamicClasses(env.classes)
+  setDynamicInstances([...derivedInstances(types), ...env.instances])
+  elaborationCache = null
+  projectPassCache = null
 }
-const evaluator = createEvaluator({ nodes: definitions, functionBodies, get types() { return types } })
+// Names a class method may not take: every function name but the class methods' own.
+function classLabelsTaken() {
+  return [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !isHiddenDefinition(n)), ...Object.values(preludeDefs), ...Object.values(derivedDefs).filter((d) => !d.primitive)].map((n) => n.label)
+}
+// The type pass's elaboration of the whole project — which instance each
+// call means, the dictionaries functions take (inferGraph.js) — plus each
+// instance's runtime side (classDecls.js). The evaluator asks for it on
+// every run; it's recomputed after any edit (draw() drops it).
+let elaborationCache = null
+let projectPassCache = null
+// The type pass over the whole project (the top-level graph, and through it every function).
+function projectPass() {
+  return (projectPassCache ??= inferGraph(definitions, functionBodies, nodes))
+}
+function elaborationData() {
+  if (!resolvedClasses.length) return null
+  if (!elaborationCache) {
+    const pass = projectPass()
+    elaborationCache = { ...pass.elaboration, instances: instanceEvidence(resolvedClasses, (fnId) => pass.schemes.get(fnId)) }
+  }
+  return elaborationCache
+}
+
+// --- Ambiguity (inferGraph.js: GHC's ambiguity check) ---------------------------
+// An ambiguous constraint can't be solved by anything, so it's an error at
+// once: the node is marked, a connection that would create one is refused,
+// and nothing that depends on one runs.
+
+/** Why `node` (in the graph `pass` typed) is ambiguous, or null. A custom function is ambiguous if its body is. */
+function ambiguityProblem(node, pass) {
+  const own = pass.ambiguities?.main.find((a) => a.nodeId === node.id)
+  if (own) return own.message
+  const fnId = node.sourceFunctionId || node.id
+  const inner = nodes[fnId]?.custom && projectPass().ambiguities.functions[fnId]
+  return inner?.length ? `${nodes[fnId].lambda ? 'This λ' : nodes[fnId].label}'s body is ambiguous — ${inner[0].message}` : null
+}
+// Every ambiguity in the graph on screen and in every function, as comparable keys.
+function ambiguityKeys() {
+  const local = typePass().ambiguities
+  projectPassCache = null
+  const project = projectPass().ambiguities
+  return new Set([...local.main.map((a) => `here:${a.nodeId}`), ...Object.entries(project.functions).flatMap(([fn, list]) => list.map((a) => `${fn}:${a.nodeId}`))])
+}
+// The custom functions running `ids` (nodes of `graph`) may call — through
+// calls, and through dictionaries (a class method may run any instance's function).
+function reachableFunctions(graph, ids) {
+  const found = new Set()
+  const visit = (g, nodeIds) => {
+    for (const id of nodeIds) {
+      const n = g[id]
+      if (n?.type !== 'function') continue
+      const callee = n.sourceFunctionId || n.id
+      const def = definitions[callee]
+      const next = def?.method ? Object.values(classes[def.method.cls]?.instances || []).flatMap((i) => Object.values(i.methods || {})).concat((classes[def.method.cls]?.methods || []).map((m) => m.default)).filter(Boolean) : nodes[callee]?.custom ? [callee] : []
+      for (const fn of next) {
+        if (found.has(fn) || !functionBodies[fn]) continue
+        found.add(fn)
+        visit(functionBodies[fn], Object.keys(functionBodies[fn]))
+      }
+    }
+  }
+  visit(graph, [...ids])
+  return found
+}
+/** Why running node `nodeId` of `graph` must be refused (an ambiguity it depends on), or null. */
+function runBlocker(graph, nodeId) {
+  const inside = subtreeOf(graph, nodeId)
+  const local = typePass(graph).ambiguities.main.find((a) => inside.has(a.nodeId))
+  if (local) return local.message
+  projectPassCache = null
+  const inner = projectPass().ambiguities.functions
+  for (const fn of reachableFunctions(graph, inside)) {
+    if (inner[fn]?.length) return `${nodes[fn]?.lambda ? 'a λ' : nodes[fn]?.label ?? fn}: ${inner[fn][0].message}`
+  }
+  return null
+}
+// Definitions in `nodes` that aren't drawn on the main canvas or listed as
+// functions: a λ's lifted function (its call node is the λ) and a
+// customized derived function (listed under its type).
+const isHiddenDefinition = (n) => !!(n?.lambda || n?.override)
+// Every name a function definition already has, but `exceptId`'s: custom
+// functions, builtins, Prelude, and everything derived from types.
+function functionLabelsExcept(exceptId = null) {
+  return [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !n.lambda && n.id !== exceptId), ...Object.values(preludeDefs), ...Object.values(derivedDefs).filter((d) => !d.primitive), ...Object.values(classDefs)].map((n) => n.label)
+}
+// Why `label` can't name a custom function, or null if it can (a Haskell variable name not already taken).
+function functionNameProblem(label, exceptId = null) {
+  if (!/^[a-z_][A-Za-z0-9_']*$/.test(label)) return `"${label}" isn't a function name (a lowercase letter, then letters, digits, _ or ')`
+  if (functionLabelsExcept(exceptId).includes(label)) return `"${label}" is already the name of a function`
+  return null
+}
+const evaluator = createEvaluator({ nodes: definitions, functionBodies, get types() { return types }, elaboration: () => { const data = elaborationData(); return data && elaborationIndex(data, nodes, functionBodies) } })
 const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
 function renderFunctionLibrary() {
-  functionLibrary.innerHTML = Object.values(nodes).filter((n) => isFunction(n) && !n.lambda).map((node) => `
+  functionLibrary.innerHTML = Object.values(nodes).filter((n) => isFunction(n) && !isHiddenDefinition(n)).map((node) => `
     <button class="library-item function-library-item ${state.activeFunction === node.id ? 'active' : ''}" data-function-id="${node.id}">
       <span class="lib-icon function-icon">ƒ</span>
       <span><b>${node.label}</b><small>${functionSignature(node, nodes)}</small></span>
@@ -171,6 +293,7 @@ function renderFunctionLibrary() {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
   })
   renderTypeLibrary()
+  renderClassLibrary()
   applySearch()
 }
 // A λ (anonymous function), by lambda lifting: a hidden custom function
@@ -209,16 +332,20 @@ function renderPreludeLibrary() {
 // you're looking at (a custom function on `main` opens its body instead).
 const searchInput = document.querySelector('.search input')
 function searchHits() {
-  return [...document.querySelectorAll('.function-library-item, #type-library .derived-item, #prelude-library .derived-item')].filter((item) => !item.hidden)
+  return [...document.querySelectorAll('.function-library-item, #type-library .derived-item, #class-library .derived-item, #prelude-library .derived-item')].filter((item) => !item.hidden)
 }
 function applySearch() {
   const q = searchInput.value.trim().toLowerCase()
   const matches = (el) => !q || el.textContent.toLowerCase().includes(q)
   document.querySelectorAll('.function-library-item, #prelude-library .derived-item').forEach((item) => { item.hidden = !matches(item) })
-  document.querySelectorAll('#type-library .type-entry').forEach((entry) => {
+  document.querySelectorAll('#type-library .type-entry, #class-library .type-entry').forEach((entry) => {
     const typeHit = matches(entry.querySelector('.type-item'))
     const items = [...entry.querySelectorAll('.derived-item')]
-    items.forEach((item) => { item.hidden = !(typeHit || matches(item)) })
+    items.forEach((item) => {
+      item.hidden = !(typeHit || matches(item))
+      const row = item.closest('.derived-row')
+      if (row) row.hidden = item.hidden
+    })
     entry.hidden = !typeHit && items.every((item) => item.hidden)
   })
   // A Prelude group heading shows only while one of its entries does.
@@ -246,29 +373,51 @@ searchInput.addEventListener('keydown', (event) => {
 })
 const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
-  const byType = Object.groupBy(Object.values(derivedDefs), (def) => def.derived.type)
+  const byType = Object.groupBy(Object.values(derivedDefs).filter((def) => !def.primitive), (def) => def.derived.type)
+  const instancesOf = (d) => [...d.deriving.flatMap((c) => c.classes), ...(d.instances || []).map((i) => `${i.cls}✎`)]
   typeLibrary.innerHTML = Object.values(types).map((d) => `
     <div class="type-entry">
       <button class="library-item type-item" data-type-name="${d.name}" title="Edit declaration">
         <span class="lib-icon type-icon">T</span>
-        <span><b>${d.name}</b><small>${d.constructors.map((c) => c.name).join(' | ')}${d.deriving.length ? ` · deriving (${d.deriving.flatMap((c) => c.classes).join(', ')})` : ''}</small></span>
+        <span><b>${[d.name, ...(d.params || [])].join(' ')}</b><small>${d.constructors.map((c) => c.name).join(' | ')}${instancesOf(d).length ? ` · ${instancesOf(d).join(', ')}` : ''}</small></span>
       </button>
-      ${(byType[d.name] || []).map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${def.label}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}
+      ${(byType[d.name] || []).map((def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎ custom</i>' : ''}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="${nodes[def.id]?.override ? 'Open its custom body' : 'Customize: redefine it with a body of your own'}">✎</button></div>`).join('')}
     </div>`).join('')
   typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeEditor(item.dataset.typeName) })
   typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+  typeLibrary.querySelectorAll('.derived-edit').forEach((item) => { item.onclick = () => editDerived(item.dataset.editId) })
+}
+// Customize a derived function (or open its customization): its body
+// starts as a call to its primitive, `wallet m = wallet# m`, ready to be
+// changed. Every existing call now runs the custom body.
+function editDerived(id) {
+  const def = derivedDefs[id]
+  if (!def || def.primitive) return
+  const fresh = !nodes[id]
+  if (fresh) customizeDerived({ nodes, functionBodies }, def)
+  closeTypeEditor()
+  state.activeFunction = null
+  enterFunction(id)
+  if (fresh) showToast(`${def.label} is now yours to edit — its body starts as the primitive ${primLabel(def.label)}. Reset it in the type editor.`)
+}
+function resetDerivedFunction(id) {
+  if (state.activeFunction === id || state.functionStack.includes(id)) { state.activeFunction = null; state.functionStack = [] }
+  resetDerived({ nodes, functionBodies }, id)
+  renderFunctionLibrary(); updateInspector(); draw()
 }
 // The laws of every algebraic instance a declared type has, checked on
 // samples by actually running them (src/laws.js).
 function lawReport(typeName) {
-  const classes = lawfulClassesOf(tcon(typeName))
+  // A parameterized type is checked at Double (`Pair Double`), like a property test picks one instance.
+  const type = (types[typeName]?.params || []).reduce((acc) => tapp(acc, tcon('Double')), tcon(typeName))
+  const classes = lawfulClassesOf(type)
   if (!classes.length) return ''
   const rows = classes.flatMap((cls) => {
-    const { results, skipped } = checkClassLaws(cls, tcon(typeName), { ev: evaluator, types })
+    const { results, skipped } = checkClassLaws(cls, type, { ev: evaluator, types })
     if (skipped) return [`<li class="law skipped">${cls}: ${escapeAttr(skipped)}</li>`]
     return results.map((r) => `<li class="law ${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓' : '✗'} <b>${r.cls}</b> ${escapeAttr(r.law)}${r.ok ? '' : ` — <em>${escapeAttr(r.counterexample)}</em>`}</li>`)
   })
-  return `<div class="law-report"><label>LAWS (checked on samples)</label><ul>${rows.join('')}</ul></div>`
+  return `<div class="law-report"><label>LAWS (checked on samples${type.kind === 'app' ? ` at ${escapeAttr(showQual([], type))}` : ''})</label><ul>${rows.join('')}</ul></div>`
 }
 // --- Type editor -------------------------------------------------------------
 // A type is shown and edited as what defines it: its constructor functions.
@@ -277,46 +426,178 @@ function lawReport(typeName) {
 // (`Model :: Double → Model`). Every edit is turned back into a Haskell
 // declaration (typeDecls.js' draftToSource) and checked by declareTypes; a
 // valid edit applies at once (undoable), an invalid one shows why and waits.
+//
+// Each constructor and field carries a key for as long as the editor is
+// open, so an edit can be told apart from a delete-and-add: renaming the
+// field `wallet` renames every `wallet`/`set wallet`/`over wallet` call,
+// adding a field gives every constructor call a new empty slot, adding a
+// constructor gives every case call a new branch (typeEdits.js).
 const typePanel = document.querySelector('#type-panel')
-let typeEditor = null // { original: name of the declaration being edited (null until first applied), draft }
+let typeEditor = null // { original: name of the declaration being edited (null until first applied), draft, appliedDraft: the draft as last applied }
+let draftKeys = 0
+function keyed(draft) {
+  for (const c of draft.constructors) {
+    c.key ??= ++draftKeys
+    for (const fl of c.fields) fl.key ??= ++draftKeys
+  }
+  return draft
+}
+function editorFor(name) {
+  const draft = keyed(declToDraft(types[name]))
+  return { original: name, draft, appliedDraft: structuredClone(draft) }
+}
+// Where each constructor/field of draft `before` went in draft `after` (see typeEdits.js' derivedRenames).
+function draftKeyMap(before, after) {
+  const ctors = before.constructors.map((c) => { const j = after.constructors.findIndex((x) => x.key === c.key); return j < 0 ? undefined : j })
+  const fields = before.constructors.map((c, i) => {
+    const next = after.constructors[ctors[i]]
+    return c.fields.map((fl) => { const k = next ? next.fields.findIndex((x) => x.key === fl.key) : -1; return k < 0 ? undefined : k })
+  })
+  return { ctors, fields }
+}
 const STOCK_CLASSES = ['Eq', 'Ord', 'Show']
 const GENERICALLY_CLASSES = ['Semigroup', 'Monoid']
 const NEWTYPE_CLASSES = ['Eq', 'Ord', 'Show', 'AddSemigroup', 'AddMonoid', 'AddCommutativeMonoid', 'AddGroup', 'AddAbelianGroup', 'MulSemigroup', 'MulMonoid', 'Semiring', 'Ring', 'OrderedRing', 'EuclideanRing', 'Field', 'OrderedField', 'Transcendental', 'IEEEFloat', 'PartialOrd', 'Lattice', 'Semigroup', 'Monoid']
 
 function openTypeEditor(name = null) {
   stopGame()
+  classEditor = null
   if (!name) {
     // A new type: one constructor without fields, under a free name — valid at once.
     let n = 1
     while (types[`NewType${n === 1 ? '' : n}`]) n++
     const draft = declToDraft(null)
     draft.name = draft.constructors[0].name = `NewType${n === 1 ? '' : n}`
-    typeEditor = { original: null, draft }
+    typeEditor = { original: null, draft: keyed(draft), appliedDraft: null }
     applyTypeDraft()
-  } else typeEditor = { original: name, draft: declToDraft(types[name]) }
+  } else typeEditor = editorFor(name)
   typePanel.hidden = false
   renderTypeEditor()
 }
 
 function closeTypeEditor() {
   typeEditor = null
+  classEditor = null
   typePanel.hidden = true
   typePanel.innerHTML = ''
 }
 
-// Check the draft; apply it if valid. Returns the error message, or ''.
+// Check the draft; apply it if valid — rewiring every call to what the
+// type derives (renamed, reshaped). Returns the error message, or ''.
 function applyTypeDraft() {
+  const d = keyed(typeEditor.draft)
   try {
-    const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId), ...Object.values(preludeDefs)].map((n) => n.label)
-    const next = declareTypes(types, draftToSource(typeEditor.draft), { replacing: typeEditor.original, functionLabels: labels })
-    applyTypes(next)
-    typeEditor.original = typeEditor.draft.name
+    const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !isHiddenDefinition(n)), ...Object.values(preludeDefs)].map((n) => n.label)
+    const before = typeEditor.original ? types[typeEditor.original] : null
+    // Renaming a type renames it in the declarations that mention it.
+    const base = before && d.name !== before.name ? renameTypeReferences(types, before.name, d.name) : types
+    const next = declareTypes(base, draftToSource(d), { replacing: typeEditor.original, functionLabels: [...labels, ...Object.values(classDefs).map((c) => c.label)], instances: d.instances })
+    // Classes mention types too (method signatures, instance heads): they follow a rename, and must still make sense.
+    const nextClasses = before && d.name !== before.name ? renameTypeInClasses(classes, before.name, d.name) : classes
+    declareClasses(nextClasses, next, classLabelsTaken())
+    const changed = before && typeEditor.appliedDraft ? migrateTypeEdit({ nodes, functionBodies }, before, next[d.name], draftKeyMap(typeEditor.appliedDraft, d)) : 0
+    applyTypes(next, nextClasses)
+    typeEditor.original = d.name
+    typeEditor.appliedDraft = structuredClone(d)
+    if (changed) showToast(`Updated ${changed} call${changed > 1 ? 's' : ''} to match`)
     renderFunctionLibrary(); updateInspector(); draw()
     return ''
   } catch (e) {
     if (!(e instanceof DeclError)) throw e
     return e.message
   }
+}
+
+// Does custom function `fnId` implement `method` of `instance cls T`? '' if
+// so, else why not: it must have (at least) the method's type at T —
+// `show :: Money → String` — with the method's other variables rigid.
+function methodProblem(decl, cls, method, fnId) {
+  const have = implementationScheme(fnId)
+  return typeof have === 'string' ? have : methodTypeProblem(have, decl, cls, builtinSchemes[method])
+}
+// Custom function `fnId`'s generalized type, or why it can't be checked yet (a string).
+function implementationScheme(fnId) {
+  if (!nodes[fnId]) return 'pick a function'
+  if (!functionBodies[fnId]?.output?.source) return 'its Output is not connected yet'
+  const entry = typePass(nodes).perNode.get(fnId)
+  if (!entry?.paramTypes) return 'no type yet'
+  return generalize(entry.preds || [], entry.paramTypes.reduceRight((acc, t) => tfun(t, acc), entry.resultType))
+}
+
+// A custom function to implement `method` for type `typeName`, named after both (`showMoney`), with an open body.
+function createMethodFunction(method, typeName, params = METHOD_PARAMS[method]) {
+  let label = `${method}${typeName}`
+  for (let k = 2; functionNameProblem(label); k++) label = `${method}${typeName}${k}`
+  const id = `custom-${Date.now()}-${method}-${Math.random().toString(36).slice(2, 6)}`
+  nodes[id] = { id, type: 'function', ...freePosition(nodes, 120 + params.length * SLOT_STRIDE), label, params: [...params], mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
+  functionBodies[id] = createFunctionBody(id, params)
+  delete functionBodies[id].output.source
+  functionBodies[id].output.value = 'open'
+  return id
+}
+
+// Write the type's derived `cls` out as a hand-written instance whose methods
+// are custom functions, starting as graphs of exactly what deriving does
+// (deriveGraphs.js) — so the derived structure can be edited like any function.
+function writeDerivedOut(cls) {
+  const d = typeEditor.draft
+  const applied = types[typeEditor.original]
+  const strategy = applied && graphableDerivings(applied).find((x) => x.cls === cls)?.strategy
+  if (!strategy) return
+  const taken = new Set()
+  const g = instanceGraphs(applied, cls, {
+    newId: (hint) => `${hint === 'lambda' ? 'lambda' : 'custom'}-${Date.now()}-${hint}-${Math.random().toString(36).slice(2, 6)}`,
+    label: (m) => {
+      let label = `${m}${applied.name}`
+      for (let k = 2; functionNameProblem(label) || taken.has(label); k++) label = `${m}${applied.name}${k}`
+      taken.add(label)
+      return label
+    },
+    customized: (id) => !!nodes[id]?.override,
+  })
+  for (const f of g.functions) {
+    nodes[f.node.id] = f.node.lambda ? f.node : { ...f.node, ...freePosition(nodes, 120 + f.node.params.length * SLOT_STRIDE) }
+    functionBodies[f.node.id] = f.body
+    layoutBody(f.body)
+  }
+  const generated = Object.fromEntries(Object.entries(g.methods).map(([m, id]) => [m, graphFingerprint(nodes, functionBodies, id)]))
+  const before = structuredClone({ deriving: d.deriving, instances: d.instances })
+  d.deriving[strategy] = d.deriving[strategy].filter((c) => c !== cls)
+  d.instances = [...(d.instances || []), { cls, methods: g.methods, derived: strategy, generated }]
+  const error = applyTypeDraft()
+  if (error) {
+    Object.assign(d, before)
+    g.functions.forEach((f) => { delete nodes[f.node.id]; delete functionBodies[f.node.id] })
+    return renderTypeEditor(error)
+  }
+  renderFunctionLibrary(); draw()
+  renderTypeEditor()
+  showToast(`${cls} ${applied.name} is written out: ${Object.values(g.methods).map((id) => nodes[id].label).join(', ')} — open ${Object.keys(g.methods).length > 1 ? 'them' : 'it'} to change how it works`)
+}
+
+// Undo writeDerivedOut for instance `ii`: derive it again. Its functions go
+// too (with their λs) if they're as generated and nothing else calls them.
+function deriveAgain(ii) {
+  const d = typeEditor.draft
+  const inst = d.instances[ii]
+  if (!inst?.derived) return
+  const before = structuredClone({ deriving: d.deriving, instances: d.instances })
+  d.instances = d.instances.filter((_, i) => i !== ii)
+  d.deriving[inst.derived] = [...d.deriving[inst.derived].filter((c) => c !== inst.cls), inst.cls]
+  const error = applyTypeDraft()
+  if (error) { Object.assign(d, before); return renderTypeEditor(error) }
+  const kept = []
+  for (const [m, fnId] of Object.entries(inst.methods || {})) {
+    if (!nodes[fnId]) continue
+    const own = new Set([fnId, ...lambdasOf(nodes, functionBodies, fnId)])
+    const calledElsewhere = [nodes, ...Object.entries(functionBodies).filter(([id]) => !own.has(id)).map(([, g]) => g)].some((g) => Object.values(g).some((n) => n.sourceFunctionId === fnId))
+    if (calledElsewhere || inst.generated?.[m] !== graphFingerprint(nodes, functionBodies, fnId)) { kept.push(nodes[fnId].label); continue }
+    if (own.has(state.activeFunction) || state.functionStack.some((id) => own.has(id))) { state.activeFunction = null; state.functionStack = [] }
+    own.forEach((id) => { delete nodes[id]; delete functionBodies[id] })
+  }
+  renderFunctionLibrary(); updateInspector(); draw()
+  renderTypeEditor()
+  showToast(`${inst.cls} is derived again${kept.length ? ` — kept ${kept.join(', ')} (changed or still used)` : ''}`)
 }
 
 function renderTypeEditor(error = '') {
@@ -329,17 +610,18 @@ function renderTypeEditor(error = '') {
   }
   const check = (group, cls) => `<label class="te-check"><input type="checkbox" data-group="${group}" value="${cls}" ${d.deriving[group].includes(cls) ? 'checked' : ''}/> ${cls}</label>`
   const anyclass = productLiftable.filter((c) => !GENERICALLY_CLASSES.includes(c))
-  const derived = applied ? Object.values(derivedDefs).filter((def) => def.derived.type === typeEditor.original) : []
+  const derived = applied ? Object.values(derivedDefs).filter((def) => def.derived.type === typeEditor.original && !def.primitive) : []
   typePanel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
       <select class="te-keyword" title="data: any constructors · newtype: exactly one constructor with one field"><option ${d.keyword === 'data' ? 'selected' : ''}>data</option><option ${d.keyword === 'newtype' ? 'selected' : ''}>newtype</option></select>
       <input class="te-name" value="${escapeAttr(d.name)}" title="Type name" spellcheck="false" />
+      <input class="te-params" value="${escapeAttr((d.params || []).join(' '))}" placeholder="a b …" title="Type parameters, space-separated: data Pair a = Pair a a" spellcheck="false" />
       <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
       <button class="tool-button" data-te="delete">Delete type</button>
       <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
     </div>
     <div class="type-body">
-      <p class="te-hint">A type is its constructors. Each constructor is a function; write its fields inside it as <code>name :: Type</code> (name them all for a record, or none). The functions below are made from it.</p>
+      <p class="te-hint">A type is its constructors. Each constructor is a function; write its fields inside it as <code>name :: Type</code> (name them all for a record, or none) — a field may use the type's parameters (<code>first :: a</code>). The functions below are made from it; renaming or reshaping it updates every call to them.</p>
       ${d.constructors.map((c, ci) => `
         <div class="te-ctor" data-ci="${ci}">
           <span class="te-head">ƒ</span>
@@ -355,8 +637,26 @@ function renderTypeEditor(error = '') {
         <div class="te-group"><small>pointwise (anyclass, product only)</small>${anyclass.map((c) => check('anyclass', c)).join('')}</div>
         <div class="te-group"><small>via Generically (product only)</small>${GENERICALLY_CLASSES.map((c) => check('via', c)).join('')}</div>
         ${d.keyword === 'newtype' ? `<div class="te-group"><small>newtype (from the wrapped type)</small>${NEWTYPE_CLASSES.map((c) => check('newtype', c)).join('')}</div>` : ''}
+        ${applied && !error && graphableDerivings(applied).length ? `<div class="te-group te-as-graphs"><small>edit as graphs</small>${graphableDerivings(applied).map(({ cls }) => `<button class="law-check" data-graph="${cls}" title="Write the derived ${cls} out as functions you can edit — ${CLASS_METHODS[cls].map((m) => METHOD_LABEL[m]).join(', ')} — starting as exactly what deriving does">${cls} ✎</button>`).join('')}</div>` : ''}
       </div>
-      ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => `<div class="te-derived"><b>${escapeAttr(def.label)}</b> <small>${escapeAttr(showQual(def.scheme.preds, def.scheme.type))}</small></div>`).join('')}</div>` : ''}
+      <div class="property"><label>INSTANCES WRITTEN BY HAND</label>
+        <p class="te-hint">For a structure the deriving rules can't give — a non-pointwise <code>(+)</code>, your own <code>show</code>, an order that isn't field by field. Each method is one of your custom functions.</p>
+        ${(d.instances || []).map((inst, ii) => {
+          const methods = CLASS_METHODS[inst.cls] || []
+          return `<div class="te-instance" data-ii="${ii}"><div><b>instance ${escapeAttr(inst.cls)} ${escapeAttr(instanceHeadText(d, inst.cls))}</b>${inst.derived ? ` <small>written out from deriving ${escapeAttr(inst.derived)}</small> <button class="law-check" data-te="derive-again" title="Back to deriving ${escapeAttr(inst.cls)} (its functions go too, unless you changed them or use them elsewhere)">↺ Derive again</button>` : ''} <button class="te-x" data-te="drop-instance" title="Remove this instance (its functions stay)">×</button></div>
+            ${methods.length ? methods.map((m) => {
+              const problem = applied ? methodProblem(applied, inst.cls, m, inst.methods?.[m]) : ''
+              return `<div class="te-method"><code>${escapeAttr(METHOD_LABEL[m])} =</code> <select data-method="${m}"><option value="">— pick a function —</option>${customFunctionChoices(inst.methods?.[m])}<option value="__new">+ new function</option></select>${nodes[inst.methods?.[m]] ? ` <button class="law-check" data-open="${inst.methods[m]}">Open body →</button>` : ''} <span class="law ${problem ? 'bad' : 'ok'}">${problem ? `✗ ${escapeAttr(problem)}` : '✓'}</span></div>`
+            }).join('') : '<small>No methods of its own — a claim, checked by the laws below.</small>'}
+          </div>`
+        }).join('')}
+        <select class="te-add-instance"><option value="">+ instance…</option>${instanceChoices(d).map((c) => `<option>${c}</option>`).join('')}</select>
+      </div>
+      ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => {
+        const custom = nodes[def.id]?.override
+        const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
+        return `<div class="te-derived"><b>${escapeAttr(def.label)}</b> <small>${escapeAttr(showQual(def.scheme.preds, def.scheme.type))}</small> ${custom ? `<i class="customized">✎ custom${changed ? '' : ' (unchanged)'}</i> <button class="law-check" data-edit="${def.id}">Edit body →</button> <button class="law-check" data-reset="${def.id}" title="Back to the derived definition">Reset</button>` : `<button class="law-check" data-edit="${def.id}" title="Redefine it with a body of your own (starting from ${escapeAttr(primLabel(def.label))})">Customize ✎</button>`}</div>`
+      }).join('')}</div>` : ''}
       ${applied ? lawReport(typeEditor.original) : ''}
     </div>`
   const update = (mutate) => { mutate(d); renderTypeEditor(applyTypeDraft()) }
@@ -367,7 +667,39 @@ function renderTypeEditor(error = '') {
     d.name = e.target.value.trim()
     // a lone constructor named after the type follows its rename (the Haskell convention)
     if (d.constructors.length === 1 && d.constructors[0].name === old) d.constructors[0].name = d.name
+    // and so does a field that mentions the type itself (a recursive type)
+    const self = new RegExp(`\\b${old}\\b`, 'g')
+    if (/^[A-Z]\w*$/.test(d.name)) d.constructors.forEach((c) => c.fields.forEach((fl) => { fl.type = fl.type.replace(self, d.name) }))
   })
+  $('.te-params').onchange = (e) => update(() => { d.params = e.target.value.trim().split(/[\s,]+/).filter(Boolean) })
+  typePanel.querySelectorAll('.te-instance').forEach((row) => {
+    const inst = d.instances[Number(row.dataset.ii)]
+    row.querySelector('[data-te="drop-instance"]').onclick = () => update(() => { d.instances.splice(Number(row.dataset.ii), 1) })
+    row.querySelector('[data-te="derive-again"]')?.addEventListener('click', () => deriveAgain(Number(row.dataset.ii)))
+    row.querySelectorAll('select[data-method]').forEach((sel) => {
+      sel.onchange = () => update(() => {
+        const m = sel.dataset.method
+        inst.methods = { ...inst.methods, [m]: sel.value === '__new' ? createMethodFunction(m, d.name) : sel.value || undefined }
+        renderFunctionLibrary()
+      })
+    })
+  })
+  $('.te-add-instance').onchange = (e) => {
+    const cls = e.target.value
+    if (!cls) return
+    d.instances = [...(d.instances || []), { cls, methods: {} }]
+    const error = applyTypeDraft()
+    if (error) { d.instances.pop(); return renderTypeEditor(error) }
+    // Valid: give each method a fresh function to define.
+    const inst = d.instances[d.instances.length - 1]
+    for (const m of CLASS_METHODS[cls]) inst.methods[m] = createMethodFunction(m, d.name)
+    renderTypeEditor(applyTypeDraft())
+    if (CLASS_METHODS[cls].length) showToast(`instance ${cls} ${d.name}: define ${CLASS_METHODS[cls].map((m) => METHOD_LABEL[m]).join(', ')} in the new function${CLASS_METHODS[cls].length > 1 ? 's' : ''} (Open body →)`)
+  }
+  typePanel.querySelectorAll('[data-open]').forEach((b) => { b.onclick = () => { const id = b.dataset.open; closeTypeEditor(); state.activeFunction = null; enterFunction(id) } })
+  typePanel.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => editDerived(b.dataset.edit) })
+  typePanel.querySelectorAll('[data-graph]').forEach((b) => { b.onclick = () => writeDerivedOut(b.dataset.graph) })
+  typePanel.querySelectorAll('[data-reset]').forEach((b) => { b.onclick = () => { resetDerivedFunction(b.dataset.reset); renderTypeEditor() } })
   typePanel.querySelectorAll('.te-ctor').forEach((row) => {
     const c = d.constructors[Number(row.dataset.ci)]
     row.querySelector('.te-cname').onchange = (e) => update(() => { c.name = e.target.value.trim() })
@@ -378,7 +710,7 @@ function renderTypeEditor(error = '') {
       const record = c.fields.some((f) => f.name)
       let k = c.fields.length + 1
       while (c.fields.some((f) => f.name === `field${k}`)) k++
-      c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: 'Double' })
+      c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: d.params?.[0] || 'Double' })
     })
     row.querySelector('[data-te="drop-ctor"]')?.addEventListener('click', () => update(() => { d.constructors.splice(Number(row.dataset.ci), 1) }))
   })
@@ -399,9 +731,13 @@ function renderTypeEditor(error = '') {
     const name = typeEditor.original
     if (!name) return closeTypeEditor()
     const prefix = `type:${name}:`
-    const calls = [nodes, ...Object.values(functionBodies)].flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(prefix)).length
-    const usedIn = Object.values(types).filter((t) => t.name !== name && JSON.stringify(t.constructors).includes(`"name":"${name}"`)).map((t) => t.name)
+    // (Its own customized functions go with it, so calls inside them don't count.)
+    const own = Object.values(nodes).filter((n) => n.override === name).map((n) => n.id)
+    const graphsOutside = [nodes, ...Object.entries(functionBodies).filter(([id]) => !own.includes(id)).map(([, g]) => g)]
+    const calls = graphsOutside.flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(prefix) || n.sourceFunctionId?.startsWith(`prim:${prefix}`)).length
+    const usedIn = [...Object.values(types).filter((t) => t.name !== name && JSON.stringify(t.constructors).includes(`"name":"${name}"`)).map((t) => t.name), ...classesUsingType(classes, name).map((c) => `class ${c}`)]
     if (calls || usedIn.length) return renderTypeEditor(`${name} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${usedIn.length ? ` in ${usedIn.join(', ')}` : ''}`)
+    own.forEach((id) => { delete nodes[id]; delete functionBodies[id] })
     const next = { ...types }
     delete next[name]
     applyTypes(next)
@@ -409,6 +745,241 @@ function renderTypeEditor(error = '') {
     renderFunctionLibrary(); updateInspector(); draw()
     showToast(`Deleted type ${name} (undo to bring it back)`)
   }
+}
+
+// --- Class editor ---------------------------------------------------------------
+// A class is its methods (name :: signature, mentioning the class variable,
+// optionally with a default function) and its instances (a type
+// constructor, a context, and a custom function per method). Shown in the
+// same panel as the type editor; every edit is checked by classDecls.js and
+// applied at once (undoable). Methods are tracked by key so renaming one
+// renames its calls.
+let classEditor = null // { original, draft, appliedDraft }
+let classKeys = 0
+function keyedClass(draft) {
+  for (const m of draft.methods) m.key ??= ++classKeys
+  return draft
+}
+function classEditorFor(name) {
+  const draft = keyedClass(structuredClone(classes[name]))
+  return { original: name, draft, appliedDraft: structuredClone(draft) }
+}
+function openClassEditor(name = null) {
+  stopGame()
+  typeEditor = null
+  if (name) classEditor = classEditorFor(name)
+  else {
+    let k = 1
+    while (classes[`NewClass${k === 1 ? '' : k}`]) k++
+    let method = 'newMethod'
+    for (let j = 2; functionNameProblem(method); j++) method = `newMethod${j}`
+    classEditor = { original: null, draft: keyedClass({ name: `NewClass${k === 1 ? '' : k}`, param: 'a', supers: [], methods: [{ name: method, sig: 'a -> String', default: null }], instances: [] }), appliedDraft: null }
+    applyClassDraft()
+  }
+  typePanel.hidden = false
+  renderClassEditor()
+}
+// Check the draft; apply it if valid — renaming calls to renamed methods and
+// references to a renamed class. Returns the error message, or ''.
+function applyClassDraft() {
+  const d = keyedClass(classEditor.draft)
+  const old = classEditor.original
+  try {
+    let next = { ...classes }
+    if (old) delete next[old]
+    if (old && old !== d.name) {
+      // Other classes' superclasses and instance contexts follow the rename.
+      next = Object.fromEntries(Object.entries(next).map(([k, c]) => [k, { ...c, supers: c.supers.map((s) => (s === old ? d.name : s)), instances: c.instances.map((i) => ({ ...i, context: (i.context || []).map((q) => (q.cls === old ? { ...q, cls: d.name } : q)) })) }]))
+    }
+    if (next[d.name]) throw new DeclError(`There is already a class named ${d.name}`)
+    next[d.name] = structuredClone(d)
+    next[d.name].methods.forEach((m) => { delete m.key })
+    declareClasses(next, types, classLabelsTaken())
+    if (old && classEditor.appliedDraft) renameMethodCalls(classEditor.appliedDraft, d)
+    applyTypes(types, next)
+    classEditor.original = d.name
+    classEditor.appliedDraft = structuredClone(d)
+    renderFunctionLibrary(); updateInspector(); draw()
+    return ''
+  } catch (e) {
+    if (!(e instanceof DeclError)) throw e
+    return e.message
+  }
+}
+// Calls to a method follow its renames (and its class's).
+function renameMethodCalls(before, after) {
+  const renames = new Map()
+  for (const m of before.methods) {
+    const now = after.methods.find((x) => x.key === m.key)
+    if (now) renames.set(`class:${before.name}:${m.name}`, { id: `class:${after.name}:${now.name}`, label: now.name })
+  }
+  for (const graph of [nodes, ...Object.values(functionBodies)]) {
+    for (const n of Object.values(graph)) {
+      const r = n.type === 'function' && renames.get(n.sourceFunctionId)
+      if (r) { n.sourceFunctionId = r.id; n.label = r.label }
+    }
+  }
+}
+// The instance head as Haskell writes it: `Double`, `(Maybe a)`, `[]`.
+function classInstanceHead(c, inst) {
+  const arity = (types[inst.head] ? (types[inst.head].params || []).length : (constructorArity[inst.head] || 0)) - (resolvedClasses.find((r) => r.name === c.name)?.arity || 0)
+  const vars = ['a', 'b', 'c', 'd'].slice(0, Math.max(0, arity))
+  if (inst.head === 'List' && vars.length === 1) return '[a]'
+  return vars.length ? `(${[showHead(inst.head), ...vars].join(' ')})` : showHead(inst.head)
+}
+const methodArity = (sig) => {
+  // arrows at the top level of the signature (outside parentheses), after any context
+  const t = sig.includes('=>') ? sig.slice(sig.indexOf('=>') + 2) : sig
+  let depth = 0
+  let n = 0
+  for (let i = 0; i < t.length; i++) {
+    if ('([{'.includes(t[i])) depth++
+    else if (')]}'.includes(t[i])) depth--
+    else if (t[i] === '-' && t[i + 1] === '>' && depth === 0) n++
+  }
+  return n
+}
+const methodParams = (sig) => Array.from({ length: methodArity(sig) }, (_, i) => ['x', 'y', 'z', 'w'][i] || `x${i + 1}`)
+
+function renderClassEditor(error = '') {
+  if (!classEditor) return
+  const d = classEditor.draft
+  const applied = classEditor.original && resolvedClasses.find((c) => c.name === classEditor.original)
+  const fnChoices = (selected, none) => `<option value="">${none}</option>${customFunctionChoices(selected)}<option value="__new">+ new function</option>`
+  const takenHeads = new Set(d.instances.map((i) => i.head))
+  const heads = [...Object.keys(types), ...HEAD_NAMES.filter((h) => !types[h])].filter((h) => !takenHeads.has(h))
+  typePanel.innerHTML = `
+    <div class="play-bar type-bar"><b>CLASS</b>
+      <input class="ce-supers" value="${escapeAttr(d.supers.join(', '))}" placeholder="superclasses" title="Superclasses, comma-separated (Show, Eq, …): every instance needs them" spellcheck="false" /><i class="ce-arrow">⇒</i>
+      <input class="te-name ce-name" value="${escapeAttr(d.name)}" title="Class name" spellcheck="false" />
+      <input class="te-params ce-param" value="${escapeAttr(d.param)}" title="The class variable — the type an instance is for" spellcheck="false" />
+      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
+      <button class="tool-button" data-ce="delete">Delete class</button>
+      <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>
+    </div>
+    <div class="type-body">
+      <p class="te-hint">A class is a set of methods every instance implements — like <code>class Show a => Pretty a where pretty :: a -> String</code>. A method's type mentions <code>${escapeAttr(d.param)}</code>; use it applied (<code>${escapeAttr(d.param)} b</code>) for a class of type constructors. Which instance a call means is worked out from the types, so a method needn't take an argument at all (<code>defaultValue :: ${escapeAttr(d.param)}</code>).</p>
+      <div class="property"><label>METHODS</label>
+        ${d.methods.map((m, mi) => `<div class="te-method ce-method" data-mi="${mi}"><input class="te-fname ce-mname" value="${escapeAttr(m.name)}" spellcheck="false" /><i>::</i><input class="te-ftype ce-sig" value="${escapeAttr(m.sig)}" spellcheck="false" /><small>default</small><select class="ce-default">${fnChoices(m.default, 'none')}</select>${nodes[m.default] ? ` <button class="law-check" data-open="${m.default}">Open body →</button>` : ''}${d.methods.length > 1 ? '<button class="te-x" data-ce="drop-method" title="Remove method">−</button>' : ''}${applied ? ` <small class="ce-sigshow">${escapeAttr(classDefs[`class:${d.name}:${m.name}`] ? showQual(classDefs[`class:${d.name}:${m.name}`].scheme.preds, classDefs[`class:${d.name}:${m.name}`].scheme.type) : '')}</small>` : ''}</div>`).join('')}
+        <button class="use-again te-add-ctor" data-ce="add-method">+ method</button>
+      </div>
+      <div class="property"><label>INSTANCES</label>
+        ${d.instances.map((inst, ii) => {
+          const rInst = applied?.instances.find((r) => r.headName === inst.head)
+          return `<div class="te-instance" data-ii="${ii}"><div><b>instance</b> <input class="ce-context" value="${escapeAttr((inst.context || []).map((q) => `${q.cls} ${q.var}`).join(', '))}" placeholder="context" title="What the instance needs of its type variables, e.g. ${escapeAttr(d.name)} a" spellcheck="false" /> ⇒ <b>${escapeAttr(d.name)} ${escapeAttr(classInstanceHead(d, inst))}</b> <button class="te-x" data-ce="drop-instance" title="Remove this instance (its functions stay)">×</button></div>
+            ${d.methods.map((m) => {
+              const fnId = inst.methods?.[m.name]
+              const rm = applied?.methods.find((x) => x.name === m.name)
+              let status = ''
+              if (!fnId) status = m.default && nodes[m.default] ? '<span class="law ok">uses the default</span>' : '<span class="law bad">✗ pick a function</span>'
+              else if (rInst && rm) {
+                const have = implementationScheme(fnId)
+                const problem = typeof have === 'string' ? have : instanceMethodProblem(have, applied, rm, rInst)
+                status = `<span class="law ${problem ? 'bad' : 'ok'}">${problem ? `✗ ${escapeAttr(problem)}` : '✓'}</span>`
+              }
+              return `<div class="te-method"><code>${escapeAttr(m.name)} =</code> <select data-method="${escapeAttr(m.name)}">${fnChoices(fnId, m.default ? '— the default —' : '— pick a function —')}</select>${nodes[fnId] ? ` <button class="law-check" data-open="${fnId}">Open body →</button>` : ''} ${status}</div>`
+            }).join('')}
+          </div>`
+        }).join('')}
+        <select class="te-add-instance ce-add-instance"><option value="">+ instance for…</option>${heads.map((h) => `<option value="${escapeAttr(h)}">${escapeAttr(showHead(h))}</option>`).join('')}</select>
+      </div>
+    </div>`
+  const update = (mutate) => { mutate(d); renderClassEditor(applyClassDraft()) }
+  const $ = (sel) => typePanel.querySelector(sel)
+  $('.ce-name').onchange = (e) => update(() => { d.name = e.target.value.trim() })
+  $('.ce-param').onchange = (e) => update(() => {
+    const old = d.param
+    d.param = e.target.value.trim()
+    const word = new RegExp(`\\b${old}\\b`, 'g')
+    if (/^[a-z]\w*$/.test(d.param)) d.methods.forEach((m) => { m.sig = m.sig.replace(word, d.param) })
+  })
+  $('.ce-supers').onchange = (e) => update(() => { d.supers = e.target.value.split(/[\s,]+/).filter(Boolean) })
+  typePanel.querySelectorAll('.ce-method').forEach((row) => {
+    const m = d.methods[Number(row.dataset.mi)]
+    row.querySelector('.ce-mname').onchange = (e) => update(() => { m.name = e.target.value.trim() })
+    row.querySelector('.ce-sig').onchange = (e) => update(() => { m.sig = e.target.value.trim() })
+    row.querySelector('.ce-default').onchange = (e) => update(() => { m.default = e.target.value === '__new' ? createMethodFunction(m.name, 'Default', methodParams(m.sig)) : e.target.value || null; renderFunctionLibrary() })
+    row.querySelector('[data-ce="drop-method"]')?.addEventListener('click', () => update(() => { d.methods.splice(Number(row.dataset.mi), 1); d.instances.forEach((i) => { delete i.methods?.[m.name] }) }))
+  })
+  $('[data-ce="add-method"]').onclick = () => update(() => {
+    let name = 'newMethod'
+    for (let k = 2; functionNameProblem(name) || d.methods.some((x) => x.name === name); k++) name = `newMethod${k}`
+    d.methods.push({ name, sig: `${d.param} -> String`, default: null })
+  })
+  typePanel.querySelectorAll('.te-instance').forEach((row) => {
+    const inst = d.instances[Number(row.dataset.ii)]
+    row.querySelector('[data-ce="drop-instance"]').onclick = () => update(() => { d.instances.splice(Number(row.dataset.ii), 1) })
+    row.querySelector('.ce-context').onchange = (e) => update(() => {
+      inst.context = e.target.value.split(',').map((s) => s.trim()).filter(Boolean).map((s) => { const [cls, v] = s.split(/\s+/); return { cls, var: v } })
+    })
+    row.querySelectorAll('select[data-method]').forEach((sel) => {
+      sel.onchange = () => update(() => {
+        const m = d.methods.find((x) => x.name === sel.dataset.method)
+        inst.methods = { ...inst.methods, [m.name]: sel.value === '__new' ? createMethodFunction(m.name, inst.head === 'List' ? 'List' : inst.head.replace(/\W/g, ''), methodParams(m.sig)) : sel.value || undefined }
+        renderFunctionLibrary()
+      })
+    })
+  })
+  $('.ce-add-instance').onchange = (e) => {
+    const head = e.target.value
+    if (!head) return
+    // The context asks the class of each of the head's type variables (`Pretty a => Pretty (Maybe a)`); edit it if that's too much.
+    const arity = (types[head] ? (types[head].params || []).length : (constructorArity[head] || 0)) - (applied?.arity || 0)
+    const context = ['a', 'b', 'c', 'd'].slice(0, Math.max(0, arity)).map((v) => ({ cls: d.name, var: v }))
+    d.instances.push({ head, context, methods: {} })
+    const error = applyClassDraft()
+    if (error) { d.instances.pop(); return renderClassEditor(error) }
+    // Valid: a fresh function for every method without a default.
+    const inst = d.instances[d.instances.length - 1]
+    const fresh = d.methods.filter((m) => !m.default)
+    for (const m of fresh) inst.methods[m.name] = createMethodFunction(m.name, head === 'List' ? 'List' : head.replace(/\W/g, ''), methodParams(m.sig))
+    renderClassEditor(applyClassDraft())
+    if (fresh.length) showToast(`instance ${d.name} ${showHead(head)}: define ${fresh.map((m) => m.name).join(', ')} in the new function${fresh.length > 1 ? 's' : ''} (Open body →)`)
+  }
+  typePanel.querySelectorAll('[data-open]').forEach((b) => { b.onclick = () => { const id = b.dataset.open; closeTypeEditor(); state.activeFunction = null; enterFunction(id) } })
+  $('[data-ce="close"]').onclick = closeTypeEditor
+  $('[data-ce="delete"]').onclick = () => {
+    const name = classEditor.original
+    if (!name) return closeTypeEditor()
+    const calls = [nodes, ...Object.values(functionBodies)].flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(`class:${name}:`)).length
+    const users = Object.values(classes).filter((c) => c.name !== name && (c.supers.includes(name) || c.methods.some((m) => new RegExp(`\\b${name}\\b`).test(m.sig)) || c.instances.some((i) => (i.context || []).some((q) => q.cls === name)))).map((c) => c.name)
+    if (calls || users.length) return renderClassEditor(`${name} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${users.length ? ` by ${users.join(', ')}` : ''}`)
+    const next = { ...classes }
+    delete next[name]
+    applyTypes(types, next)
+    closeTypeEditor()
+    renderFunctionLibrary(); updateInspector(); draw()
+    showToast(`Deleted class ${name} (undo to bring it back)`)
+  }
+}
+
+const classLibrary = document.querySelector('#class-library')
+function renderClassLibrary() {
+  const byClass = Object.groupBy(Object.values(classDefs), (def) => def.method.cls)
+  classLibrary.innerHTML = Object.values(classes).map((c) => `
+    <div class="type-entry">
+      <button class="library-item type-item class-item" data-class-name="${escapeAttr(c.name)}" title="Edit class">
+        <span class="lib-icon class-icon">C</span>
+        <span><b>${escapeAttr(c.supers.length ? `${c.supers.join(', ')} ⇒ ` : '')}${escapeAttr(c.name)} ${escapeAttr(c.param)}</b><small>${c.instances.length ? `instances: ${c.instances.map((i) => showHead(i.head)).join(', ')}` : 'no instances yet'}</small></span>
+      </button>
+      ${(byClass[c.name] || []).map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}</b><small>${showQual(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}
+    </div>`).join('')
+  classLibrary.querySelectorAll('.class-item').forEach((item) => { item.onclick = () => openClassEditor(item.dataset.className) })
+  classLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+}
+
+// `T a b`-style head of an instance (a constructor class is for `T` without its last parameter).
+function instanceHeadText(d, cls) {
+  const params = CONSTRUCTOR_CLASSES.includes(cls) ? (d.params || []).slice(0, -1) : d.params || []
+  return params.length ? `(${[d.name, ...params].join(' ')})` : d.name
+}
+// Classes a draft could still get a hand-written instance of.
+function instanceChoices(d) {
+  const taken = new Set([...Object.values(d.deriving).flat(), ...(d.instances || []).map((i) => i.cls)])
+  return Object.keys(CLASS_METHODS).filter((c) => !taken.has(c) && (!CONSTRUCTOR_CLASSES.includes(c) || (d.params || []).length))
+}
+function customFunctionChoices(selected) {
+  return Object.values(nodes).filter((n) => n.custom && !isHiddenDefinition(n)).map((n) => `<option value="${n.id}" ${n.id === selected ? 'selected' : ''}>${escapeAttr(n.label)}</option>`).join('')
 }
 
 function addFunctionCall(sourceId) {
@@ -456,7 +1027,8 @@ function createCustomFunction() {
     event.preventDefault()
     const label = new FormData(form).get('label').toString().trim()
     const params = new FormData(form).get('params').toString().split(',').map(param => param.trim()).filter(Boolean)
-    if (Object.values(nodes).some(node => node.label === label)) return window.alert(`이미 존재하는 함수 이름입니다: ${label}`)
+    const nameProblem = functionNameProblem(label)
+    if (nameProblem) return window.alert(nameProblem)
     if (new Set(params).size !== params.length) return window.alert('매개변수 이름은 중복될 수 없습니다.')
     const id = `custom-${Date.now()}`
     nodes[id] = { id, type: 'function', ...freePosition(nodes, 120 + params.length * SLOT_STRIDE), label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
@@ -738,7 +1310,7 @@ function useAgain(n) {
 // A node plugged into a slot normally lives inside that slot's chip. It can
 // be *unfolded*: drawn on the canvas as well, with a link into its slot, so
 // its own slots can be seen and edited. Purely a view — it stays plugged in.
-function isVisible(n) { return !n.lambda && (!n.mountedTo || n.unfolded) } // a λ's (lifted) definition is never drawn — its call node is the λ
+function isVisible(n) { return !isHiddenDefinition(n) && (!n.mountedTo || n.unfolded) } // a λ's (lifted) definition is never drawn — its call node is the λ — nor a customized derived function (it's listed under its type)
 function slotHost(n) {
   const [hostId, index] = String(n.mountedTo || '').split(':')
   const host = activeNodes()[hostId]
@@ -776,26 +1348,41 @@ const TREE_GAP = 70
 function nodeWidth(n) { return n.type === 'function' ? functionBlockWidth(n) : chipWidth(n) }
 function rightEdge(n) { return n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n) }
 function setRightEdge(n, right) { n.x = n.type === 'function' ? right - (functionBlockRight(n) - n.x) : right - chipHalfWidth(n) }
-function unfoldedKids(n) {
-  const graph = activeNodes()
+function unfoldedKids(n, graph = activeNodes()) {
   return (n.mounted || []).map((id) => graph[id]).filter((k) => k && k.unfolded)
 }
-function treeHeight(n) {
-  const kids = unfoldedKids(n)
-  return kids.length ? Math.max(TREE_ROW, kids.reduce((sum, k) => sum + treeHeight(k), 0)) : TREE_ROW
+function treeHeight(n, graph = activeNodes()) {
+  const kids = unfoldedKids(n, graph)
+  return kids.length ? Math.max(TREE_ROW, kids.reduce((sum, k) => sum + treeHeight(k, graph), 0)) : TREE_ROW
 }
 // Keep `root` where it is; place its unfolded arguments in a column to its
 // left, each subtree stacked in its own band, recursively.
-function layoutTree(root) {
+function layoutTree(root, graph = activeNodes()) {
   const place = (n, right, top) => {
-    const h = treeHeight(n)
+    const h = treeHeight(n, graph)
     setRightEdge(n, right)
     n.y = top + h / 2
     const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
     let y = top
-    unfoldedKids(n).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k) })
+    unfoldedKids(n, graph).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k, graph) })
   }
-  place(root, rightEdge(root), root.y - treeHeight(root) / 2)
+  place(root, rightEdge(root), root.y - treeHeight(root, graph) / 2)
+}
+// Lay a whole function body out as its expression tree: Output on the right,
+// the tree feeding it to its left (unfolded arguments further left), and
+// anything outside the tree (an unused parameter) below.
+function layoutBody(graph) {
+  const root = graph[graph.output?.source]
+  if (!root) return
+  graph.output.x = 0; graph.output.y = 0
+  setRightEdge(root, -chipHalfWidth(graph.output) - TREE_GAP * 2)
+  root.y = 0
+  layoutTree(root, graph)
+  const inTree = new Set()
+  const walk = (n) => { inTree.add(n.id); unfoldedKids(n, graph).forEach(walk) }
+  walk(root)
+  let y = treeHeight(root, graph) / 2 + TREE_ROW
+  for (const n of Object.values(graph)) if (!inTree.has(n.id) && n.type !== 'output' && !n.mountedTo) { setRightEdge(n, rightEdge(root)); n.y = y; y += TREE_ROW }
 }
 // A solid link from whatever feeds a function body's Output into it.
 function drawOutputLink() {
@@ -824,6 +1411,8 @@ function drawReferenceLinks() {
   ctx.restore()
 }
 function draw() {
+  elaborationCache = null // something may have changed
+  projectPassCache = null
   labelNamer = createNamer()
   const pass = typePass() // shared by every node label and port badge below, so nodes/ports that truly share a type variable display the same letter
   const w = canvas.clientWidth, h = canvas.clientHeight
@@ -860,7 +1449,7 @@ function draw() {
 // holes in it.
 function drawFunctionBlock(node, pass, selected) {
   const rect = functionBlockScreenRect(node), p = point(node)
-  const broken = callProblem(node)
+  const broken = callProblem(node) || ambiguityProblem(node, pass)
   ctx.save()
   ctx.shadowColor = selected ? `${ACCENT}40` : '#211d3414'; ctx.shadowBlur = 0; ctx.shadowOffsetY = selected ? 4 : 3
   roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (FN_H / 2) * state.zoom)
@@ -1201,6 +1790,8 @@ function deleteBlocker(n) {
   if (n.custom && nodes[n.id] === n) {
     const callers = Object.values(functionBodies).flatMap((body) => Object.values(body)).filter((m) => m.sourceFunctionId === n.id).length
     if (callers) return `${n.label} is still called ${callers} time${callers > 1 ? 's' : ''} — delete those calls first`
+    const uses = classUsesOf(classes, n.id)
+    if (uses.length) return `${n.label} is ${uses.join(', ')} — pick another function there first`
   }
   return null
 }
@@ -1305,18 +1896,45 @@ function deleteNode(id) {
   state.selected = state.activeFunction ? 'output' : 'add'
   renderFunctionLibrary(); updateInspector(); draw()
 }
+// An ambiguous node says why (GHC's message, in short) and what fixes it.
+function ambiguityRow(n) {
+  const why = ambiguityProblem(n, typePass())
+  return why ? `<div class="property broken-call"><label>AMBIGUOUS TYPE</label><div class="connection-tag">${escapeAttr(why)}</div></div>` : ''
+}
+// A custom function's own definition can be renamed (calls refer to it by id, and follow).
+function functionNameRow(n) {
+  if (!(nodes[n.id] === n && n.custom && !isHiddenDefinition(n))) return ''
+  return `<div class="property"><label>NAME</label><input class="value-input" id="function-rename" value="${escapeAttr(n.label)}" title="Rename this function — every call follows" spellcheck="false" /></div>`
+}
+// A call to (or the definition of) a customized derived function says so, with the way back.
+function customizedRow(n) {
+  const id = n.sourceFunctionId || n.id
+  const def = nodes[id]
+  if (!def?.override) return ''
+  return `<div class="property"><label>CUSTOMIZED</label><div class="connection-tag">Your own definition of ${escapeAttr(def.label)}, derived from type ${escapeAttr(def.override)} (its body can use ${escapeAttr(primLabel(def.label))})</div><button class="law-check" id="reset-derived" data-id="${id}">Reset to the derived definition</button></div>`
+}
 function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
   inspector.innerHTML = n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? definitionBlock(state.activeFunction) : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE SIGNATURE</label><code>${functionSignature(n)}</code></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
   const entryToggle = document.querySelector('#entry-toggle')
   if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
+  const fnRename = document.querySelector('#function-rename')
+  if (fnRename) fnRename.onchange = () => {
+    const label = fnRename.value.trim()
+    const problem = label === n.label ? null : functionNameProblem(label, n.id)
+    if (problem) showToast(problem)
+    else if (label !== n.label) { renameFunction({ nodes, functionBodies }, n.id, label); showToast(`Renamed to ${label} — every call follows`) }
+    renderFunctionLibrary(); updateInspector(); draw()
+  }
+  const resetCustom = document.querySelector('#reset-derived')
+  if (resetCustom) resetCustom.onclick = () => resetDerivedFunction(resetCustom.dataset.id)
   document.querySelectorAll('.param-rename').forEach((input) => {
     input.onchange = () => {
       if (!renameParameter({ nodes, functionBodies }, n.id, Number(input.dataset.index), input.value.trim())) showToast(`"${input.value}" can't be a parameter name here (lowercase identifier, not already used)`)
@@ -1362,6 +1980,8 @@ function executeFunction(fn) {
   const entry = typePass(graph).perNode.get(fn.id)
   const bad = entry?.invalidSlots?.[0]
   if (bad !== undefined) return showToast(`"${fn.params[bad]}" doesn't fit ${paramDisplayName(fn, bad)} :: ${expectedParamType(fn, bad, graph)}`)
+  const ambiguous = runBlocker(graph, fn.id)
+  if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
   let result
   try {
     result = evaluator.run(graph, fn.id)
@@ -1463,10 +2083,25 @@ function finishConnection(dragged) {
   }
   const targetNode = activeNodes()[target.targetId]
   if (!targetNode) return false
+  const before = ambiguityKeys()
+  const previousText = targetNode.params[target.index]
   targetNode.params[target.index] = nodeDisplayText(dragged)
   targetNode.mounted[target.index] = dragged.id
   dragged.mountedTo = `${targetNode.id}:${target.index}`
   dragged.connected = true
+  // GHC would reject the program this edge makes if it leaves a constraint nothing can decide: so does the editor.
+  const fresh = [...ambiguityKeys()].filter((k) => !before.has(k))
+  if (fresh.length) {
+    const pass = typePass()
+    const why = ambiguityProblem(targetNode, pass) || ambiguityProblem(dragged, pass) || ambiguityProblem(nodes[state.activeFunction] || targetNode, pass) || 'it would leave a type nothing can decide'
+    targetNode.params[target.index] = previousText
+    targetNode.mounted[target.index] = null
+    dragged.mountedTo = null
+    dragged.connected = false
+    projectPassCache = null
+    showToast(`Not connected — ${why}`)
+    return false
+  }
   if (dragged.type === 'function') dragged.composedInto = targetNode.id
   state.selected = targetNode.id
   return true
@@ -1601,6 +2236,8 @@ document.querySelector('#back-graph').onclick = () => {
 // Plays the entry function (always in `main`), falling back to whichever
 // function is selected when no entry has been set.
 function runEntry() {
+  const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
+  if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
   if (entryId && nodes[entryId] && startGameIfProgram(entryId)) return
   if (entryId && nodes[entryId]) {
     if (state.activeFunction) { state.activeFunction = null; renderFunctionLibrary(); fitToView() }
@@ -1810,7 +2447,7 @@ window.addEventListener('keydown', (event) => {
 // builtins (the template can't know where the builtins sit).
 function layoutCustomDefinitions() {
   const builtins = Object.values(nodes).filter((n) => n.readonly && isFunction(n))
-  const customs = Object.values(nodes).filter((n) => n.custom && !n.lambda)
+  const customs = Object.values(nodes).filter((n) => n.custom && !isHiddenDefinition(n))
   if (!customs.length) return
   const left = Math.max(...builtins.map(functionBlockRight)) + 220
   const top = Math.min(...builtins.map((n) => n.y))
@@ -1836,10 +2473,12 @@ document.querySelector('#template').onchange = (event) => {
 // Download the entry point's game as one HTML file that runs without the
 // editor: the player modules plus every definition, body and type it needs.
 document.querySelector('#export-game').onclick = () => {
+  const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
+  if (ambiguous) return showToast(`Can't export — ${ambiguous}`)
   const info = entryId && nodes[entryId] ? programInfo(entryId) : null
   if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
   const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
-  const data = { title, definitions: { ...preludeDefs, ...derivedDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok }
+  const data = { title, definitions: { ...preludeDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
   const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
   const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
   link.click()
@@ -1857,7 +2496,7 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200)
 }
 // --- Project snapshots, autosave, undo/redo ---------------------------------
-function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, entry: entryId, outputId }) }
+function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, entry: entryId, outputId }) }
 // Replaces the live project with `project` (already parsed + merged) in place
 // — `nodes`/`functionBodies` are shared with the evaluator, so they're
 // refilled rather than reassigned.
@@ -1866,8 +2505,9 @@ function loadProject(project) {
   Object.assign(nodes, project.nodes)
   Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
   Object.assign(functionBodies, project.functionBodies)
-  applyTypes(project.types || {})
-  if (typeEditor) { if (types[typeEditor.original]) { typeEditor.draft = declToDraft(types[typeEditor.original]); renderTypeEditor() } else closeTypeEditor() }
+  applyTypes(project.types || {}, project.classes || {})
+  if (typeEditor) { if (types[typeEditor.original]) { typeEditor = editorFor(typeEditor.original); renderTypeEditor() } else closeTypeEditor() }
+  if (classEditor) { if (classes[classEditor.original]) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }
   entryId = project.entry
   outputId = project.outputId
   if (state.activeFunction && !functionBodies[state.activeFunction]) state.activeFunction = null
@@ -2009,6 +2649,7 @@ new ResizeObserver(resize).observe(canvas)
 window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
 document.querySelector('.add-node').addEventListener('click', createCustomFunction)
 document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
+document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
 document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
   if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
   if (item.dataset.type === 'lambda') return createLambda()

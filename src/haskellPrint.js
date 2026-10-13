@@ -9,7 +9,7 @@
 //   - a value used more than once (a reference node) is shared with `where`
 //     — the let of the lambda calculus — unless it is a parameter;
 //   - the `[ , , ]` node prints as a list literal.
-const OPERATORS = { '(+)': '+', '(-)': '-', '(*)': '*', '(/)': '/', '(>=)': '>=', '(==)': '==', '(<>)': '<>', '(++)': '++', '(:)': ':', '(!?)': '!?', '(*^)': '*^', '(\\/)': '\\/', '(/\\)': '/\\' }
+const OPERATORS = { '(+)': '+', '(-)': '-', '(*)': '*', '(/)': '/', '(>=)': '>=', '(==)': '==', '(<>)': '<>', '(++)': '++', '(:)': ':', '(&&)': '&&', '(||)': '||', '(!?)': '!?', '(*^)': '*^', '(\\/)': '\\/', '(/\\)': '/\\' }
 const identifier = (s) => /^[a-z_][A-Za-z0-9_']*$/.test(s)
 
 /**
