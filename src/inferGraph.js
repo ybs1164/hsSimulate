@@ -32,10 +32,17 @@
 //   defaults t to Integer); otherwise it's an error, blamed on the nodes the
 //   constraint comes from, and the constraint is left out of the binding's
 //   type. Nothing ambiguous ever runs.
+// - Type annotations (see typeExpr.js): a body's parameter and Output nodes
+//   may carry Haskell type text — a partial type signature, segment by
+//   segment. After the body is inferred, each is unified with what the body
+//   made of that node; a mismatch, a class the pinned type lacks, or a named
+//   variable that the body specializes (signature variables are rigid) is
+//   reported on that node, and that annotation is left out.
 import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, unify, scheme } from './typeSystem.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { evidence, isUserClass, literalClass, pickDefault, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
+import { annotationType, typeText } from './typeExpr.js'
 
 const Int = tcon('Int')
 const Bool = tcon('Bool')
@@ -97,6 +104,62 @@ function settleLiterals(ctx, start) {
   }
 }
 
+/**
+ * Unify each annotated parameter/Output node of `graph` (a function body)
+ * with its annotation, all of them sharing one scope of named variables.
+ * The preds from `predsStart` on are the body's own — a pinned type must
+ * satisfy them. Returns `{ nodeId: problem }` for annotations that don't fit
+ * (and so weren't applied), and for named variables the body specializes.
+ */
+function annotate(ctx, graph, memo, predsStart) {
+  const problems = {}
+  const names = new Map()
+  const pinnedBy = new Map() // variable name -> the node whose annotation first mentions it
+  const show = (t) => typeText(t, createNamer(), '▸')
+  const what = (n) => (n.type === 'output' ? 'the result' : `‘${n.label}’`)
+  for (const n of Object.values(graph)) {
+    if ((n.type !== 'parameter' && n.type !== 'output') || !n.annotation) continue
+    const scoped = new Map(names)
+    let want
+    try {
+      want = annotationType(n.annotation, scoped)
+    } catch (e) {
+      problems[n.id] = e.message
+      continue
+    }
+    const have = valueTypeOfEntry(memo.get(n.id) ?? resolveNodeType(n.id, graph, ctx, memo))
+    let next
+    try {
+      next = unify(have, want, ctx.subst)
+    } catch {
+      problems[n.id] = `The body makes ${what(n)} ${show(applySubst(ctx.subst, have))}, not ${n.annotation}`
+      continue
+    }
+    const own = ctx.preds.slice(predsStart)
+    const missing = own.find((p) => satisfiable([p], ctx.subst) && !satisfiable([p], next))
+    if (missing) {
+      problems[n.id] = `${n.annotation} can't be ${what(n)}: the body needs ${missing.cls} of it, which ${show(applySubst(next, missing.type))} doesn't have`
+      continue
+    }
+    ctx.subst = next
+    for (const [name, v] of scoped) {
+      if (names.has(name)) continue
+      names.set(name, v)
+      pinnedBy.set(name, n.id)
+    }
+  }
+  // Signature variables are rigid: each must still be a variable of its own.
+  const seen = new Map()
+  for (const [name, v] of names) {
+    const t = applySubst(ctx.subst, v)
+    const at = pinnedBy.get(name)
+    if (t.kind !== 'var') problems[at] ??= `${name} must work for every type (it's a variable of the signature), but the body needs it to be ${show(t)}`
+    else if (seen.has(t.id)) problems[at] ??= `${seen.get(t.id)} and ${name} may be different types, but the body needs them to be the same`
+    else seen.set(t.id, name)
+  }
+  return problems
+}
+
 /** Record that `graph[id]`'s slot `index` holds an inline literal that doesn't fit the slot. */
 function markInvalid(ctx, graph, id, index) {
   if (!ctx.invalid.has(graph)) ctx.invalid.set(graph, new Map())
@@ -140,6 +203,8 @@ function inferCustomFunctionScheme(body, ctx, fnId) {
   const literalsStart = ctx.pendingLiterals.length
   const outputEntry = resolveNodeType('output', body, ctx, memo)
   settleLiterals(ctx, literalsStart)
+  const problems = annotate(ctx, body, memo, predsStart)
+  if (Object.keys(problems).length) ctx.annotationProblems[fnId] = problems
   const resultType = valueTypeOfEntry(outputEntry)
   // Resolve against everything unified so far *before* generalizing — a
   // param that got pinned to Int by usage (e.g. wired into isZero) must show
@@ -353,6 +418,7 @@ function resolveNodeType(id, graph, ctx, memo) {
           ctx.subst = unify(paramType, valueTypeOfEntry(argEntry), ctx.subst)
         } catch {
           // Invalid edge — connect-time gating should prevent this; skip defensively rather than blank the canvas.
+          ctx.broken.push({ graph, nodeId: id, index: i })
         }
         return
       }
@@ -381,11 +447,13 @@ function resolveNodeType(id, graph, ctx, memo) {
  * schemes reachable from it.
  */
 export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
-  const ctx = { subst: new Map(), customCache: new Map(), visiting: new Set(), nodesRegistry, functionBodiesRegistry, preds: [], invalid: new Map(), pendingLiterals: [], calls: [], elab: new Map(), origins: [], ambiguities: {} }
+  const ctx = { subst: new Map(), customCache: new Map(), visiting: new Set(), nodesRegistry, functionBodiesRegistry, preds: [], invalid: new Map(), pendingLiterals: [], calls: [], elab: new Map(), origins: [], ambiguities: {}, annotationProblems: {}, broken: [] }
   const memo = new Map()
   const perNode = new Map()
   const entries = Object.keys(activeGraph).map((id) => [id, resolveNodeType(id, activeGraph, ctx, memo)])
   settleLiterals(ctx, 0)
+  // A function body being looked at directly: its own signature annotations.
+  const annotationsHere = annotate(ctx, activeGraph, memo, 0)
   // Ambiguity of each top-level expression. In a function body the
   // parameters' types count as known (they're the function's own type).
   const resolveP = (p) => pred(p.cls, applySubst(ctx.subst, p.type))
@@ -442,5 +510,5 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
     // constructor class), so "mentions one of this node's variables" is the test.
     entry.preds = reducedPreds.filter((p) => [...ftv(p.type)].some((v) => ownVars.has(v)))
   })
-  return { perNode, subst: ctx.subst, preds: resolvedPreds, elaboration, schemes: ctx.customCache, ambiguities: { main: topAmbiguities, functions: ctx.ambiguities } }
+  return { perNode, subst: ctx.subst, preds: resolvedPreds, elaboration, schemes: ctx.customCache, ambiguities: { main: topAmbiguities, functions: ctx.ambiguities }, annotations: { here: annotationsHere, functions: ctx.annotationProblems }, brokenEdges: ctx.broken.filter((b) => b.graph === activeGraph).map(({ nodeId, index }) => ({ nodeId, index })) }
 }

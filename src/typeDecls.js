@@ -227,6 +227,19 @@ export function parseSignature(text, types = {}) {
   return { preds, type }
 }
 
+/**
+ * Parse a bare type (no context) against `known` (type name -> how many type
+ * arguments it takes). Every lowercase name is a type variable, kept by name
+ * (`tvar('a')`), and may stand for a constructor (`f a`).
+ */
+export function parseTypeText(text, known) {
+  const syntax = parser(tokenize(text)).wholeType()
+  const vars = new Set()
+  const walk = (t) => { if (t.var) vars.add(t.var); if (t.varApp) vars.add(t.varApp); (t.args || []).forEach(walk); if (t.list) walk(t.list); if (t.fun) t.fun.forEach(walk); if (t.tuple) t.tuple.forEach(walk) }
+  walk(syntax)
+  return resolveType(syntax, known, [...vars], { applyVars: true })
+}
+
 /** Parse a context `C a, D b` (parentheses optional): `[{ cls, var }]`. */
 export function parseContext(text) {
   const trimmed = text.trim()

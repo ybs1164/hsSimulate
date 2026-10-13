@@ -3,6 +3,7 @@
 ## 아키텍처 개요
 - `src/main.js`: 앱 화면, 그래프 상태, 캔버스 상호작용, 실행 로직.
 - `src/typeSystem.js`: 힌들리-밀너 타입 엔진.
+- `src/typeExpr.js`: 타입을 노드로 다루기(타입 생성자 = 타입 수준 함수, 함수 타입 = 커링된 꺽쇠 사슬 `A ▸ B ▸ C`, 구멍 `_`)와 본체 매개변수·Output의 타입 주석(부분 타입 시그니처) 해석.
 - `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블.
 - `src/classEnv.js`: 클래스 환경과 제약 해소 엔진(문맥 있는 인스턴스, entailment, context reduction, 디폴팅, 사용자 클래스의 증거 생성).
 - `src/numericClasses.js`: 숫자 타입클래스 계층과 인스턴스 선언.

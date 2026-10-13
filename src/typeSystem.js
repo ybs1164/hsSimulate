@@ -58,6 +58,10 @@ export function setUserTypeArities(arities) {
   userArity = { ...arities }
 }
 const arityOf = (name) => constructorArity[name] ?? userArity[name] ?? 0
+/** The declared type constructors' arities (name -> how many type arguments). */
+export function userTypeArities() {
+  return userArity
+}
 
 /** The pair type `(a, b)` — the categorical product. */
 export function ttuple(a, b) {

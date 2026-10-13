@@ -97,7 +97,7 @@ async function clickNode(nodeId, extra = {}) {
 // ---- UI actions ----
 const setField = (sel, value, event = 'change') => js(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event(${JSON.stringify(event)})) })()`)
 const editorStatus = () => js(`document.querySelector('.te-status').textContent`)
-async function declareRecordType(name, fields, stock = []) {
+async function declareRecordType(name, fields) {
   await js(`document.querySelector('.add-type').click()`); await sleep(250)
   await setField('.te-name', name); await sleep(150)
   for (const [i, [fname, ftype]] of fields.entries()) {
@@ -105,7 +105,6 @@ async function declareRecordType(name, fields, stock = []) {
     await setField(`.te-fname[data-fi="${i}"]`, fname); await sleep(100)
     await setField(`.te-ftype[data-fi="${i}"]`, ftype); await sleep(100)
   }
-  for (const cls of stock) { await js(`document.querySelector('.te-check input[data-group="stock"][value="${cls}"]').click()`); await sleep(120) }
   const status = await editorStatus()
   await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
   expect(status.includes('applied'), status)
@@ -168,14 +167,16 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   console.log('Building a game through the UI only:')
 
   await check('declare Model and Msg in the type editor', async () => {
-    await declareRecordType('Model', [['count', 'Double']], ['Eq', 'Show'])
+    await declareRecordType('Model', [['count', 'Double']])
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
     await setField('.te-name', 'Msg'); await sleep(150)
     await setField('.te-cname', 'Increment'); await sleep(150)
-    const sig = await js(`document.querySelector('.te-sig').textContent`)
+    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
     await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
-    expect(sig === 'Increment :: Msg', sig)
-    return sig
+    const p = await project()
+    expect(sig === 'Msg', sig)
+    expect(p.types.Model.deriving.some((c) => c.classes.includes('Show') && c.classes.includes('Eq')), 'Model should derive Eq and Show by itself')
+    return `Increment :: ${sig}`
   })
   await check('initial = Model 0', async () => {
     await createFunction('initial', []); await openBody('initial')
@@ -215,7 +216,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const pr = await add('prelude', 'program')
     for (const [i, f] of ['initial', 'view', 'handle', 'step'].entries()) await plug(await add('main', f), pr, i)
     await toOutput(pr); await back()
-    const sig = await js(`[...document.querySelectorAll('.function-library-item')].find((e) => e.querySelector('b').textContent === 'main').querySelector('small').textContent`)
+    const sig = await js(`[...document.querySelectorAll('.function-library-item')].find((e) => e.querySelector('b').textContent === 'main').querySelector('small .type-chain').title`)
     expect(sig === 'Program Model Msg', sig)
     return `main :: ${sig}`
   })
@@ -308,38 +309,11 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await setField('.te-name', 'Box'); await sleep(150)
     await setField('.te-params', 'a'); await sleep(150)
     await js(`document.querySelector('[data-te="add-field"]').click()`); await sleep(150)
-    const sig = await js(`document.querySelector('.te-sig').textContent`)
+    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
     const status = await editorStatus()
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
-    expect(sig === 'Box :: a → Box a' && status.includes('applied'), `${sig} / ${status}`)
+    expect(sig === 'a → Box a' && status.includes('applied'), `${sig} / ${status}`)
     return sig
-  })
-  await check('a hand-written instance gets a function per method, checked against the method type', async () => {
-    await openType('Msg')
-    await setField('.te-add-instance', 'Show'); await sleep(300)
-    const row = await js(`document.querySelector('.te-instance')?.textContent ?? ''`)
-    const fnId = await js(`document.querySelector('.te-method select').value`)
-    const p = await project()
-    await js(`document.querySelector('[data-te="drop-instance"]').click()`); await sleep(200)
-    await closeType()
-    expect(/instance Show Msg/.test(row) && /Output is not connected/.test(row) && p.nodes[fnId]?.label === 'showMsg', `${row} / ${fnId}`)
-    return 'instance Show Msg where show = showMsg'
-  })
-  await check('a derived instance is written out as graphs (deriving Eq → eqModel), and derived again', async () => {
-    await openType('Model')
-    await js(`document.querySelector('[data-graph="Eq"]').click()`); await sleep(500)
-    const row = await js(`document.querySelector('.te-instance')?.textContent ?? ''`)
-    const badLaws = await js(`[...document.querySelectorAll('.law.bad')].map((e) => e.textContent).join(' | ')`)
-    const p = await project()
-    const fn = Object.values(p.nodes).find((n) => n.label === 'eqModel')
-    const callees = fn ? Object.values(p.functionBodies[fn.id]).map((n) => n.sourceFunctionId).filter(Boolean) : []
-    await js(`document.querySelector('[data-te="derive-again"]').click()`); await sleep(500)
-    const after = await project()
-    await closeType()
-    expect(/instance Eq Model/.test(row) && /written out from deriving stock/.test(row) && !badLaws, `${row} / ${badLaws}`)
-    expect(callees.includes('type:Model:count') && callees.includes('eq') && p.types.Model.instances[0]?.methods.eq === fn.id, JSON.stringify(callees))
-    expect(!Object.values(after.nodes).some((n) => n.label === 'eqModel') && !after.types.Model.instances.length && after.types.Model.deriving.some((c) => c.classes.includes('Eq')), 'not derived again')
-    return 'eqModel x y = count x == count y'
   })
   await check('a user class: declare it, give Model an instance, and call its method — picked by type', async () => {
     await js(`document.querySelector('.add-class').click()`); await sleep(300)
@@ -395,6 +369,33 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const def = await js(`document.querySelector('.haskell')?.textContent ?? ''`)
     expect(crumb === 'ƒ twice / ƒ λ' && def.includes('\\x -> x'), `${crumb} / ${def}`)
     return def.split('\n')[1]
+  })
+  await check('a signature is pinned chevron by chevron with type nodes, checked by inference', async () => {
+    await createFunction('pinMe', ['x'])
+    const { graph } = await activeGraph()
+    const fnId = Object.values(graph).find((n) => n.label === 'pinMe' && n.custom).id
+    await clickNode(fnId)
+    const chain = () => js(`document.querySelector('#inspector-content .type-chain').title`)
+    const inferred = await chain()
+    const segment = (i) => js(`document.querySelectorAll('#inspector-content .tc-seg.editable')[${i}].click()`)
+    const pick = (con) => js(`[...document.querySelectorAll('#type-picker [data-con]')].find((b) => b.dataset.con === ${JSON.stringify(con)}).click()`)
+    // x :: Double — a whole type in one pick
+    await segment(0); await sleep(200); await pick('Double'); await sleep(300)
+    const pinned = await chain()
+    const xAnnotation = Object.values((await project()).functionBodies[fnId]).find((n) => n.type === 'parameter').annotation
+    // the result :: Maybe _ then Int — a constructor brings a hole to fill; the body says otherwise
+    await segment(1); await sleep(200); await pick('Maybe'); await sleep(150)
+    const hole = await js(`document.querySelector('#type-picker .tp-tree').textContent`)
+    await pick('Int'); await sleep(300)
+    const refused = await js(`document.querySelector('#type-picker .tp-error')?.textContent ?? ''`)
+    await js(`document.querySelector('#type-picker [data-tp="close"]').click()`); await sleep(150)
+    // and back to inferred
+    await segment(0); await sleep(200); await js(`document.querySelector('#type-picker [data-tp="infer"]').click()`); await sleep(300)
+    const cleared = await chain()
+    expect(inferred === 'a → a' && pinned === 'Double → Double' && xAnnotation === 'Double', `${inferred} / ${pinned} / ${xAnnotation}`)
+    expect(hole === 'Maybe_' && /makes the result Double, not Maybe Int/.test(refused), `${hole} / ${refused}`)
+    expect(cleared === 'a → a', cleared)
+    return `pinMe :: ${pinned}; result :: Maybe Int refused`
   })
 
   console.log(errors.length ? `Page errors:\n  ${errors.join('\n  ')}` : 'No page errors.')
