@@ -1017,12 +1017,13 @@ const SNAP_RADIUS = 130  // world-space magnet radius: highlight + auto-connect 
 const TYPE_COLORS = { Int: '#4f8ef7', Integer: '#e8b23c', Word: '#35b4e0', Float: '#3cbe84', Double: '#a96ef0', Rational: '#d66bd1', Natural: '#e07a5f', Bool: '#ed6b84' }
 const VAR_PALETTE = ['#8b7cf2', '#5fa8e8', '#3cbe9e', '#e8b23c', '#ed8fa8', '#4fc2c2', '#b98fef', '#f0954a']
 const FN_TYPE_COLOR = '#6c5ce7'
+const USER_TYPE_PALETTE = ['#e07a5f', '#3d9970', '#d4a017', '#c2508a', '#2f8fb8', '#8a6bd6', '#d9653b'] // declared types: one steady colour each, by name
 const NEUTRAL_BORDER = '#d6d1e8'  // shared, undecorated outline for every pill — function block or value chip alike
 const ACCENT = '#6c5ce7'
 function colorForType(type, namer) {
   if (!type) return '#9691a8'
   if (type.kind === 'fun') return FN_TYPE_COLOR
-  if (type.kind === 'con') return TYPE_COLORS[type.name] || '#9691a8'
+  if (type.kind === 'con') return TYPE_COLORS[type.name] || (types[type.name] ? USER_TYPE_PALETTE[[...type.name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % USER_TYPE_PALETTE.length] : '#9691a8')
   if (type.kind === 'app') return colorForType(type.fn, namer) // `Maybe Int` reads as its head, `Maybe`
   return VAR_PALETTE[namer(type.id).charCodeAt(0) % VAR_PALETTE.length]
 }
@@ -1232,10 +1233,10 @@ function typeNodeHtml(t, namer, opts = {}, path = []) {
 function chainHtml(segments, namer, opts = {}) {
   const context = opts.preds?.length ? `<span class="tc-ctx">${escapeAttr(showQual(opts.preds, tcon('_'), namer).split(' ⇒ ')[0])} ⇒</span>` : ''
   const whole = segments.slice(0, -1).reduceRight((acc, t) => tfun(t, acc), segments[segments.length - 1])
-  return `<span class="type-chain" title="${escapeAttr(showQual(opts.preds || [], whole, namer))}">${context}${segments.map((t, i) => {
+  return `<span class="type-chain${opts.big ? ' big' : ''}" title="${escapeAttr(showQual(opts.preds || [], whole, namer))}">${context}${segments.map((t, i) => {
     const cls = ['tc-seg', i === segments.length - 1 && 'tc-result', opts.pinned?.[i] && 'pinned', opts.bad?.[i] && 'bad', opts.applied?.[i] && 'applied', opts.editable?.[i] && 'editable'].filter(Boolean).join(' ')
     const title = opts.bad?.[i] || (opts.editable?.[i] ? (opts.pinned?.[i] ? `Pinned :: ${opts.pinned[i]} — click to change` : 'Inferred — click to pin a type') : '')
-    return `<span class="${cls}" data-seg="${i}"${title ? ` title="${escapeAttr(title)}"` : ''}${opts.widths?.[i] ? ` style="min-width:${opts.widths[i]}"` : ''}>${typeNodeHtml(t, namer)}</span>`
+    return `<span class="${cls}" data-seg="${i}"${title ? ` title="${escapeAttr(title)}"` : ''} style="--sc:${colorForType(t, namer)}${opts.widths?.[i] ? `;min-width:${opts.widths[i]}` : ''}">${opts.labels ? `<small class="tc-label">${escapeAttr(opts.labels[i] ?? '')}</small>` : ''}${typeNodeHtml(t, namer)}</span>`
   }).join('')}</span>`
 }
 /** A whole (qualified) type as a chain, for lists and labels. */
@@ -1301,6 +1302,23 @@ function drawCanvasChains(pass) {
     wireChain(el, info.targets)
     editor.append(el)
   }
+}
+
+// Inside a function body, its signature is a row of chevron blocks pinned
+// to the top of the canvas — `ƒ f :: [x: A ▸][y: B ▸][C]` — one per
+// parameter (named on top) and the result; click a block to set its type.
+const signatureBar = document.createElement('div')
+signatureBar.id = 'signature-bar'
+function drawSignatureBar() {
+  if (!signatureBar.isConnected) document.querySelector('.canvas-wrap')?.append(signatureBar)
+  const fnId = state.activeFunction
+  const def = fnId && nodes[fnId]
+  const info = def && chainInfo(def, typePass(nodes))
+  signatureBar.hidden = !info
+  if (!info) return
+  const names = [...bodyParams(fnId).map((p) => p.label), 'result']
+  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">click a block to set its type</span>`
+  wireChain(signatureBar, info.targets)
 }
 
 // The type picker: build the type of one segment out of type nodes. The
@@ -1945,6 +1963,7 @@ function updatePortEditor(pass = typePass()) {
     editor.append(add)
   })
   drawCanvasChains(pass)
+  drawSignatureBar()
   if (focused) {
     const input = editor.querySelector(`.param-slot[data-function-id="${CSS.escape(focused.fn)}"][data-index="${focused.index}"] .param-value`)
     if (input) { input.focus(); input.setSelectionRange(focused.start, focused.end) }

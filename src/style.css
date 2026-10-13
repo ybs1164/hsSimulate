@@ -388,3 +388,25 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .canvas-chain:not(.centered) .type-chain{position:relative}
 .canvas-chain:not(.centered) .tc-ctx{position:absolute;right:100%;top:50%;transform:translateY(-50%)}
 .ce-sigshow .type-chain{font-size:10.5px}
+
+/* Chevron blocks: filled with their type's colour (--sc), pinned ones striped. */
+.tc-seg{background:color-mix(in srgb,var(--sc,#9691a8) 16%,#fff)}
+.tc-seg.tc-result{background:color-mix(in srgb,var(--sc,#9691a8) 28%,#fff)}
+.tc-seg.pinned,.tc-seg.pinned.tc-result{background:linear-gradient(to top,var(--sc,#6c5ce7) 0 .28em,transparent .28em),color-mix(in srgb,var(--sc,#6c5ce7) 34%,#fff)}
+.tc-seg.bad,.tc-seg.bad.tc-result{background:linear-gradient(to top,#e0537d 0 .28em,transparent .28em),#fbd5df}
+.tn-fun .tc-seg{background:color-mix(in srgb,var(--sc,#9691a8) 12%,#fff)}
+.tc-label{display:block;font:500 .78em 'DM Mono',monospace;color:var(--muted);line-height:1.1}
+.canvas-chain{font-weight:600}
+.canvas-chain .tc-seg{padding-top:.45em;padding-bottom:.45em}
+.inspector-chain{font-size:13px}
+/* The signature bar inside a function body */
+#signature-bar{position:absolute;top:12px;left:12px;right:12px;z-index:4;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;background:#ffffffee;border:1.5px solid var(--line);border-radius:16px;box-shadow:0 4px 14px #211d3414;pointer-events:none;width:fit-content;max-width:calc(100% - 24px);box-sizing:border-box}
+#signature-bar[hidden]{display:none}
+#signature-bar .sig-name{display:flex;align-items:baseline;gap:6px;font:600 15px 'DM Mono',monospace;color:var(--ink)}
+#signature-bar .sig-name i{font-style:normal;color:var(--muted)}
+#signature-bar .sig-hint{font:10px 'DM Mono';color:var(--muted-2,#9691a8)}
+#signature-bar .tc-seg.editable{pointer-events:auto}
+.type-chain.big{font-size:15px;flex-wrap:wrap;row-gap:6px}
+.type-chain.big .tc-seg{--d:16px;flex-direction:column;gap:3px;min-height:52px;min-width:84px;padding:6px calc(var(--d) + 12px) 8px calc(var(--d) + 14px)}
+.type-chain.big>.tc-seg:first-child{padding-left:16px}
+.type-chain.big .tc-seg.editable:hover{filter:brightness(.93) saturate(1.4)}
