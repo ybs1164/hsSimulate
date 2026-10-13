@@ -145,8 +145,13 @@ const LAWS = {
     ['toInteger is a ring map: toInteger (x + y) = toInteger x + toInteger y, and so for *', 2, (op, x, y, eq) => eq(op('toInteger', op('plus', x, y)), op('plus', op('toInteger', x), op('toInteger', y))) && eq(op('toInteger', op('times', x, y)), op('times', op('toInteger', x), op('toInteger', y)))],
     ['toInteger is faithful: toInteger x = toInteger y ⇒ x = y', 2, (op, x, y, eq) => !eq(op('toInteger', x), op('toInteger', y)) || eq(x, y)],
     ['toRational x = fromInteger (toInteger x)', 1, (op, x, eq) => eq(op('toRational', x), op('toInteger', x))],
+    ['division with remainder: (x `div` y) * y + x `mod` y = x, for y ≠ 0', 2, (op, x, y, eq) => op('toInteger', y) === 0 || eq(op('plus', op('times', op('div', x, y), y), op('mod', x, y)), x)],
   ],
-  OrderedField: [['round x is a nearest whole number: |toRational x - round x| ≤ 1/2', 1, (op, x) => Math.abs(op('toRational', x) - op('toInteger', op('round', x))) <= 0.5 + 1e-9]],
+  OrderedField: [['properFraction x = (n, r): x = n + r, n whole, |r| < 1', 1, (op, x) => {
+    const [n, r] = op('properFraction', x).args.map((v, i) => (i ? op('toRational', v) : op('toInteger', v)))
+    const v = op('toRational', x)
+    return Math.abs(v - (n + r)) <= 1e-9 * Math.max(1, Math.abs(v)) && Math.abs(r) < 1
+  }]],
   Transcendental: [['sqrt x * sqrt x = x, for x >= 0', 1, (op, x, eq) => !op('geq', x, 0) || eq(op('times', op('sqrt', x), op('sqrt', x)), x)]],
   IEEEFloat: [['isNaN x = not (x == x)', 1, (op, x) => op('isNaN', x) === !op('eq', x, x)]],
   Eq: [['reflexivity: x == x', 1, (op, x) => op('eq', x, x) === true]],

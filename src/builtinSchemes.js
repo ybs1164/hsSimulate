@@ -17,9 +17,7 @@
 // operation, `negate`/`(-)` need additive inverses (AddGroup), `(*)` a
 // multiplicative semigroup, `addZero`/`mulOne` the two monoid identities,
 // `(/)` a Field, `sqrt` Transcendental, `toRational` OrderedRing,
-// `toInteger` EuclideanRing, `fromIntegral` EuclideanRing -> Ring
-// (`fromInteger . toInteger` — ℤ is the initial ring), `round`
-// OrderedField -> EuclideanRing, `isNaN` IEEEFloat. `geq`/`eq` use the
+// `isNaN` IEEEFloat (the numeric conversions are below). `geq`/`eq` use the
 // auxiliary Ord/Eq classes, and `select` is the polymorphic `if` that the
 // pinned `ifThenElse` deliberately is not.
 import { pred, scheme, tapp, tcon, tfun, tlist, ttuple, tvar } from './typeSystem.js'
@@ -63,9 +61,6 @@ export const builtinSchemes = {
   divide: scheme(['a'], [pred('Field', a)], tfun(a, tfun(a, a))),
   sqrt: scheme(['a'], [pred('Transcendental', a)], tfun(a, a)),
   toRational: scheme(['a'], [pred('OrderedRing', a)], tfun(a, Rational)),
-  toInteger: scheme(['a'], [pred('EuclideanRing', a)], tfun(a, tcon('Integer'))),
-  fromIntegral: scheme(['a', 'b'], [pred('EuclideanRing', a), pred('Ring', b)], tfun(a, b)),
-  round: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, b)),
   isNaN: scheme(['a'], [pred('IEEEFloat', a)], tfun(a, Bool)),
   geq: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
   eq: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(a, Bool))),
@@ -96,6 +91,30 @@ export const builtinSchemes = {
   showFFloat: scheme(['a'], [pred('IEEEFloat', a)], tfun(Int, tfun(a, String))), // Haskell's RealFloat a
   // Big numbers the way idle games show them: 999, 1.2K, 3.4M, 5.6B, 7.8T, 1.2Qa …
   showCompact: scheme(['a'], [pred('IEEEFloat', a)], tfun(a, String)),
+
+  // Numeric conversions, the Haskell Report way: the class methods
+  // `toInteger` (EuclideanRing — the integral types, embedded in ℤ),
+  // `toRational` (above), `properFraction` (OrderedField: x = n + r, n
+  // integral, |r| < 1) and `div`/`mod` (EuclideanRing, floored) are
+  // primitives, and so are `fromInteger` (Ring) and `fromRational` (Field) —
+  // not methods: ℤ is the initial ring, so fromInteger is the unique ring map
+  // out of it (and fromRational q = fromInteger n / fromInteger m). The rest
+  // are written with them (src/definitionViews.js): fromIntegral =
+  // fromInteger . toInteger, realToFrac = fromRational . toRational, and
+  // truncate/floor/ceiling/round from properFraction.
+  toInteger: scheme(['a'], [pred('EuclideanRing', a)], tfun(a, tcon('Integer'))),
+  fromInteger: scheme(['a'], [pred('Ring', a)], tfun(tcon('Integer'), a)),
+  fromRational: scheme(['a'], [pred('Field', a)], tfun(Rational, a)),
+  properFraction: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, ttuple(b, a))),
+  div: scheme(['a'], [pred('EuclideanRing', a)], tfun(a, tfun(a, a))),
+  mod: scheme(['a'], [pred('EuclideanRing', a)], tfun(a, tfun(a, a))),
+  abs: scheme(['a'], [pred('OrderedRing', a)], tfun(a, a)),
+  fromIntegral: scheme(['a', 'b'], [pred('EuclideanRing', a), pred('Ring', b)], tfun(a, b)),
+  realToFrac: scheme(['a', 'b'], [pred('OrderedRing', a), pred('Field', b)], tfun(a, b)),
+  truncate: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, b)),
+  floor: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, b)),
+  ceiling: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, b)),
+  round: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, b)),
 
   // Pairs — the categorical product (a, b) with its projections.
   pair: scheme(['a', 'b'], [], tfun(a, tfun(b, ttuple(a, b)))),
