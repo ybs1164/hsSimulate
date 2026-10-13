@@ -239,11 +239,18 @@ export function createEvaluator(registry) {
     addZero: [0, () => 0],
     mulOne: [0, () => 1],
     divide: [2, (x, y) => lift2((a, b) => a / b, x, y, 'divide')],
-    sqrt: [1, (x) => Math.sqrt(num(x))],
-    toRational: [1, (x) => num(x)], // no distinct runtime numeric representations — type-level only
-    fromIntegral: [1, (x) => num(x)],
-    round: [1, (x) => roundHalfEven(num(x))],
-    isNaN: [1, (x) => Number.isNaN(num(x))],
+    sqrt: [1, (x) => lift1(Math.sqrt, x, 'sqrt')],
+    // The conversions. Number types share one runtime representation, so on
+    // a number they're type-level only; a value of a user type converts
+    // through its hand-written instance (or, for a newtype, its field's).
+    // A result the type pass knows to be a user type is built there by
+    // fromInteger (see `call`); otherwise it stays a number, standing for
+    // that integer in whatever ring it meets, as a literal does.
+    toRational: [1, (x) => convert(x, 'toRational', (n) => n)],
+    toInteger: [1, (x) => integer(convert(x, 'toInteger', (n) => n), 'toInteger')],
+    fromIntegral: [1, (x) => integer(convert(x, 'toInteger', (n) => n), 'toInteger')], // fromInteger . toInteger
+    round: [1, (x) => convert(x, 'round', roundHalfEven)],
+    isNaN: [1, (x) => convert(x, 'isNaN', Number.isNaN)],
     geq: [2, (x, y) => compareValues(x, y, 'geq') >= 0],
     eq: [2, (x, y) => compareValues(x, y, 'eq') === 0],
     select: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
@@ -447,6 +454,41 @@ export function createEvaluator(registry) {
     return { ...like, args: like.args.map((f) => delay(() => spread(n, force(f)))) }
   }
 
+  /**
+   * A conversion out of the numeric tower: through `x`'s hand-written
+   * instance (`method`), through a newtype's field (its instance is the
+   * field's, by newtype deriving), or `onNumber` on a plain number.
+   */
+  function convert(x, method, onNumber) {
+    const a = force(x)
+    const own = userMethod(a, method)
+    if (own) return call(own, [now(a)])
+    if (isData(a) && a.args.length === 1) return convert(a.args[0], method, onNumber)
+    return onNumber(num(now(a)))
+  }
+
+  /** `v` checked to be an Integer — what a hand-written toInteger must give. */
+  function integer(v, what) {
+    const n = force(v)
+    if (typeof n !== 'number' || !Number.isInteger(n)) throw new EvalError(`${what} must give a whole number (an Integer), got ${show(n)}`)
+    return n
+  }
+
+  /**
+   * `fromInteger n` at user type `type`: the unique ring map ℤ → type (ℤ is
+   * the initial ring) — n · mulOne through hand-written arithmetic, else n
+   * in every field (the diagonal). A value that already is one (a
+   * hand-written round's result) is left alone.
+   */
+  function fromIntegerAt(v, type) {
+    const n = force(v)
+    const decl = registry.types?.[type]
+    if (typeof n !== 'number' || !decl) return n
+    const only = decl.constructors.length === 1 ? decl.constructors[0] : null
+    const like = only ? { kind: 'data', type, ctor: only.name, ctorIndex: 0, args: only.fields.map(() => now(0)) } : { kind: 'data', type, args: [] }
+    return spread(n, like)
+  }
+
   /** MEMPTY made concrete in the shape of `like` — through a hand-written Monoid when there is one. */
   function memptyAt(like) {
     const fn = userMethod(like, 'mempty')
@@ -617,6 +659,8 @@ export function createEvaluator(registry) {
   // A dictionary is plain data `{ kind: 'dict', key, sub }` — instance `key`
   // and the dictionaries of its context — or `{ kind: 'dict', error }` when
   // the type pass found no evidence; that error is raised only if it's used.
+  // A conversion into a user type gets `{ kind: 'dict', fromInteger: type }`:
+  // the one thing its Ring dictionary is needed for (see fromIntegerAt).
   let elab = null // the elaboration index, fetched once per run
 
   /** Build the dictionary evidence `e` describes, in `env` ({ dicts, ctx, self, extra }). */
@@ -628,6 +672,7 @@ export function createEvaluator(registry) {
     if (e.self) return env.self
     if ('extra' in e) return env.extra[e.extra]
     if (e.inst) return { kind: 'dict', key: e.inst, sub: e.sub.map((s) => dictionary(s, env)) }
+    if (e.fromInteger) return { kind: 'dict', fromInteger: e.fromInteger }
     if (e.super) {
       const d = dictionary(e.of, env)
       if (d.error) return d
@@ -681,7 +726,11 @@ export function createEvaluator(registry) {
     const def = definition(callee)
     if (def.method) return callMethod(def, args, dicts)
     if (def.derived) return runDerived(def.derived, args)
-    if (def.builtin) return builtins[def.builtin][1](...args)
+    if (def.builtin) {
+      const v = builtins[def.builtin][1](...args)
+      const into = dicts.find((d) => d.fromInteger) // a conversion whose result type is a user type
+      return into ? fromIntegerAt(v, into.fromInteger) : v
+    }
     const body = registry.functionBodies[callee]
     const output = body?.output
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)

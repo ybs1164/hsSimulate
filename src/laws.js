@@ -135,6 +135,20 @@ const LAWS = {
     ['distributivity: x * (y + z) = x * y + x * z', 3, (op, x, y, z, eq) => eq(op('times', x, op('plus', y, z)), op('plus', op('times', x, y), op('times', x, z)))],
     ['annihilation: 0 * x = 0', 1, (op, x, eq) => eq(op('times', 0, x), 0)],
   ],
+  // The conversions out of the tower are ring maps that respect the order,
+  // and toInteger is ℤ's copy of the type: faithful, and agreeing with toRational.
+  OrderedRing: [
+    ['toRational is a ring map: toRational (x + y) = toRational x + toRational y, and so for *', 2, (op, x, y, eq) => eq(op('toRational', op('plus', x, y)), op('plus', op('toRational', x), op('toRational', y))) && eq(op('toRational', op('times', x, y)), op('times', op('toRational', x), op('toRational', y)))],
+    ['toRational is monotone: x >= y ⇒ toRational x >= toRational y', 2, (op, x, y) => !op('geq', x, y) || op('geq', op('toRational', x), op('toRational', y))],
+  ],
+  EuclideanRing: [
+    ['toInteger is a ring map: toInteger (x + y) = toInteger x + toInteger y, and so for *', 2, (op, x, y, eq) => eq(op('toInteger', op('plus', x, y)), op('plus', op('toInteger', x), op('toInteger', y))) && eq(op('toInteger', op('times', x, y)), op('times', op('toInteger', x), op('toInteger', y)))],
+    ['toInteger is faithful: toInteger x = toInteger y ⇒ x = y', 2, (op, x, y, eq) => !eq(op('toInteger', x), op('toInteger', y)) || eq(x, y)],
+    ['toRational x = fromInteger (toInteger x)', 1, (op, x, eq) => eq(op('toRational', x), op('toInteger', x))],
+  ],
+  OrderedField: [['round x is a nearest whole number: |toRational x - round x| ≤ 1/2', 1, (op, x) => Math.abs(op('toRational', x) - op('toInteger', op('round', x))) <= 0.5 + 1e-9]],
+  Transcendental: [['sqrt x * sqrt x = x, for x >= 0', 1, (op, x, eq) => !op('geq', x, 0) || eq(op('times', op('sqrt', x), op('sqrt', x)), x)]],
+  IEEEFloat: [['isNaN x = not (x == x)', 1, (op, x) => op('isNaN', x) === !op('eq', x, x)]],
   Eq: [['reflexivity: x == x', 1, (op, x) => op('eq', x, x) === true]],
   PartialOrd: [
     ['reflexivity: leq x x', 1, (op, x) => op('leq', x, x) === true],

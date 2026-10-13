@@ -17,7 +17,8 @@
 // operation, `negate`/`(-)` need additive inverses (AddGroup), `(*)` a
 // multiplicative semigroup, `addZero`/`mulOne` the two monoid identities,
 // `(/)` a Field, `sqrt` Transcendental, `toRational` OrderedRing,
-// `fromIntegral` EuclideanRing -> Ring (ℤ is the initial ring), `round`
+// `toInteger` EuclideanRing, `fromIntegral` EuclideanRing -> Ring
+// (`fromInteger . toInteger` — ℤ is the initial ring), `round`
 // OrderedField -> EuclideanRing, `isNaN` IEEEFloat. `geq`/`eq` use the
 // auxiliary Ord/Eq classes, and `select` is the polymorphic `if` that the
 // pinned `ifThenElse` deliberately is not.
@@ -62,6 +63,7 @@ export const builtinSchemes = {
   divide: scheme(['a'], [pred('Field', a)], tfun(a, tfun(a, a))),
   sqrt: scheme(['a'], [pred('Transcendental', a)], tfun(a, a)),
   toRational: scheme(['a'], [pred('OrderedRing', a)], tfun(a, Rational)),
+  toInteger: scheme(['a'], [pred('EuclideanRing', a)], tfun(a, tcon('Integer'))),
   fromIntegral: scheme(['a', 'b'], [pred('EuclideanRing', a), pred('Ring', b)], tfun(a, b)),
   round: scheme(['a', 'b'], [pred('OrderedField', a), pred('EuclideanRing', b)], tfun(a, b)),
   isNaN: scheme(['a'], [pred('IEEEFloat', a)], tfun(a, Bool)),

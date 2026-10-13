@@ -149,6 +149,7 @@ const derivedDefs = {}
 // rather than drawn on the main canvas.
 const PRELUDE = [
   ['Lists', [['listOf', '[ , , ]', []], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
+  ['Numbers', [['toInteger', 'toInteger', ['x']]]],
   ['Bool', [['and', '(&&)', ['p', 'q']], ['or', '(||)', ['p', 'q']], ['not', 'not', ['p']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
   ['Text', [['show', 'show', ['x']], ['showsPrec', 'showsPrec', ['d', 'x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
@@ -194,9 +195,10 @@ function classLabelsTaken() {
   return [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !isHiddenDefinition(n)), ...Object.values(preludeDefs), ...Object.values(derivedDefs).filter((d) => !d.primitive)].map((n) => n.label)
 }
 // The type pass's elaboration of the whole project — which instance each
-// call means, the dictionaries functions take (inferGraph.js) — plus each
-// instance's runtime side (classDecls.js). The evaluator asks for it on
-// every run; it's recomputed after any edit (draw() drops it).
+// call means, the dictionaries functions take, the user type a conversion
+// lands in (inferGraph.js) — plus each instance's runtime side
+// (classDecls.js). The evaluator asks for it on every run; it's recomputed
+// after any edit (draw() drops it).
 let elaborationCache = null
 let projectPassCache = null
 // The type pass over the whole project (the top-level graph, and through it every function).
@@ -204,7 +206,7 @@ function projectPass() {
   return (projectPassCache ??= inferGraph(definitions, functionBodies, nodes))
 }
 function elaborationData() {
-  if (!resolvedClasses.length) return null
+  if (!resolvedClasses.length && !Object.keys(types).length) return null
   if (!elaborationCache) {
     const pass = projectPass()
     elaborationCache = { ...pass.elaboration, instances: instanceEvidence(resolvedClasses, (fnId) => pass.schemes.get(fnId)) }

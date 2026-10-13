@@ -38,14 +38,28 @@
 //   made of that node; a mismatch, a class the pinned type lacks, or a named
 //   variable that the body specializes (signature variables are rigid) is
 //   reported on that node, and that annotation is left out.
+// - Conversions into the numeric tower (`fromIntegral`, `round`) are
+//   elaborated with their result type when it is a user type: the evaluator
+//   then builds the value by that type's fromInteger (the unique ring map
+//   from ℤ). At a type variable nothing is passed — the number stands for
+//   the integer in whatever ring it later meets, like a literal.
 import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, unify, scheme } from './typeSystem.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
-import { evidence, isUserClass, literalClass, pickDefault, reduce } from './prelude.js'
+import { evidence, isUserClass, literalClass, numericTypes, pickDefault, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
 import { annotationType, typeText } from './typeExpr.js'
 
 const Int = tcon('Int')
 const Bool = tcon('Bool')
+
+/** Builtins whose result is `fromInteger` of an integer, at a type the caller picks. */
+const FROM_INTEGER = ['fromIntegral', 'round']
+
+/** The user type a conversion's (resolved) result type names, or null for a number type or a variable. */
+function fromIntegerTarget(t) {
+  while (t.kind === 'app') t = t.fn
+  return t.kind === 'con' && !numericTypes.includes(t.name) ? t.name : null
+}
 
 /**
  * Turn an entry into the single Type of that node *as a value*. A function
@@ -311,8 +325,10 @@ function elaborateCalls(calls, given, ctx, selfId = null) {
       continue
     }
     const wanted = call.preds.filter((p) => isUserClass(p.cls)).map((p) => pred(p.cls, applySubst(ctx.subst, p.type)))
-    if (!wanted.length) continue
+    const into = call.target && fromIntegerTarget(applySubst(ctx.subst, call.target))
+    if (!wanted.length && !into) continue
     out[call.id] = wanted.map((p) => evidence(given, p) || { error: `No instance for ${p.cls} ${showType(p.type)}${ftv(p.type).size ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` })
+    if (into) out[call.id].push({ fromInteger: into })
   }
   return out
 }
@@ -393,7 +409,8 @@ function resolveNodeType(id, graph, ctx, memo) {
     const sch = schemeFor(node, ctx)
     const { type: instType, preds: instPreds } = instantiate(sch)
     ctx.preds.push(...instPreds)
-    ctx.calls.push({ id, preds: instPreds, recursive })
+    const call = { id, preds: instPreds, recursive }
+    ctx.calls.push(call)
     if (instPreds.length) ctx.origins.push({ id, preds: instPreds, label: node.label })
     let rest = instType
     const arity = node.params ? node.params.length : 0
@@ -406,6 +423,7 @@ function resolveNodeType(id, graph, ctx, memo) {
         paramTypes.push(freshVar()) // defensive: node has more ports than its scheme declares
       }
     }
+    if (FROM_INTEGER.includes(node.builtin || ctx.nodesRegistry[calleeId]?.builtin)) call.target = rest
     const applied = paramTypes.map(() => false)
     const entry = { kind: 'function', paramTypes, resultType: rest, applied }
     memo.set(id, entry) // set before recursing so a stray self-mount can't loop

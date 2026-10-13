@@ -63,7 +63,7 @@ test('hand-written instances are checked like GHC would', () => {
   bad('Money', [{ cls: 'Show', methods: {} }, { cls: 'Show', methods: {} }], /written twice/)
   bad('Money', [{ cls: 'Functor', methods: {} }], /type constructors/)
   bad('Money', [{ cls: 'AddMonoid', methods: {} }], /needs an AddSemigroup instance/)
-  bad('Money', [{ cls: 'Transcendental', methods: {} }], /can't be written by hand/)
+  bad('Money', [{ cls: 'Transcendental', methods: {} }], /needs an \w+ instance/) // writable now, but only on top of a Field
   assert.ok(withInstances(types, 'Box', [{ cls: 'Functor', methods: {} }]).Box.instances.length)
   // Instances survive a later edit of the declaration.
   const withShow = withInstances(types, 'Money', [{ cls: 'Show', methods: { show: 'showMoney' } }])
