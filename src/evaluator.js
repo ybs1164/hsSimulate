@@ -248,9 +248,9 @@ export function createEvaluator(registry) {
     // that integer in whatever ring it meets, as a literal does.
     toRational: [1, (x) => convert(x, 'toRational', (n) => n)],
     toInteger: [1, (x) => integer(convert(x, 'toInteger', (n) => n), 'toInteger')],
-    fromIntegral: [1, (x) => integer(convert(x, 'toInteger', (n) => n), 'toInteger')], // fromInteger . toInteger
     round: [1, (x) => convert(x, 'round', roundHalfEven)],
     isNaN: [1, (x) => convert(x, 'isNaN', Number.isNaN)],
+    fromIntegral: [1, (x) => builtins.toInteger[1](x)], // fromInteger . toInteger
     geq: [2, (x, y) => compareValues(x, y, 'geq') >= 0],
     eq: [2, (x, y) => compareValues(x, y, 'eq') === 0],
     select: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],

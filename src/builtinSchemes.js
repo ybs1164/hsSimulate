@@ -1,5 +1,5 @@
-// Hand-written type schemes for the read-only builtin nodes.
-// Keyed by `node.builtin` (see src/main.js's `nodes` object).
+// Hand-written type schemes for the read-only builtins.
+// Keyed by `node.builtin` (see src/main.js's `nodes` object and PRELUDE).
 //
 // `identity`, `apply`, `compose` are genuinely polymorphic — this is the
 // point of the whole exercise: ∀a. a -> a, ∀a b. (a -> b) -> a -> b,

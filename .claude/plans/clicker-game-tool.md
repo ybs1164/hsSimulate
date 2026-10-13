@@ -30,10 +30,10 @@
 | Semiring | AddMonoid, MulMonoid | 음 아닌 리터럴 | 분배 법칙 |
 | Ring | Semiring, AddAbelianGroup | 음수 리터럴 | |
 | OrderedRing | Ring, Ord | `toRational`, `(>=)` | 순서환 |
-| EuclideanRing | OrderedRing | `div`, `mod`, `fromIntegral` 원천 | 유클리드 정역 (+순서, 단순화) |
-| Field | Ring | `(/)`, `recip`, 소수 리터럴 | 체 |
-| OrderedField | OrderedRing, Field | `round`, `floor` | 아르키메데스 순서체 |
-| Transcendental | Field | `sqrt`, `exp`, `(**)` | 군론 밖 해석적 확장 (문서화) |
+| EuclideanRing | OrderedRing | `toInteger` (`fromIntegral` = `fromInteger . toInteger`) | 유클리드 정역 (+순서, 단순화) |
+| Field | Ring | `(/)`, 소수 리터럴 | 체 |
+| OrderedField | OrderedRing, Field | `round` | 아르키메데스 순서체 |
+| Transcendental | Field | `sqrt` | 군론 밖 해석적 확장 (문서화) |
 | IEEEFloat | OrderedField, Transcendental | `isNaN` | 부동소수 |
 
 보조 클래스 (군론 계층 밖, 순서론): `Eq`, `Ord: [Eq]`, `Show` — 숫자 클래스 목록에는 포함하지 않음 (디폴팅 판정용).
@@ -55,7 +55,7 @@ Num→Ring, Real→OrderedRing, Integral→EuclideanRing, Fractional→Field, Fl
 - `plus :: AddSemigroup a => a -> a -> a` (가장 일반적인 요구만)
 - `negate :: AddGroup a => a -> a`
 - `divide :: Field a`, `sqrt :: Transcendental a`, `toRational :: OrderedRing a`
-- `fromIntegral :: (EuclideanRing a, Ring b)`, `round :: (OrderedField a, EuclideanRing b)`, `isNaN :: IEEEFloat a`
+- `toInteger :: EuclideanRing a`, `fromIntegral :: (EuclideanRing a, Ring b)`, `round :: (OrderedField a, EuclideanRing b)`, `isNaN :: IEEEFloat a`
 - 신규: `minus :: AddGroup a`, `times :: MulSemigroup a`, `addZero :: AddMonoid a => a`, `mulOne :: MulMonoid a => a`, `geq :: Ord a => a -> a -> Bool`, `eq :: Eq a`, `select :: a. Bool -> a -> a -> a`
   (`zero`은 보호된 Church zero이므로 항등원 이름은 `addZero` 사용)
 
