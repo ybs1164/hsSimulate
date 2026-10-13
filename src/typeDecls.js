@@ -465,7 +465,7 @@ export function checkTypes(types, functionLabels = []) {
   for (const w of written) {
     const where = `instance ${w.cls} ${w.type}`
     if (!isClass(w.cls)) throw new DeclError(`${where}: no such class`)
-    if (!CLASS_METHODS[w.cls]) throw new DeclError(`${where}: ${w.cls}'s methods work on the host's numbers, so it can't be written by hand`)
+    if (!CLASS_METHODS[w.cls]) throw new DeclError(`${where}: ${w.cls} can't be written by hand here (a class you declare gets its instances in the class editor)`)
     if ((types[w.type].params || []).length < classArity(w.cls)) throw new DeclError(`${where}: ${w.cls} is for type constructors — give ${w.type} a type parameter (data ${w.type} a = …)`)
     if (seen.has(`${w.cls} ${w.type}`)) throw new DeclError(`${where}: ${w.type} already has ${w.cls} (derived, or written twice)`)
     seen.add(`${w.cls} ${w.type}`)

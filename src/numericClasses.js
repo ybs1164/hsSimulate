@@ -13,10 +13,10 @@
 //   MulSemigroup (*) → MulMonoid ─┐                    │              │
 //                                 └──→ Semiring ←──────┘              │
 //                                         └──→ Ring ←─────────────────┘
-//   Ring (+ Ord) → OrderedRing → EuclideanRing     (div/mod, toInteger)
-//   Ring → Field                                    (/, recip)
-//   OrderedRing + Field → OrderedField              (round, floor: Archimedean)
-//   Field → Transcendental                          (sqrt, exp — analysis, not algebra)
+//   Ring (+ Ord) → OrderedRing → EuclideanRing     (toRational; toInteger)
+//   Ring → Field                                    (/)
+//   OrderedRing + Field → OrderedField              (round: Archimedean)
+//   Field → Transcendental                          (sqrt — analysis, not algebra)
 //   OrderedField + Transcendental → IEEEFloat       (isNaN)
 //
 // Rough correspondence to the Haskell Report classes this replaces:

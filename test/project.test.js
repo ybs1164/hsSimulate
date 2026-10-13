@@ -34,7 +34,7 @@ test('a dangling entry is cleared', () => {
 test('mergeBuiltins keeps user layout but takes code-owned fields from code', () => {
   const saved = {
     nodes: {
-      add: { ...builtinNodes.add, label: 'old label', x: 42, params: ['7'] },
+      add: { ...builtinNodes.add, label: 'old label', expression: 'an expression the code dropped', x: 42, params: ['7'] },
       retired: { id: 'retired', type: 'function', builtin: 'retired', params: [], mounted: [] },
       five: { id: 'five', type: 'number', value: '5', mountedTo: 'retired:0', connected: true },
       custom: { id: 'custom', type: 'function', custom: true, params: [], mounted: [] },
@@ -45,6 +45,7 @@ test('mergeBuiltins keeps user layout but takes code-owned fields from code', ()
   }
   const merged = mergeBuiltins(saved, builtinNodes, builtinBodies)
   assert.equal(merged.nodes.add.label, 'add')
+  assert.equal('expression' in merged.nodes.add, false, 'a code-owned field the code no longer has is dropped')
   assert.equal(merged.nodes.add.x, 42)
   assert.deepEqual(merged.nodes.add.params, ['7'])
   assert.ok(merged.nodes.zero, 'missing builtin added')

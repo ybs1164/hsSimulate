@@ -63,8 +63,8 @@ export function upgradeProject(project) {
 }
 
 // Fields of a builtin definition owned by the code, never by a saved file —
-// so a save from an older version picks up renamed labels or new
-// expressions, and a file can't turn a builtin into something else.
+// so a save from an older version picks up renamed labels or new (or
+// dropped) expressions, and a file can't turn a builtin into something else.
 const BUILTIN_FIELDS = ['type', 'label', 'builtin', 'readonly', 'expression', 'color']
 
 /**
@@ -78,7 +78,7 @@ export function mergeBuiltins(project, builtinNodes, builtinBodies) {
   const nodes = {}
   for (const [id, node] of Object.entries(project.nodes)) {
     if (node.builtin && !builtinNodes[id]) continue
-    nodes[id] = builtinNodes[id] ? { ...node, ...pick(builtinNodes[id], BUILTIN_FIELDS) } : node
+    nodes[id] = builtinNodes[id] ? { ...omit(node, BUILTIN_FIELDS), ...pick(builtinNodes[id], BUILTIN_FIELDS) } : node
   }
   for (const [id, node] of Object.entries(builtinNodes)) if (!nodes[id]) nodes[id] = structuredClone(node)
   for (const node of Object.values(nodes)) {
@@ -94,6 +94,10 @@ export function mergeBuiltins(project, builtinNodes, builtinBodies) {
 
 function pick(obj, keys) {
   return Object.fromEntries(keys.filter((k) => k in obj).map((k) => [k, obj[k]]))
+}
+
+function omit(obj, keys) {
+  return Object.fromEntries(Object.entries(obj).filter(([k]) => !keys.includes(k)))
 }
 
 /** Linear undo/redo over snapshot strings. */
