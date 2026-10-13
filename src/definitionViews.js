@@ -28,6 +28,7 @@
 // the library definition the way a customized derived function does
 // (typeEdits.js) — every call runs it.
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
+import { typeText } from './typeExpr.js'
 
 /** Library definitions that can be taken over as graphs: the Prelude's (derived ones are customized through typeEdits.js). */
 export const isEditableLibraryId = (id) => /^prelude:/.test(id)
@@ -403,4 +404,48 @@ export function overrideFromView(viewId, defs, bodies) {
  */
 export function hasDefinitionGraph(def) {
   return Boolean(def && isEditableLibraryId(def.id) && def.builtin !== 'listOf' && GRAPHS[def.builtin])
+}
+
+/**
+ * Take Prelude function `def` over as a graph: a custom function under its
+ * own id (marked `library`), which shadows the library definition, so every
+ * call runs it. Its body starts as the view — exactly what the function
+ * does — and its parameters and Output are annotated with the library's
+ * type (a partial signature, inferGraph.js), so the body is checked against
+ * the type callers rely on. Its λs come along as ordinary λs. `project` is
+ * `{ nodes, functionBodies }`; returns the new node, or null if `def` has no
+ * graph to edit.
+ */
+export function takeOverDefinition(project, def, resolve) {
+  if (!def || !isEditableLibraryId(def.id)) return null
+  if (project.nodes[def.id]?.library) return project.nodes[def.id]
+  const view = buildDefinitionView(def, resolve)
+  if (!isEditableView(view.viewId, view.defs)) return null
+  const { body, lambdas, lambdaBodies } = overrideFromView(view.viewId, view.defs, view.bodies)
+  // The library's type, slot by slot: parameters, then Output.
+  let rest = view.defs[view.viewId].scheme.type
+  for (const n of Object.values(body).filter((x) => x.type === 'parameter')) {
+    n.annotation = typeText(rest.from)
+    rest = rest.to
+  }
+  body.output.annotation = typeText(rest)
+  const params = view.defs[view.viewId].params
+  const node = { id: def.id, type: 'function', label: def.label, params: [...params], mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: def.color, custom: true, library: true, x: -9999, y: -9999 }
+  project.nodes[def.id] = node
+  project.functionBodies[def.id] = body
+  for (const [id, lam] of Object.entries(lambdas)) project.nodes[id] = { ...lam, scope: 'local', custom: true, lambda: true }
+  Object.assign(project.functionBodies, lambdaBodies)
+  return node
+}
+
+/** Drop the taken-over definition `id` and its λs: calls run the library's again. */
+export function restoreDefinition(project, id) {
+  if (!project.nodes[id]?.library) return false
+  for (const k of Object.keys(project.nodes)) {
+    if (k === id || k.startsWith(`${id}/λ`)) {
+      delete project.nodes[k]
+      delete project.functionBodies[k]
+    }
+  }
+  return true
 }
