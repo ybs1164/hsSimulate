@@ -33,6 +33,13 @@ function unplugSlot(graph, node, index) {
   }
 }
 
+/** Reorder `array` in place by moving the element at `from` to `to`. */
+function move(array, from, to) {
+  if (!array || from >= array.length) return
+  const [item] = array.splice(from, 1)
+  array.splice(to, 0, item)
+}
+
 /** A name not used by any of `taken`. */
 function freshName(taken, base = 'p') {
   for (let i = taken.length + 1; ; i++) if (!taken.includes(`${base}${i}`)) return `${base}${i}`
@@ -81,6 +88,36 @@ export function removeParameter(project, fnId, index) {
     node.mounted.splice(index, 1)
     node.paramScopes?.splice(index, 1)
     // later slots moved down one: what's plugged into them follows
+    node.mounted.forEach((childId, i) => { if (childId && graph[childId]) graph[childId].mountedTo = `${node.id}:${i}` })
+  }
+  return true
+}
+
+/**
+ * Move parameter `from` of custom function `fnId` to position `to` — in its
+ * body (the parameters' order), its definition and every call, whose slots
+ * (and whatever is plugged into them) move along.
+ */
+export function moveParameter(project, fnId, from, to) {
+  const def = project.nodes[fnId]
+  const body = project.functionBodies[fnId]
+  const params = bodyParameters(project, fnId)
+  if (!def?.custom || !body || from === to || from < 0 || to < 0 || from >= params.length || to >= params.length) return false
+  // The order of the body's parameter nodes is their key order: re-insert
+  // every key (keeping the objects), the parameter keys in the new order.
+  const order = params.map((p) => p.id)
+  move(order, from, to)
+  const entries = Object.entries(body)
+  const byId = new Map(entries.map(([k, n]) => [n.id, [k, n]]))
+  let next = 0
+  const reordered = entries.map((entry) => (entry[1].type === 'parameter' ? byId.get(order[next++]) : entry))
+  entries.forEach(([k]) => delete body[k])
+  reordered.forEach(([k, n]) => { body[k] = n })
+  for (const { graph, node } of [{ graph: project.nodes, node: def }, ...callsTo(project, fnId)]) {
+    move(node.params, from, to)
+    move(node.mounted, from, to)
+    move(node.paramScopes, from, to)
+    if (node.holeNames) { while (node.holeNames.length < node.params.length) node.holeNames.push(undefined); move(node.holeNames, from, to) }
     node.mounted.forEach((childId, i) => { if (childId && graph[childId]) graph[childId].mountedTo = `${node.id}:${i}` })
   }
   return true

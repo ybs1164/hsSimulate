@@ -62,7 +62,7 @@ const project = async () => { await sleep(450); return JSON.parse(await js(`loca
 async function activeGraph() {
   const p = await project()
   if (await js(`document.querySelector('#back-graph').hidden`)) return { p, graph: p.nodes }
-  const name = (await js(`document.querySelector('#graph-name').textContent`)).split(' / ').pop().replace(/^ƒ /, '')
+  const name = (await js(`document.querySelector('#graph-name').textContent`)).split(' / ').pop().replace(/^ƒ /, '').replace(/ · .*$/, '')
   const fn = Object.values(p.nodes).find((n) => n.custom && n.label === name && !n.lambda) || Object.values(p.nodes).find((n) => n.lambda && name === 'λ')
   return { p, graph: p.functionBodies[fn.id] }
 }
@@ -369,6 +369,80 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const def = await js(`document.querySelector('.haskell')?.textContent ?? ''`)
     expect(crumb === 'ƒ twice / ƒ λ' && def.includes('\\x -> x'), `${crumb} / ${def}`)
     return def.split('\n')[1]
+  })
+  const definitionText = () => js(`[...document.querySelectorAll('.property.definition .haskell')].pop()?.textContent ?? ''`)
+  const clickToken = (text) => js(`[...document.querySelectorAll('.property.definition .haskell .tok')].reverse().find((t) => t.textContent === ${JSON.stringify(text)}).click()`).then(() => sleep(300))
+  const playText = async () => {
+    await js(`document.querySelector('#run').click()`); await sleep(800)
+    const text = await js(`document.querySelector('#play-panel .w-text').textContent`)
+    await js(`document.querySelector('[data-play="close"]').click()`); await sleep(200)
+    return text
+  }
+  await check('a DEFINITION token selects the node it was read from', async () => {
+    await openBody('view')
+    await clickToken('showFFloat')
+    const selected = await js(`document.querySelector('.selected-node b').textContent`)
+    const linked = await js(`[...document.querySelectorAll('.property.definition .tok.linked')].map((t) => t.textContent).join('')`)
+    await back()
+    expect(selected === 'showFFloat' && linked.startsWith('showFFloat'), `${selected} / ${linked}`)
+    return selected
+  })
+  await check('a Prelude call opens its definition read-only; a primitive too', async () => {
+    await openBody('view')
+    await clickToken('++')
+    await js(`document.querySelector('#open-definition').click()`); await sleep(700)
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    const text = await definitionText()
+    const count = await js(`document.querySelector('#node-count').textContent`)
+    const fold = await js(`[...document.querySelectorAll('#port-editor .param-slot')].find((s) => s.querySelector('.param-chip'))?.dataset.functionId`)
+    await js(`document.querySelector('.library-item[data-type=number]').click()`); await sleep(300) // refused: read-only
+    const after = await js(`document.querySelector('#node-count').textContent`)
+    const inputsLocked = await js(`[...document.querySelectorAll('#port-editor .param-value')].every((e) => e.readOnly)`)
+    await back()
+    await clickToken('showFFloat')
+    await js(`document.querySelector('#open-definition').click()`); await sleep(700)
+    const primitive = await js(`document.querySelector('#graph-name').textContent`)
+    const note = await definitionText()
+    await back(); await back()
+    expect(crumb === 'ƒ view / ƒ (++) · read-only' && text.includes('foldr (:) ys xs') && fold && count === after && inputsLocked, `${crumb} / ${text} / ${count}→${after} / locked ${inputsLocked}`)
+    expect(primitive === 'ƒ view / ƒ showFFloat · read-only' && /-- primitive/.test(note), `${primitive} / ${note}`)
+    return text.split('\n')[1]
+  })
+  await check('a Prelude definition is taken over as a graph; every call runs it until ↺', async () => {
+    await openBody('view')
+    await clickToken('++')
+    await js(`document.querySelector('#open-definition').click()`); await sleep(700)
+    await js(`document.querySelector('#edit-definition').click()`); await sleep(500)
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    // (++) xs ys = xs: pull xs out of foldr's last slot, then wire it to Output
+    const fold = Object.values((await activeGraph()).graph).find((n) => n.sourceFunctionId === 'prelude:foldr').id
+    const chip = JSON.parse(await js(`JSON.stringify(document.querySelector('.param-slot[data-function-id="${fold}"][data-index="2"] .param-chip').getBoundingClientRect())`))
+    await drag({ x: chip.x + chip.width / 2, y: chip.y + chip.height / 2 }, { x: chip.x + chip.width / 2, y: chip.y + 200 })
+    await toOutput(await paramId('xs'))
+    const text = await definitionText()
+    await back(); await back()
+    const edited = await playText()
+    const saved = (await project()).nodes['prelude:append']
+    await openBody('view')
+    await clickToken('++')
+    await js(`document.querySelector('#restore-library').click()`); await sleep(400)
+    await back()
+    const restored = await playText()
+    const gone = !(await project()).nodes['prelude:append']
+    expect(crumb === 'ƒ view / ƒ (++) · taken over' && saved?.library && text.split('\n')[1] === '(++) xs ys = xs', `${crumb} / ${text}`)
+    expect(edited === 'Count: ' && /^Count: [0-9]+$/.test(restored) && gone, `${edited} / ${restored} / ${gone}`)
+    return `${edited} → ${restored}`
+  })
+  await check('a parameter is moved: the body, the definition and every call follow', async () => {
+    await createFunction('pairUp', ['a', 'b'])
+    const { graph } = await activeGraph()
+    const fnId = Object.values(graph).find((n) => n.label === 'pairUp' && n.custom).id
+    await clickNode(fnId)
+    await js(`document.querySelector('.param-move[data-index="1"]').click()`); await sleep(300)
+    const p = await project()
+    const order = Object.values(p.functionBodies[fnId]).filter((n) => n.type === 'parameter').map((n) => n.label)
+    expect(p.nodes[fnId].params.join() === 'b,a' && order.join() === 'b,a', `${p.nodes[fnId].params} / ${order}`)
+    return 'pairUp a b → pairUp b a'
   })
   await check('a signature is pinned chevron by chevron with type nodes, checked by inference', async () => {
     await createFunction('pinMe', ['x'])

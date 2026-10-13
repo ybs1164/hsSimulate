@@ -11,14 +11,15 @@ import { customizeDerived, isPristineOverride, migrateTypeEdit, primLabel, primi
 import { METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
-import { asciiType, printDefinition } from './haskellPrint.js'
-import { addParameter, hasVariadicSlots, removeParameter, renameFunction, renameParameter } from './signature.js'
+import { asciiType, printDefinitionTokens } from './haskellPrint.js'
+import { buildDefinitionView, isEditableView, restoreDefinition, takeOverDefinition, viewIdOf } from './definitionViews.js'
+import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
 import { buildDice } from './examples/dice.js'
 import { renderWidget } from './player.js'
-import { PRELUDE, preludeDefs, preludeTypeDefs } from './library.js'
+import { PRELUDE, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
@@ -95,8 +96,10 @@ const nodes = {
   eq: { id: 'eq', type: 'function', x: 820, y: 2390, label: '(==)', params: ['x', 'y'], mounted: [null, null], paramScopes: ['local', 'local'], color: '#3cbe9e', scope: 'main', builtin: 'eq', readonly: true, expression: 'x == y' },
   select: { id: 'select', type: 'function', x: 820, y: 2610, label: 'select', params: ['condition', 'whenTrue', 'whenFalse'], mounted: [null, null, null], paramScopes: ['local', 'local', 'local'], color: '#c77dd6', scope: 'main', builtin: 'select', readonly: true, expression: 'λc a b. c ? a : b' },
 }
-function activeNodes() { return state.activeFunction ? functionBodies[state.activeFunction] : nodes }
-function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${nodes[id]?.label || '?'}`).join(' / ') : '⌂ top level' }
+function activeNodes() { return state.activeFunction ? allBodies[state.activeFunction] : nodes }
+// A read-only definition view (or a λ inside one) is on screen: look, don't touch.
+function viewingReadonly() { return Boolean(state.activeFunction && !functionBodies[state.activeFunction] && viewBodies[state.activeFunction]) }
+function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : nodes[state.activeFunction]?.library ? ' · taken over' : '') : '⌂ top level' }
 const functionBodies = {
   add: {
     inputX: { id: 'add-input-x', type: 'parameter', typeName: 'Int', x: 110, y: 180, label: 'x', value: 'x', color: '#4f8ef7' },
@@ -151,9 +154,67 @@ const derivedDefs = {}
 let classes = {}
 let resolvedClasses = []
 const classDefs = {}
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] })
+// Read-only definition views (definitionViews.js): a builtin, Prelude or
+// derived function shown as a graph. `viewDefs`/`viewBodies` hold each
+// view's own definition (id `view:<function id>`) and body, plus the λs it
+// uses; rebuilt when the types change, never saved.
+const viewDefs = {}
+const viewBodies = {}
+const laidOutViews = new Set()
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] ?? viewDefs[id] })
+const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
+function clearViews() {
+  for (const id of Object.keys(viewDefs)) delete viewDefs[id]
+  for (const id of Object.keys(viewBodies)) delete viewBodies[id]
+  laidOutViews.clear()
+  if ([state.activeFunction, ...state.functionStack].some((id) => id && !allBodies[id])) { state.activeFunction = null; state.functionStack = [] }
+}
+// The view of the builtin/Prelude/derived function `defId` (built on first
+// use), or null for a function of your own — that has a real body.
+function ensureView(defId, slots = 0) {
+  const def = definitions[defId]
+  if (!def || def.custom || def.view || def.lambda) return null
+  const viewId = viewIdOf(defId, def.builtin === 'listOf' ? slots : null)
+  if (!viewDefs[viewId]) {
+    const view = buildDefinitionView(def, (id) => definitions[id], { slots })
+    Object.assign(viewDefs, view.defs)
+    Object.assign(viewBodies, view.bodies)
+  }
+  return viewId
+}
+function openDefinitionView(defId, slots = 0) {
+  if (nodes[defId]?.library) return enterFunction(defId)
+  const viewId = ensureView(defId, slots)
+  if (viewId) enterFunction(viewId)
+}
+// Take the Prelude function a view shows over: it becomes your own graph
+// (definitionViews.js's takeOverDefinition), opened in place of the view.
+function editDefinition(viewId) {
+  const defId = viewDefs[viewId]?.view
+  const def = definitions[defId]
+  const node = def && takeOverDefinition({ nodes, functionBodies }, def, (id) => definitions[id])
+  if (!node) return showToast(`${def?.label ?? defId} is a primitive — it has no definition to edit`)
+  for (const id of Object.keys(functionBodies)) if (id === defId || id.startsWith(`${defId}/λ`)) layoutBody(functionBodies[id])
+  if (state.activeFunction === viewId) state.activeFunction = defId
+  else enterFunction(defId)
+  state.selected = 'output'
+  renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
+  showToast(`${def.label} is your own graph now — every call runs it (↺ goes back to the Prelude's)`)
+}
+// Drop a taken-over definition: calls run the Prelude's again.
+function restoreLibraryDefinition(id) {
+  const label = definitions[id]?.label
+  const chain = [...state.functionStack, state.activeFunction]
+  const at = chain.findIndex((f) => f === id || f?.startsWith(`${id}/λ`))
+  if (at >= 0) { const kept = chain.slice(0, at); state.activeFunction = kept.pop() || null; state.functionStack = kept }
+  restoreDefinition({ nodes, functionBodies }, id)
+  state.selected = state.activeFunction ? 'output' : 'add'
+  renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); fitToView()
+  showToast(`${label} is the Prelude's definition again`)
+}
 function applyTypes(next, nextClasses = classes) {
   types = next
+  clearViews()
   Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
   const derived = derivedDefinitions(types)
   ;[...derived, ...primitiveDefinitions(derived)].forEach((def) => { derivedDefs[def.id] = def })
@@ -254,7 +315,7 @@ function runBlocker(graph, nodeId) {
 // Definitions in `nodes` that aren't drawn on the main canvas or listed as
 // functions: a λ's lifted function (its call node is the λ) and a
 // customized derived function (listed under its type).
-const isHiddenDefinition = (n) => !!(n?.lambda || n?.override)
+const isHiddenDefinition = (n) => !!(n?.lambda || n?.override || n?.library)
 // Every name a function definition already has, but `exceptId`'s: custom
 // functions, builtins, Prelude, and everything derived from types.
 function functionLabelsExcept(exceptId = null) {
@@ -300,6 +361,7 @@ function renderParameterLibrary() {
   library.querySelectorAll('.parameter-item').forEach((item) => { item.onclick = () => addParameterUse(item.dataset.parameterId) })
 }
 function addParameterUse(parameterId) {
+  if (readonlyBlocked()) return
   const graph = activeNodes()
   const parameter = graph[parameterId]
   if (!parameter) return
@@ -315,6 +377,7 @@ function addParameterUse(parameterId) {
 // slots left open are what the λ still takes.
 let lambdaCount = 0
 function createLambda() {
+  if (readonlyBlocked()) return
   const graph = activeNodes()
   const id = `lambda-${Date.now()}-${++lambdaCount}`
   nodes[id] = { id, type: 'function', label: 'λ', params: ['x'], mounted: [null], paramScopes: ['local'], scope: 'local', color: '#8b7cf2', custom: true, lambda: true, x: -9999, y: -9999 }
@@ -333,8 +396,13 @@ function renderPreludeLibrary() {
   document.querySelector('#prelude-library').innerHTML = PRELUDE.map(([group, fns]) => `<div class="prelude-group">${group}</div>${fns.map(([builtin]) => {
     const def = preludeDefs[`prelude:${builtin}`]
     const sch = builtin === 'listOf' ? listOfScheme(3) : builtinSchemes[builtin]
-    return `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${def.label}</b><small>${qualChainHtml(sch.preds, sch.type)}</small></button>`
+    const mine = nodes[def.id]?.library // taken over: your own graph runs
+    return `<button class="derived-item${mine ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${mine ? ' · your own graph (double-click a call to open it)' : ''}"><b>${def.label}${mine ? ' ✎' : ''}</b><small>${qualChainHtml(sch.preds, sch.type)}</small></button>`
   }).join('')}`).join('')
+  // The Prelude's own data types (library.js): their constructors and eliminators.
+  const byType = {}
+  for (const def of Object.values(preludeTypeDefs)) (byType[def.derived.type] ||= []).push(def)
+  document.querySelector('#prelude-library').insertAdjacentHTML('beforeend', Object.values(preludeTypes).map((d) => `<div class="prelude-group" title="${escapeAttr(d.source)}">${d.keyword} ${escapeAttr([d.name, ...d.params].join(' '))}</div>${(byType[d.name] || []).map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}`).join(''))
   document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
   applySearch()
 }
@@ -890,7 +958,14 @@ function customFunctionChoices(selected) {
   return Object.values(nodes).filter((n) => n.custom && !isHiddenDefinition(n)).map((n) => `<option value="${n.id}" ${n.id === selected ? 'selected' : ''}>${escapeAttr(n.label)}</option>`).join('')
 }
 
+// Shown (and true) when the canvas is a read-only definition view.
+function readonlyBlocked() {
+  if (!viewingReadonly()) return false
+  showToast('This is a read-only definition — go back to edit, or take it over (Edit definition)')
+  return true
+}
 function addFunctionCall(sourceId) {
+  if (readonlyBlocked()) return
   const source = definitions[sourceId]
   if (!source) return
   const graph = activeNodes()
@@ -1143,7 +1218,7 @@ function roundedRectPath(c, x, y, w, h, r) {
 // One inferGraph() pass over `graph` (defaults to whatever's on screen). Not
 // cached — cheap for this app's graph sizes, and always fresh so a
 // connect/disconnect is reflected on the very next call, no invalidation needed.
-function typePass(graph = activeNodes()) { return inferGraph(definitions, functionBodies, graph) }
+function typePass(graph = activeNodes()) { return inferGraph(definitions, allBodies, graph) }
 // Shared per-draw() letter assignment (a, b, c, ...) so every node label and
 // port-type badge drawn in the same pass agrees on which variable is which —
 // reset at the top of draw(). A caller outside that pass (e.g. the sidebar
@@ -1247,7 +1322,7 @@ function chainInfo(node, pass) {
       opts: { preds: entry.preds, pinned: owners.map((o) => o?.annotation), bad: owners.map((o) => o && problems[o.id]), applied: entry.applied, editable: owners.map(Boolean) },
     }
   }
-  const pinnable = !!state.activeFunction && (node.type === 'parameter' || node.type === 'output')
+  const pinnable = !!state.activeFunction && !viewingReadonly() && !nodes[state.activeFunction]?.library && (node.type === 'parameter' || node.type === 'output')
   return {
     segments: [valueTypeOfEntry(entry)],
     targets: [pinnable ? { fnId: state.activeFunction, nodeId: node.id } : null],
@@ -1303,7 +1378,7 @@ function drawSignatureBar() {
   signatureBar.hidden = !info
   if (!info) return
   const names = [...bodyParams(fnId).map((p) => p.label), 'result']
-  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">click a block to set its type</span>`
+  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'click a block to set its type'}</span>`
   wireChain(signatureBar, info.targets)
 }
 
@@ -1651,12 +1726,13 @@ function draw() {
     else drawValueChip(n, pass, selected, snapHighlight)
   })
   drawUnfoldedLinks()
+  drawLinkHighlights()
   updatePortEditor(pass)
   document.querySelector('#node-count').textContent = Object.keys(activeNodes()).length
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
   document.querySelector('#back-graph').hidden = !state.activeFunction
-  document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${nodes[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
+  document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
   if (!state.drag) scheduleCheckpoint()
@@ -1799,7 +1875,8 @@ function fixCallSlots(node) {
   while (node.params.length < arity) { node.params.push(''); node.mounted.push(null); node.paramScopes?.push('local') }
 }
 function isSignatureEditable(node) {
-  if (nodes[node.id] === node && node.custom) return 'signature'
+  if (viewingReadonly()) return false
+  if (nodes[node.id] === node && node.custom && !node.library) return 'signature' // a taken-over definition keeps the library's type
   if (nodes[node.sourceFunctionId]?.lambda) return 'signature'
   if (hasVariadicSlots(node, definitions)) return 'elements'
   return false
@@ -1884,6 +1961,7 @@ function updatePortEditor(pass = typePass()) {
       chip.title = '드래그해서 떼어내기'
       chip.addEventListener('pointerdown', (event) => {
         event.preventDefault(); event.stopPropagation()
+        if (viewingReadonly()) { state.selected = mountedNode.id; updateInspector(); draw(); return }
         const world = canvasPoint(event)
         const moving = detachMounted(node, index)
         if (!moving) return
@@ -1898,6 +1976,7 @@ function updatePortEditor(pass = typePass()) {
       input.className = 'param-value'; input.type = 'text'
       input.placeholder = slotExpectsFunction(node, index, pass) ? 'ƒ' : '?'
       input.value = rawValue; input.title = `Parameter ${index + 1}`
+      input.readOnly = viewingReadonly()
       if (pass.perNode.get(node.id)?.invalidSlots?.includes(index)) { input.classList.add('invalid'); input.title = `"${rawValue}" doesn't fit ${paramDisplayName(node, index)} :: ${expectedParamType(node, index, activeNodes(), labelNamer, pass)}` }
       input.style.fontSize = `${11 * state.zoom}px`
       input.style.paddingTop = `${4 * state.zoom}px`
@@ -2066,13 +2145,101 @@ function recheckLawNodes() {
 }
 // The custom function `id` as Haskell: its signature and its definition,
 // read back from the body graph (src/haskellPrint.js).
-function definitionBlock(id) {
-  const def = nodes[id]
-  if (!def) return ''
-  const code = printDefinition(id, definitions, functionBodies)
-  if (!code) return ''
-  const signature = `${def.label} :: ${asciiType(functionSignature(def, nodes))}`
-  return `<div class="property"><label>DEFINITION</label><pre class="haskell">${escapeAttr(signature)}\n${escapeAttr(code)}</pre></div>`
+// The function `id` as Haskell — a function of your own, or a definition
+// view — read back from its body graph (haskellPrint.js). Every token is
+// linked to the node it came from: hovering one lights the node up on the
+// canvas, clicking it goes there (opening the body if need be), and the
+// selected node's tokens are marked.
+function definitionBlock(id, title = 'DEFINITION') {
+  const def = definitions[id]
+  const tokens = def && printDefinitionTokens(id, definitions, allBodies)
+  if (!tokens) return ''
+  const type = def.scheme ? showQual(def.scheme.preds, def.scheme.type) : functionSignature(def, nodes)
+  const note = def.note ? `\n-- ${def.note}` : ''
+  return `<div class="property definition"><label>${escapeAttr(title)}</label><pre class="haskell">${escapeAttr(`${def.label} :: ${asciiType(type)}`)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></div>`
+}
+// A call's DEFINITION: your own function's, or the definition graph of a
+// library one — with the way into it.
+function callDefinitionBlock(n) {
+  const defId = n.sourceFunctionId || n.id
+  const def = definitions[defId]
+  if (!def || def.lambda) return ''
+  if (def.method) return `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(def.expression)}</div></div>` // a method of a class you declared: its instances are in the class editor
+  if (def.custom) return `${definitionBlock(defId)}${def.library ? '<button class="use-again" id="open-definition">Open definition → <small>(your graph)</small></button>' : ''}`
+  const viewId = ensureView(defId, n.params.length)
+  if (!viewId) return ''
+  return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>${isEditableView(viewId, viewDefs) ? '(a graph you can take over)' : '(a primitive · read-only)'}</small></button>`
+}
+function tokensHtml(tokens) {
+  const graph = activeNodes()
+  const marked = new Set([state.selected, ...state.multi])
+  // A reference stands for its target: selecting either marks both.
+  Object.values(graph).forEach((n) => { if (n.type === 'ref' && (marked.has(n.id) || marked.has(n.target))) { marked.add(n.id); marked.add(n.target) } })
+  return tokens.map((t) => {
+    if (!t.id) return escapeAttr(t.text)
+    const linked = t.scope === state.activeFunction && marked.has(t.id)
+    return `<span class="tok ${t.role || ''} ${linked ? 'linked' : ''}" data-scope="${escapeAttr(t.scope)}" data-node="${escapeAttr(t.id)}"${t.slot === undefined ? '' : ` data-slot="${t.slot}"`}>${escapeAttr(t.text)}</span>`
+  }).join('')
+}
+function wireDefinitionTokens() {
+  inspector.querySelectorAll('.haskell .tok').forEach((span) => {
+    const target = { scope: span.dataset.scope, id: span.dataset.node, slot: span.dataset.slot === undefined ? undefined : Number(span.dataset.slot) }
+    span.onmouseenter = () => { state.hover = target; draw() }
+    span.onmouseleave = () => { state.hover = null; draw() }
+    span.onclick = () => goToToken(target)
+  })
+}
+// Show the node a token was read from: open the body it lives in, then select it.
+function goToToken({ scope, id }) {
+  state.hover = null
+  if (scope !== state.activeFunction) {
+    if (!allBodies[scope]) return
+    enterFunction(scope)
+    if (state.activeFunction !== scope) return
+  }
+  if (activeNodes()[id]) { state.multi.clear(); state.selected = id }
+  updateInspector(); draw()
+}
+// Where on the canvas a node is: the node itself, or — while it sits folded
+// in a slot — that slot (on the nearest visible host).
+function visibleAnchor(id, slot) {
+  let n = activeNodes()[id]
+  let index = slot
+  for (let guard = 0; n && !isVisible(n) && guard < 50; guard++) {
+    const at = slotHost(n)
+    if (!at) return null
+    n = at.host; index = at.index
+  }
+  return n ? { node: n, slot: index } : null
+}
+// A highlight ring around what the hovered DEFINITION token was read from.
+function drawLinkHighlights() {
+  if (!state.hover || state.hover.scope !== state.activeFunction) return
+  const anchor = visibleAnchor(state.hover.id, state.hover.slot)
+  if (!anchor) return
+  const { node, slot } = anchor
+  ctx.save()
+  ctx.strokeStyle = '#f0a020'; ctx.lineWidth = 3; ctx.setLineDash([])
+  if (slot !== undefined && isFunction(node)) {
+    const c = slotScreenCenter(node, slot)
+    ctx.beginPath(); ctx.arc(c.x, c.y, (SLOT_D / 2 + 6) * state.zoom, 0, Math.PI * 2); ctx.stroke()
+  } else {
+    const r = isFunction(node) ? functionBlockScreenRect(node) : valueBlockScreenRect(node)
+    const pad = 7 * state.zoom
+    roundedRectPath(ctx, r.left - pad, r.top - pad, r.right - r.left + pad * 2, r.height + pad * 2, r.height / 2 + pad)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+// In a read-only view: what a node is, its type, and the way into what it calls.
+function readonlyInspector(n) {
+  const active = state.activeFunction
+  if (n.type === 'output') {
+    const def = definitions[active]
+    const editable = def?.view && isEditableView(active, viewDefs)
+    return `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>${escapeAttr(def?.label ?? '')}</b><small>Definition · read-only</small></div><span class="live">VIEW</span></div>${definitionBlock(active)}${editable ? '<button class="evaluate" id="edit-definition">✎ &nbsp; Edit definition</button>' : ''}<div class="inspector-note">${editable ? 'How the Prelude defines it. Edit definition makes it your own graph — every call then runs yours, checked against the same type.' : 'A read-only definition: nodes can be moved to look, not changed.'}</div>`
+  }
+  return `<div class="selected-node"><span class="selected-icon">${n.type === 'function' ? 'ƒ' : '·'}</span><div><b>${escapeAttr(nodeDisplayText(n))}</b><small>${escapeAttr(nodeTypeLabel(n))} · read-only</small></div></div><div class="property"><label>TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${n.type === 'function' ? callDefinitionBlock(n) : ''}${definitions[n.sourceFunctionId]?.lambda ? '<button class="use-again" id="open-body">Open body →</button>' : ''}`
 }
 function useAgainButton(n) {
   return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
@@ -2084,6 +2251,7 @@ function deleteButton(n) {
 // mounted and freeing whatever was mounted into it (placed beside it). A
 // custom function's definition takes its body with it.
 function deleteNode(id) {
+  if (readonlyBlocked()) return
   const graph = activeNodes()
   const n = graph[id]
   if (!n) return
@@ -2125,6 +2293,7 @@ function functionNameRow(n) {
 function customizedRow(n) {
   const id = n.sourceFunctionId || n.id
   const def = nodes[id]
+  if (def?.library) return `<div class="property"><label>TAKEN OVER</label><div class="connection-tag">Your own graph for the Prelude's ${escapeAttr(def.label)} — every call runs it, and it keeps the Prelude's type</div><button class="law-check" id="restore-library" data-id="${escapeAttr(id)}">↺ Back to the Prelude's definition</button></div>`
   if (!def?.override) return ''
   return `<div class="property"><label>CUSTOMIZED</label><div class="connection-tag">Your own definition of ${escapeAttr(def.label)}, derived from type ${escapeAttr(def.override)} (its body can use ${escapeAttr(primLabel(def.label))})</div><button class="law-check" id="reset-derived" data-id="${id}">Reset to the derived definition</button></div>`
 }
@@ -2143,16 +2312,30 @@ function signatureChainHtml(fnId) {
   inspectorChainTargets = info?.targets || []
   return info ? chainHtml(info.segments, createNamer(), info.opts) : '?'
 }
+// Inside a body, whatever is selected, the body's own definition is shown
+// too (its tokens marking the selection) — the way back to any other node.
+function enclosingDefinition(n) {
+  const fn = state.activeFunction
+  if (!fn || n.type === 'output' || definitions[fn]?.lambda) return ''
+  return definitionBlock(fn, `DEFINITION · ƒ ${definitions[fn]?.label ?? ''}`)
+}
 function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
-  inspector.innerHTML = n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `<div class="property"><label>SIGNATURE — click a chevron to pin it</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
+  inspector.innerHTML = (viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `${nodes[state.activeFunction]?.library ? customizedRow(nodes[state.activeFunction]) : ''}<div class="property"><label>SIGNATURE${nodes[state.activeFunction]?.library ? ' — the Prelude\'s, kept' : ' — click a chevron to pin it'}</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE${isSignatureEditable(n) === 'signature' ? ' — click a chevron to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${nodes[n.sourceFunctionId || n.id]?.custom ? definitionBlock(n.sourceFunctionId || n.id) : (() => { const expr = n.expression || definitions[n.sourceFunctionId]?.expression; return expr ? `<div class="property"><label>DEFINITION</label><div class="connection-tag">${escapeAttr(expr)}</div></div>` : '' })()}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
-    : renderValueInspector(n)
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE${isSignatureEditable(n) === 'signature' ? ' — click a chevron to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${callDefinitionBlock(n)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />${i ? `<button class="param-move" data-index="${i}" title="Move this parameter one place left — the body, the definition and every call follow">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    : renderValueInspector(n)) + enclosingDefinition(n)
   const chain = inspector.querySelector('.inspector-chain')
   if (chain) wireChain(chain, inspectorChainTargets)
+  wireDefinitionTokens()
+  const openDefinition = document.querySelector('#open-definition')
+  if (openDefinition) openDefinition.onclick = () => openDefinitionView(n.sourceFunctionId || n.id, n.params.length)
+  const editDefinitionButton = document.querySelector('#edit-definition')
+  if (editDefinitionButton) editDefinitionButton.onclick = () => editDefinition(state.activeFunction)
+  const restoreLibrary = document.querySelector('#restore-library')
+  if (restoreLibrary) restoreLibrary.onclick = () => restoreLibraryDefinition(restoreLibrary.dataset.id)
   const evaluate = document.querySelector('#evaluate')
   if (evaluate) evaluate.onclick = () => executeFunction(n)
   const entryToggle = document.querySelector('#entry-toggle')
@@ -2167,6 +2350,13 @@ function updateInspector() {
   }
   const resetCustom = document.querySelector('#reset-derived')
   if (resetCustom) resetCustom.onclick = () => resetDerivedFunction(resetCustom.dataset.id)
+  document.querySelectorAll('.param-move').forEach((button) => {
+    button.onclick = () => {
+      const i = Number(button.dataset.index)
+      moveParameter({ nodes, functionBodies }, n.id, i, i - 1)
+      renderFunctionLibrary(); updateInspector(); draw()
+    }
+  })
   document.querySelectorAll('.param-rename').forEach((input) => {
     input.onchange = () => {
       if (!renameParameter({ nodes, functionBodies }, n.id, Number(input.dataset.index), input.value.trim())) showToast(`"${input.value}" can't be a parameter name here (lowercase identifier, not already used)`)
@@ -2208,6 +2398,7 @@ function updateInspector() {
 // can be plugged in and played again later.
 function executeFunction(fn) {
   if (!isFunction(fn)) return
+  if (viewingReadonly()) return showToast('This is a read-only definition — play the function where it is used')
   const graph = activeNodes()
   const entry = typePass(graph).perNode.get(fn.id)
   const bad = entry?.invalidSlots?.[0]
@@ -2270,6 +2461,7 @@ function hitNode(x, y) {
 // clobber a slot that already reads as meaningfully filled.
 const PRECISE_SLOT_RADIUS = 60
 function findSnapTarget(dragged) {
+  if (viewingReadonly()) return null // nodes may be moved around to look, never reconnected
   if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.mountedTo) return null // a plugged-in node stays plugged where it is
   let best = null, bestDist = SNAP_RADIUS
   Object.values(activeNodes()).filter(isFunction).forEach((target) => {
@@ -2445,19 +2637,26 @@ canvas.addEventListener('click', (event) => {
 })
 // A single click only selects (so the inspector shows the function);
 // double-clicking a custom function — its definition or a call to it — on
-// `main` opens its body, as does the inspector's "Open body".
+// `main` opens its body, as does the inspector's "Open body". Double-clicking
+// a call to anything else opens its definition (a read-only view, or what
+// you took over), as does "Open definition".
 canvas.addEventListener('dblclick', (event) => {
   const p = canvasPoint(event)
   const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
   const definitionId = selected && (selected.sourceFunctionId || selected.id)
-  if (selected && nodes[definitionId]?.lambda) enterFunction(definitionId)
+  if (selected && definitions[definitionId]?.lambda) enterFunction(definitionId)
+  else if (selected && nodes[definitionId]?.library) enterFunction(definitionId)
   else if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
+  else if (selected && !definitions[definitionId]?.custom) openDefinitionView(definitionId, selected.params.length)
 })
 function enterFunction(id) {
   if (nodes[id]?.readonly) return
-  if (!functionBodies[id]) functionBodies[id] = { output: { id: 'output', type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
-  // A λ opens inside the body it was made in (Back returns there); anything else opens from main.
-  state.functionStack = nodes[id]?.lambda && state.activeFunction ? [...state.functionStack, state.activeFunction] : []
+  const view = !functionBodies[id] && viewBodies[id]
+  if (view && !laidOutViews.has(id)) { layoutBody(view); laidOutViews.add(id) }
+  if (!view && !functionBodies[id]) functionBodies[id] = { output: { id: 'output', type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
+  // A λ or a definition (a view, or one taken over) opens inside the graph it was opened from (Back returns there); a function of your own opens from main.
+  const nested = definitions[id]?.lambda || definitions[id]?.view || nodes[id]?.library
+  state.functionStack = nested && state.activeFunction ? [...state.functionStack, state.activeFunction] : []
   state.activeFunction = id
   state.selected = 'output'
   renderFunctionLibrary()
@@ -2746,7 +2945,7 @@ function loadProject(project) {
   if (classEditor) { if (classes[classEditor.original]) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }
   entryId = project.entry
   outputId = project.outputId
-  if (state.activeFunction && !functionBodies[state.activeFunction]) state.activeFunction = null
+  if (state.activeFunction && !allBodies[state.activeFunction]) state.activeFunction = null
   if (!activeNodes()[state.selected]) state.selected = state.activeFunction ? 'output' : 'add'
   recheckLawNodes()
   renderFunctionLibrary(); updateInspector(); draw()
@@ -2832,7 +3031,7 @@ function copySelection() {
   showToast(`Copied ${clipboard.length} node${clipboard.length > 1 ? 's' : ''}`)
 }
 function pasteClipboard() {
-  if (!clipboard) return
+  if (!clipboard || readonlyBlocked()) return
   const graph = activeNodes()
   const stamp = Date.now()
   const ids = new Map(clipboard.map((n, i) => [n.id, `${n.id.replace(/-copy-\d+-\d+$/, '')}-copy-${stamp}-${i}`]))
@@ -2887,6 +3086,7 @@ document.querySelector('.add-node').addEventListener('click', createCustomFuncti
 document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
 document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
 document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
+  if (readonlyBlocked()) return
   if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
   if (item.dataset.type === 'lambda') return createLambda()
   const graph = activeNodes()
