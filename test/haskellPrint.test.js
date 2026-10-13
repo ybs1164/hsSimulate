@@ -26,7 +26,7 @@ test('a value used twice is shared with where; lists print as literals', () => {
   const view = print('view')
   assert.match(view, /^view m = column \[text \("Clicks: " \+\+ showCompact cl\), /)
   assert.match(view, /progress \(cl \/ 25\)\]\n  where\n    cl = fromIntegral \(clicks \(wallet m\)\)$/)
-  assert.equal(print('onTick'), 'onTick dt m = set elapsed t (over wallet (Wallet (rate m * (div t 1000 - div e 1000)) +) m)\n  where\n    e = elapsed m\n    t = e + round (dt * 1000)')
+  assert.equal(print('onTick'), 'onTick dt m = set elapsed t (over wallet (Wallet (rate m * (div t 1000 - div e 1000)) +) m)\n  where\n    t = e + round (dt * 1000)\n    e = elapsed m')
 })
 
 test('a gap before an applied slot becomes a lambda', () => {
