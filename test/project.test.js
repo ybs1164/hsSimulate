@@ -55,6 +55,19 @@ test('mergeBuiltins keeps user layout but takes code-owned fields from code', ()
   assert.equal(merged.entry, null)
 })
 
+test('mergeBuiltins keeps a node plugged into a call whose id contains colons', () => {
+  const saved = {
+    nodes: {
+      'call-prelude:show-1': { id: 'call-prelude:show-1', type: 'function', sourceFunctionId: 'prelude:show', params: ['5'], mounted: ['five'] },
+      five: { id: 'five', type: 'number', value: '5', mountedTo: 'call-prelude:show-1:0', connected: true },
+    },
+    functionBodies: {},
+    entry: null,
+    outputId: 0,
+  }
+  assert.equal(mergeBuiltins(saved, builtinNodes, builtinBodies).nodes.five.mountedTo, 'call-prelude:show-1:0')
+})
+
 test('history skips no-op records and supports undo/redo', () => {
   const h = createHistory()
   h.reset('a')

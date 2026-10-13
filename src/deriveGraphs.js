@@ -93,7 +93,7 @@ function bodyBuilder(fnId, paramNames) {
   return { params, call, finish }
 }
 
-// Every node plugged into a slot is unfolded: drawn on the canvas with a
+// Every node plugged into a slot is drawn on the canvas (calls start open) with a
 // link into its slot. A rough tree layout (arguments to the left of the call
 // using them, each subtree in its own band) — the editor lays it out again
 // with the real block widths (main.js's layoutTree).
@@ -109,7 +109,6 @@ function layout(graph) {
     kids(n).forEach((k) => {
       k.mountedTo = `${n.id}:${n.mounted.indexOf(k.id)}`
       k.connected = true
-      k.unfolded = true
       place(k, x - COLUMN, y)
       y += height(k)
     })

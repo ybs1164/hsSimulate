@@ -148,7 +148,6 @@ function reshapeSlots(graph, node, slotMap) {
     if (child && !kept.has(i)) {
       child.mountedTo = null
       child.connected = false
-      child.unfolded = false
       child.x = (node.x ?? 0) + 150 + i * 40
       child.y = (node.y ?? 0) + 120
     }

@@ -82,7 +82,7 @@ export function mergeBuiltins(project, builtinNodes, builtinBodies) {
   }
   for (const [id, node] of Object.entries(builtinNodes)) if (!nodes[id]) nodes[id] = structuredClone(node)
   for (const node of Object.values(nodes)) {
-    const host = node.mountedTo?.split(':')[0]
+    const host = node.mountedTo?.slice(0, node.mountedTo.lastIndexOf(':')) // ids can contain colons themselves
     if (host && !Object.values(nodes).some((n) => n.id === host)) {
       node.mountedTo = null
       node.connected = false

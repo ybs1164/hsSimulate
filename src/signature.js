@@ -28,7 +28,6 @@ function unplugSlot(graph, node, index) {
   if (child) {
     child.mountedTo = null
     child.connected = false
-    child.unfolded = false
     child.x = (node.x ?? 0) + 150
     child.y = (node.y ?? 0) + 120
   }

@@ -37,6 +37,8 @@ app.innerHTML = `
         <div class="side-heading"><div><span class="eyebrow">WORKSPACE</span><h1>Untitled graph</h1></div><button class="more">•••</button></div>
         <div class="search"><span>⌕</span><input aria-label="Search nodes" placeholder="Search nodes" /><kbd>⌘ K</kbd></div>
         <nav class="node-library">
+          <div class="library-title" id="parameter-title" hidden><span>PARAMETERS</span></div>
+          <div id="parameter-library"></div>
           <div class="library-title"><span>NODES</span><button class="add-node" aria-label="Add node">+</button></div>
           <div id="function-library"></div>
           <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
@@ -55,7 +57,7 @@ app.innerHTML = `
       </aside>
       <section class="canvas-panel">
         <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Unfold every plugged-in expression onto the canvas">⤢</button><button id="fold-all" title="Fold every expression back into its slot">⤡</button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Open every function: show what is plugged into its slots on the canvas">⤢</button><button id="fold-all" title="Fold every function: keep what is plugged in inside its slots">⤡</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
       <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
@@ -292,9 +294,33 @@ function renderFunctionLibrary() {
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
   })
+  renderParameterLibrary()
   renderTypeLibrary()
   renderClassLibrary()
   applySearch()
+}
+// Inside a function body, its parameters are listed in the workspace: each
+// click puts another use of that parameter on the canvas as a value node (a
+// reference to the body's parameter, shown just as the parameter itself).
+function renderParameterLibrary() {
+  const graph = activeNodes()
+  const params = state.activeFunction ? Object.values(graph).filter((n) => n.type === 'parameter') : []
+  document.querySelector('#parameter-title').hidden = !params.length
+  const library = document.querySelector('#parameter-library')
+  library.innerHTML = params.map((p) => {
+    const q = resolvedValueQual(p)
+    return `<button class="library-item parameter-item" data-parameter-id="${escapeAttr(p.id)}" title="Add a use of this parameter to the canvas"><span class="lib-icon number-icon">#</span><span><b>${escapeAttr(p.label)}</b><small>${escapeAttr(showQual(q.preds, q.type))}</small></span></button>`
+  }).join('')
+  library.querySelectorAll('.parameter-item').forEach((item) => { item.onclick = () => addParameterUse(item.dataset.parameterId) })
+}
+function addParameterUse(parameterId) {
+  const graph = activeNodes()
+  const parameter = graph[parameterId]
+  if (!parameter) return
+  const id = `ref-${Date.now()}`
+  graph[id] = { id, type: 'ref', target: parameter.id, label: parameter.label, ...freePosition(graph, CHIP_W) }
+  state.selected = id
+  updateInspector(); draw()
 }
 // A λ (anonymous function), by lambda lifting: a hidden custom function
 // owned by the graph it was made in, plus a call node to it — which *is* the
@@ -1112,7 +1138,11 @@ function toScreen(world) { return { x: world.x * state.zoom + state.offset.x, y:
 function slotWorldCenter(node, index) { return { x: node.x + SLOT_START + index * SLOT_STRIDE, y: node.y } }
 function slotScreenCenter(node, index) { return toScreen(slotWorldCenter(node, index)) }
 function functionBlockLeft(node) { return node.x - FN_LEFT }
+// A folded call shows no slots: just its head and a "⋯" where they were.
+function isFolded(node) { return !!node.folded && node.params.length > 0 }
+const FOLDED_W = 124     // world px from node.x to a folded call's right edge
 function functionBlockRight(node) {
+  if (isFolded(node)) return node.x + FOLDED_W
   return node.params.length > 0
     ? node.x + SLOT_START + (node.params.length - 1) * SLOT_STRIDE + SLOT_D / 2 + FN_TAIL
     : node.x + 78
@@ -1175,6 +1205,7 @@ function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)
 // reset to a hardcoded zoom/offset and left anything below the fold (e.g.
 // the lower rows of the 15-node main graph) cut off below the canvas edge.
 function fitToView() {
+  placeNewArguments() // measure where new arguments will actually be drawn
   const w = canvas.clientWidth, h = canvas.clientHeight
   const bounds = graphBounds()
   const PAD = 36
@@ -1280,13 +1311,21 @@ function canConnect(source, target, index) {
     return false
   }
 }
-function nodeTypeLabel(node) { return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : node.type === 'law' ? 'Law claim' : `Number · ${node.annotation || 'literal'}` }
+// A reference to a function body's parameter (from the workspace's
+// PARAMETERS list) is just another use of that parameter: it reads and is
+// labelled as the parameter itself, with no "↪".
+function parameterOf(node, graph = activeNodes()) {
+  const target = node?.type === 'ref' ? graph[node.target] : node
+  return target?.type === 'parameter' ? target : null
+}
+function nodeName(node, graph = activeNodes()) { return parameterOf(node, graph)?.label ?? node.label }
+function nodeTypeLabel(node) { if (parameterOf(node)) return 'Parameter'; return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : node.type === 'law' ? 'Law claim' : `Number · ${node.annotation || 'literal'}` }
 // The short text a node shows inside its chip / a slot's nested chip. A
 // reference shows what it refers to, so it always reads the same as its
 // original even after the original's value is edited.
 function nodeDisplayText(node, graph = activeNodes()) {
   if (!node) return '?'
-  if (node.type === 'ref') return `↪ ${nodeDisplayText(graph[node.target], graph)}`
+  if (node.type === 'ref') return parameterOf(node, graph) ? nodeDisplayText(graph[node.target], graph) : `↪ ${nodeDisplayText(graph[node.target], graph)}`
   if (node.type === 'function') return `ƒ ${node.label}`
   if (node.type === 'curried') return node.value || 'ƒ'
   if (node.type === 'output') return node.value ?? 'Output'
@@ -1303,73 +1342,130 @@ function useAgain(n) {
   const original = n.type === 'ref' ? graph[n.target] : n
   if (!original) return
   const id = `ref-${Date.now()}`
-  graph[id] = { id, type: 'ref', target: original.id, label: `↪ ${original.label}`, x: n.x + 40, y: n.y + 90 }
+  graph[id] = { id, type: 'ref', target: original.id, label: original.type === 'parameter' ? original.label : `↪ ${original.label}`, x: n.x + 40, y: n.y + 90 }
   state.selected = id
   updateInspector(); draw()
 }
-// A node plugged into a slot normally lives inside that slot's chip. It can
-// be *unfolded*: drawn on the canvas as well, with a link into its slot, so
-// its own slots can be seen and edited. Purely a view — it stays plugged in.
-function isVisible(n) { return !isHiddenDefinition(n) && (!n.mountedTo || n.unfolded) } // a λ's (lifted) definition is never drawn — its call node is the λ — nor a customized derived function (it's listed under its type)
-function slotHost(n) {
-  const [hostId, index] = String(n.mountedTo || '').split(':')
-  const host = activeNodes()[hostId]
-  return host && host.type === 'function' ? { host, index: Number(index) } : null
+// A node plugged into a slot is also drawn on the canvas, to the left of the
+// call it feeds, with a link into its slot — so its own slots can be seen and
+// edited. Each call can be *folded* (one toggle for all its slots): then its
+// slots are hidden too — the block shrinks to its head and a "⋯" — and so is
+// everything plugged into them. Purely a view — it all stays plugged in.
+// Everything starts open.
+function isVisible(n) { // a λ's (lifted) definition is never drawn — its call node is the λ — nor a customized derived function (it's listed under its type)
+  if (isHiddenDefinition(n)) return false
+  for (let at = slotHost(n), guard = 0; at && guard < 500; at = slotHost(at.host), guard++) if (at.host.folded) return false
+  return true
 }
+// `mountedTo` is `hostId:slotIndex` — split at the last colon, since ids can
+// contain colons themselves (`call-prelude:show-…`).
+function splitMountedTo(mountedTo) {
+  const at = String(mountedTo || '').lastIndexOf(':')
+  return at < 0 ? [null, NaN] : [mountedTo.slice(0, at), Number(mountedTo.slice(at + 1))]
+}
+function slotHost(n) {
+  const [hostId, index] = splitMountedTo(n.mountedTo)
+  const host = activeNodes()[hostId]
+  return host && host.type === 'function' ? { host, index } : null
+}
+function treeRoot(n) {
+  let root = n
+  for (let at = slotHost(n), guard = 0; at && guard < 500; at = slotHost(at.host), guard++) root = at.host
+  return root
+}
+function hasPlugged(n, graph = activeNodes()) { return (n.mounted || []).some((id) => id && graph[id]) }
+// Each link leaves the plugged node's right end, runs under the block that
+// holds the slot (below its name and signature; one lane per slot, so the
+// links of neighbouring slots don't merge) and comes up into the slot's
+// bottom — drawn over the blocks, so it visibly reaches the slot instead of
+// vanishing under the block.
 function drawUnfoldedLinks() {
   ctx.save()
   ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1.5
-  Object.values(activeNodes()).filter((n) => n.mountedTo && n.unfolded).forEach((n) => {
+  Object.values(activeNodes()).filter((n) => n.mountedTo && isVisible(n)).forEach((n) => {
     const at = slotHost(n)
-    if (!at || !isVisible(at.host)) return
-    const from = toScreen({ x: n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n), y: n.y })
-    const to = slotScreenCenter(at.host, at.index)
-    const mid = (from.x + to.x) / 2
-    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(mid, from.y, mid, to.y, to.x, to.y + (SLOT_D / 2) * state.zoom); ctx.stroke()
+    if (!at) return
+    const from = toScreen({ x: rightEdge(n), y: n.y })
+    const slot = slotScreenCenter(at.host, at.index)
+    const to = { x: slot.x, y: slot.y + (SLOT_D / 2) * state.zoom }
+    const below = slot.y + (FN_H / 2 + 50 + 5 * at.index) * state.zoom, g = 30 * state.zoom
+    ctx.beginPath(); ctx.moveTo(from.x, from.y)
+    if (from.x + 2 * g <= to.x - g) {
+      ctx.bezierCurveTo(from.x + g, from.y, from.x + g, below, from.x + 2 * g, below)
+      ctx.lineTo(to.x - g, below)
+      ctx.quadraticCurveTo(to.x, below, to.x, to.y)
+    } else ctx.bezierCurveTo(from.x + 60 * state.zoom, from.y, to.x, Math.max(below, from.y), to.x, to.y) // dragged off to the right of its slot
+    ctx.stroke()
+    ctx.beginPath(); ctx.arc(to.x, to.y, 3 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = '#b8b2cf'; ctx.fill()
   })
   ctx.restore()
 }
-function setUnfolded(n, unfolded) {
-  n.unfolded = unfolded
-  if (unfolded) { layoutTree(slotHost(n)?.host || n); fitToView() } // keep what was just unfolded in view
-  else draw()
+// Fold or open call `n` (its slots and everything plugged into them). Its
+// right end stays put, so the link into the call it feeds doesn't jump, and
+// so does the camera; opening lays out just what it reveals, to its left.
+function foldKeepingRight(n, folded) {
+  const right = rightEdge(n)
+  n.folded = folded
+  setRightEdge(n, right)
 }
-// Unfold everything plugged into a slot in the current graph and lay each
-// expression tree out right-to-left from its root (arguments to the left of
-// the call that uses them), or fold everything back into its slots.
-function setAllUnfolded(unfolded) {
+function setFolded(n, folded) {
+  foldKeepingRight(n, folded)
+  if (!folded) layoutTree(n)
+  draw()
+}
+// Open every call in the current graph and lay each expression tree out
+// right-to-left from its root (arguments to the left of the call that uses
+// them), or fold every call that has something plugged in. The camera stays.
+function setAllFolded(folded) {
   const graph = activeNodes()
-  Object.values(graph).forEach((n) => { if (n.mountedTo) n.unfolded = unfolded })
-  if (unfolded) Object.values(graph).filter((n) => !n.mountedTo && n.type === 'function').forEach(layoutTree)
-  draw(); fitToView()
+  Object.values(graph).forEach((n) => { if (n.type === 'function' && (folded ? hasPlugged(n, graph) : n.folded)) foldKeepingRight(n, folded) })
+  if (!folded) Object.values(graph).filter((n) => !n.mountedTo && n.type === 'function').forEach((n) => layoutTree(n, graph))
+  draw()
+}
+// A plugged-in node that has never been laid out (just plugged in, or from a
+// template / older project) gets its tree laid out once, so it doesn't sit on
+// top of the call it feeds.
+function placeNewArguments(graph = activeNodes()) {
+  const roots = new Set()
+  Object.values(graph).forEach((n) => { if (n.mountedTo && !n.placed && isVisible(n)) roots.add(treeRoot(n)) })
+  roots.forEach((root) => layoutTree(root, graph))
+}
+// Moving a node carries everything plugged into it (shown or folded) along.
+function pluggedDescendants(n, graph = activeNodes(), into = new Set()) {
+  for (const id of n.mounted || []) {
+    const k = id && graph[id]
+    if (k && !into.has(k)) { into.add(k); pluggedDescendants(k, graph, into) }
+  }
+  return into
 }
 const TREE_ROW = FN_H + 70
 const TREE_GAP = 70
 function nodeWidth(n) { return n.type === 'function' ? functionBlockWidth(n) : chipWidth(n) }
 function rightEdge(n) { return n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n) }
 function setRightEdge(n, right) { n.x = n.type === 'function' ? right - (functionBlockRight(n) - n.x) : right - chipHalfWidth(n) }
-function unfoldedKids(n, graph = activeNodes()) {
-  return (n.mounted || []).map((id) => graph[id]).filter((k) => k && k.unfolded)
+function shownKids(n, graph = activeNodes()) {
+  return n.folded ? [] : (n.mounted || []).map((id) => graph[id]).filter(Boolean)
 }
 function treeHeight(n, graph = activeNodes()) {
-  const kids = unfoldedKids(n, graph)
+  const kids = shownKids(n, graph)
   return kids.length ? Math.max(TREE_ROW, kids.reduce((sum, k) => sum + treeHeight(k, graph), 0)) : TREE_ROW
 }
-// Keep `root` where it is; place its unfolded arguments in a column to its
+// Keep `root` where it is; place its shown arguments in a column to its
 // left, each subtree stacked in its own band, recursively.
 function layoutTree(root, graph = activeNodes()) {
   const place = (n, right, top) => {
     const h = treeHeight(n, graph)
     setRightEdge(n, right)
     n.y = top + h / 2
+    n.placed = true
     const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
     let y = top
-    unfoldedKids(n, graph).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k, graph) })
+    shownKids(n, graph).forEach((k) => { place(k, left - TREE_GAP, y); y += treeHeight(k, graph) })
   }
   place(root, rightEdge(root), root.y - treeHeight(root, graph) / 2)
 }
 // Lay a whole function body out as its expression tree: Output on the right,
-// the tree feeding it to its left (unfolded arguments further left), and
+// the tree feeding it to its left (shown arguments further left), and
 // anything outside the tree (an unused parameter) below.
 function layoutBody(graph) {
   const root = graph[graph.output?.source]
@@ -1379,7 +1475,7 @@ function layoutBody(graph) {
   root.y = 0
   layoutTree(root, graph)
   const inTree = new Set()
-  const walk = (n) => { inTree.add(n.id); unfoldedKids(n, graph).forEach(walk) }
+  const walk = (n) => { inTree.add(n.id); shownKids(n, graph).forEach(walk) }
   walk(root)
   let y = treeHeight(root, graph) / 2 + TREE_ROW
   for (const n of Object.values(graph)) if (!inTree.has(n.id) && n.type !== 'output' && !n.mountedTo) { setRightEdge(n, rightEdge(root)); n.y = y; y += TREE_ROW }
@@ -1402,7 +1498,7 @@ function drawReferenceLinks() {
   const graph = activeNodes()
   ctx.save()
   ctx.setLineDash([4 * state.zoom, 4 * state.zoom]); ctx.strokeStyle = '#b8b2cf'; ctx.lineWidth = 1
-  Object.values(graph).filter((n) => (n.type === 'ref' || n.type === 'law') && isVisible(n)).forEach((ref) => {
+  Object.values(graph).filter((n) => (n.type === 'ref' || n.type === 'law') && isVisible(n) && !parameterOf(n, graph)).forEach((ref) => {
     const target = graph[ref.target]
     if (!target || !isVisible(target)) return
     const a = point(ref), b = point(target)
@@ -1420,15 +1516,16 @@ function draw() {
   ctx.strokeStyle = '#ecebf5'; ctx.lineWidth = 1
   for (let x = state.offset.x % 24; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
   for (let y = state.offset.y % 24; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
+  placeNewArguments()
   drawReferenceLinks()
   drawOutputLink()
-  drawUnfoldedLinks()
-  Object.values(activeNodes()).filter(isVisible).forEach(n => {
+  Object.values(activeNodes()).filter((n) => isVisible(n)).forEach(n => {
     const selected = state.selected === n.id || state.multi.has(n.id)
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
     if (n.type === 'function') drawFunctionBlock(n, pass, selected)
     else drawValueChip(n, pass, selected, snapHighlight)
   })
+  drawUnfoldedLinks()
   updatePortEditor(pass)
   document.querySelector('#node-count').textContent = Object.keys(activeNodes()).length
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
@@ -1457,6 +1554,7 @@ function drawFunctionBlock(node, pass, selected) {
   ctx.shadowColor = 'transparent'; ctx.lineWidth = selected || broken ? 3 : 2; ctx.strokeStyle = broken ? '#e0537d' : selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
   ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('ƒ', p.x, p.y + 1)
+  if (isFolded(node)) { ctx.fillStyle = '#9691a8'; ctx.font = `700 ${20 * state.zoom}px sans-serif`; ctx.fillText('⋯', p.x + 46 * state.zoom, p.y + 1) }
   const playX = rect.right - 24 * state.zoom, playY = rect.top + 2 * state.zoom
   ctx.beginPath(); ctx.arc(playX, playY, 13 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = '#211d34'; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `${11 * state.zoom}px sans-serif`; ctx.fillText('▶', playX + 1, playY + 1)
@@ -1477,7 +1575,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   const isFunctionValued = node.type === 'curried'
   const typeColor = colorForType(resolvedValueQual(node, activeNodes(), pass).type, labelNamer)
   const badgeColor = node.type === 'law' ? (lawNodeResults.get(node.id)?.ok ? '#1f8f74' : '#c0335e') : isFunctionValued ? ACCENT : typeColor
-  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : node.type === 'law' ? '⚖' : '#'
+  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' && !parameterOf(node) ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : node.type === 'law' ? '⚖' : '#'
   ctx.save()
   ctx.shadowColor = snapHighlight ? `${ACCENT}66` : selected ? `${ACCENT}40` : '#211d3414'
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
@@ -1509,7 +1607,7 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   ctx.restore()
 }
 function label(node, p, baseY, pass) {
-  ctx.fillStyle = '#2b2640'; ctx.font = `600 ${13 * state.zoom}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.fillText(node.label, p.x, baseY + 20 * state.zoom)
+  ctx.fillStyle = '#2b2640'; ctx.font = `600 ${13 * state.zoom}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.fillText(nodeName(node), p.x, baseY + 20 * state.zoom)
   const q = node.type === 'function' ? null : resolvedValueQual(node, activeNodes(), pass)
   const signature = node.type === 'function' ? functionSignature(node, activeNodes(), labelNamer, pass) : showQual(q.preds, q.type, labelNamer)
   if (signature) { ctx.fillStyle = '#9691a8'; ctx.font = `${11 * state.zoom}px ui-monospace, monospace`; ctx.fillText(signature, p.x, baseY + 37 * state.zoom) }
@@ -1536,7 +1634,7 @@ function detachMounted(node, index) {
   const moving = mountedId ? activeNodes()[mountedId] : null
   node.params[index] = ''
   node.mounted[index] = null
-  if (moving) { moving.mountedTo = null; moving.connected = false; moving.unfolded = false }
+  if (moving) { moving.mountedTo = null; moving.connected = false; moving.placed = false }
   return moving
 }
 // A block that just grew (a slot was added) pushes whatever it now overlaps
@@ -1594,7 +1692,24 @@ function updatePortEditor(pass = typePass()) {
   // A function node plugged into a slot is hidden (it lives in that slot's
   // nested chip), so its own slots aren't shown either.
   const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
-  visibleFunctions.forEach(node => node.params.forEach((rawValue, index) => {
+  // One fold toggle per call, on the top border above its head badge: folds
+  // (or opens) all its slots, and everything plugged into them, at once.
+  visibleFunctions.filter((node) => node.params.length > 0).forEach((node) => {
+    const p = point(node)
+    const size = 20 * state.zoom
+    const toggle = document.createElement('button')
+    toggle.className = 'fold-toggle'; toggle.type = 'button'
+    toggle.dataset.functionId = node.id
+    toggle.textContent = node.folded ? '⤢' : '⤡'
+    toggle.title = node.folded ? 'Open: show the slots of this call and what is plugged into them' : 'Fold: hide the slots of this call and what is plugged into them'
+    toggle.style.width = toggle.style.height = `${size}px`
+    toggle.style.left = `${p.x - size / 2}px`; toggle.style.top = `${p.y - (FN_H / 2) * state.zoom - size / 2}px`
+    toggle.style.fontSize = `${12 * state.zoom}px`; toggle.style.lineHeight = `${size}px`
+    toggle.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
+    toggle.addEventListener('click', (event) => { event.stopPropagation(); setFolded(node, !node.folded) })
+    editor.append(toggle)
+  })
+  visibleFunctions.filter((node) => !isFolded(node)).forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
     const mountedId = node.mounted[index]
     const mountedNode = mountedId ? activeNodes()[mountedId] : null
@@ -1660,16 +1775,6 @@ function updatePortEditor(pass = typePass()) {
       chip.style.fontSize = `${11 * state.zoom}px`
       chip.style.padding = `0 ${10 * state.zoom}px`
       chip.title = '드래그해서 떼어내기'
-      const unfold = document.createElement('button')
-      unfold.className = 'chip-unfold'; unfold.type = 'button'
-      unfold.textContent = mountedNode.unfolded ? '⤡' : '⤢'
-      unfold.title = mountedNode.unfolded ? 'Fold back into the slot' : 'Unfold onto the canvas (it stays plugged in)'
-      unfold.style.width = unfold.style.height = `${16 * state.zoom}px`
-      unfold.style.left = unfold.style.top = '0'
-      unfold.style.fontSize = `${11 * state.zoom}px`; unfold.style.lineHeight = `${16 * state.zoom}px`
-      unfold.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
-      unfold.addEventListener('click', (event) => { event.stopPropagation(); setUnfolded(mountedNode, !mountedNode.unfolded) })
-      slot.append(unfold)
       chip.addEventListener('pointerdown', (event) => {
         event.preventDefault(); event.stopPropagation()
         const world = canvasPoint(event)
@@ -1718,7 +1823,7 @@ function updatePortEditor(pass = typePass()) {
   }))
   visibleFunctions.forEach(node => {
     const editable = isSignatureEditable(node)
-    if (!editable) return
+    if (!editable || isFolded(node)) return
     const add = document.createElement('button')
     add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = editable === 'signature' ? 'Add a parameter (to the body and every call)' : 'Add an element'
     // Just past the block's right edge (not at the next slot's would-be
@@ -1778,6 +1883,7 @@ function renderValueInspector(n) {
   const annotateRow = isNumber
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
+  if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
   return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE</label><code>${showQual(q.preds, q.type)}</code></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
 }
 // Why `n` can't be deleted, or null if it can. Builtins are the language
@@ -2038,10 +2144,10 @@ function hitNode(x, y) {
 // clobber a slot that already reads as meaningfully filled.
 const PRECISE_SLOT_RADIUS = 60
 function findSnapTarget(dragged) {
-  if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.mountedTo) return null // an unfolded node stays plugged where it is
+  if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.mountedTo) return null // a plugged-in node stays plugged where it is
   let best = null, bestDist = SNAP_RADIUS
   Object.values(activeNodes()).filter(isFunction).forEach((target) => {
-    if (target.id === dragged.id) return
+    if (target.id === dragged.id || isFolded(target) || !isVisible(target)) return
     target.params.forEach((value, index) => {
       if (target.mounted[index]) return // already has a node plugged in — detach it first
       const c = slotWorldCenter(target, index)
@@ -2076,8 +2182,10 @@ function finishConnection(dragged) {
     output.value = nodeDisplayText(dragged)
     dragged.connected = true
     const width = dragged.type === 'function' ? functionBlockRight(dragged) - dragged.x : chipHalfWidth(dragged)
+    const ox = dragged.x, oy = dragged.y
     dragged.x = output.x - chipHalfWidth(output) - 70 - width
     dragged.y = output.y
+    pluggedDescendants(dragged).forEach((k) => { k.x += dragged.x - ox; k.y += dragged.y - oy })
     state.selected = output.id
     return true
   }
@@ -2103,6 +2211,7 @@ function finishConnection(dragged) {
     return false
   }
   if (dragged.type === 'function') dragged.composedInto = targetNode.id
+  dragged.placed = false // laid out beside the call it now feeds, on the next draw
   state.selected = targetNode.id
   return true
 }
@@ -2163,10 +2272,11 @@ window.addEventListener('pointermove', (event) => {
     const p = canvasPoint(event)
     if (Math.hypot(event.movementX, event.movementY) > 2) state.drag.moved = true
     const dx = p.x - state.drag.dx - state.drag.node.x, dy = p.y - state.drag.dy - state.drag.node.y
-    state.drag.node.x += dx
-    state.drag.node.y += dy
-    // the rest of a multi-selection moves with it
-    if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m && m !== state.drag.node) { m.x += dx; m.y += dy } })
+    // the rest of a multi-selection moves with it, and everything plugged into what moves
+    const moving = new Set([state.drag.node])
+    if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m) moving.add(m) })
+    ;[...moving].forEach((m) => pluggedDescendants(m, activeNodes(), moving))
+    moving.forEach((m) => { m.x += dx; m.y += dy })
     state.snapTarget = findSnapTarget(state.drag.node)
     draw()
   } else if (state.pan) {
@@ -2607,7 +2717,7 @@ function pasteClipboard() {
     n.x += 60; n.y += 60
     if (n.mounted) n.mounted = n.mounted.map((m) => (m && ids.has(m) ? ids.get(m) : null))
     if (n.mounted) n.params = n.params.map((text, i) => (original.mounted?.[i] && !ids.has(original.mounted[i]) ? '' : text))
-    if (n.mountedTo) { const [host, slot] = n.mountedTo.split(':'); n.mountedTo = ids.has(host) ? `${ids.get(host)}:${slot}` : null; if (!n.mountedTo) n.connected = false }
+    if (n.mountedTo) { const [host, slot] = splitMountedTo(n.mountedTo); n.mountedTo = ids.has(host) ? `${ids.get(host)}:${slot}` : null; if (!n.mountedTo) n.connected = false }
     if (n.type === 'ref' && ids.has(n.target)) n.target = ids.get(n.target)
     if (n.type === 'ref' && !graph[n.target] && !ids.has(original.target)) continue // its original isn't in this graph
     graph[n.id] = n
@@ -2638,8 +2748,8 @@ window.addEventListener('keydown', (event) => {
 document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
 document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
 document.querySelector('#fit').onclick = () => fitToView()
-document.querySelector('#unfold-all').onclick = () => setAllUnfolded(true)
-document.querySelector('#fold-all').onclick = () => setAllUnfolded(false)
+document.querySelector('#unfold-all').onclick = () => setAllFolded(false)
+document.querySelector('#fold-all').onclick = () => setAllFolded(true)
 // The canvas bitmap has to track the element's CSS size, not just the
 // window's: the element also changes size without any window resize (the
 // inspector collapsing at the breakpoint, layout settling after fonts load),

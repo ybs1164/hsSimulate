@@ -69,7 +69,7 @@ async function activeGraph() {
 async function toScreen(graph) {
   const zoom = await js(`parseFloat(document.querySelector('#zoom-level').textContent) / 100`)
   for (const n of Object.values(graph)) {
-    if (n.type !== 'function' || n.lambda || (n.mountedTo && !n.unfolded) || !n.params?.length) continue
+    if (n.type !== 'function' || n.lambda || !n.params?.length) continue
     const r = JSON.parse(await js(`JSON.stringify(document.querySelector('.param-slot[data-function-id="${n.id}"][data-index="0"]')?.getBoundingClientRect() ?? null)`))
     if (!r) continue
     const ox = r.x + r.width / 2 - (n.x + 118) * zoom, oy = r.y + r.height / 2 - n.y * zoom
