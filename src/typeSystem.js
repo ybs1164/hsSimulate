@@ -51,6 +51,14 @@ export function tlist(elem) {
 /** How many type arguments each constructor takes (its kind is `*` with that many `* ->` in front). */
 export const constructorArity = { List: 1, Maybe: 1, Endo: 1, Sum: 1, Product: 1, Widget: 1, Program: 2, Sub: 1, '(,)': 2 }
 
+// Arities of user-declared type constructors (`data Pair a = …` takes one),
+// replaced wholesale whenever the declarations change (see typeDecls.js).
+let userArity = {}
+export function setUserTypeArities(arities) {
+  userArity = { ...arities }
+}
+const arityOf = (name) => constructorArity[name] ?? userArity[name] ?? 0
+
 /** The pair type `(a, b)` — the categorical product. */
 export function ttuple(a, b) {
   return tapp(tapp(tcon('(,)'), a), b)
@@ -63,7 +71,7 @@ export function ttuple(a, b) {
  */
 export function kindArity(type) {
   if (type.kind === 'var') return null
-  if (type.kind === 'con') return constructorArity[type.name] || 0
+  if (type.kind === 'con') return arityOf(type.name)
   if (type.kind === 'fun') {
     if (![0, null].includes(kindArity(type.from)) || ![0, null].includes(kindArity(type.to))) throw new Error(`Ill-kinded: ${showType(type)}`)
     return 0

@@ -10,14 +10,16 @@ const builtinBodies = { add: { output: { id: 'add-output', type: 'output' } } }
 
 test('snapshots round-trip', () => {
   const types = { Score: { name: 'Score', keyword: 'newtype', constructors: [{ name: 'Score', record: false, fields: [{ name: null, type: { kind: 'con', name: 'Int' } }] }], deriving: [], source: 'newtype Score = Score Int' } }
-  const text = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, types, entry: 'add', outputId: 3 })
-  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, types, entry: 'add', outputId: 3 })
+  const classes = { Pretty: { name: 'Pretty', param: 'a', supers: [], methods: [{ name: 'pretty', sig: 'a -> String', default: null }], instances: [] } }
+  const text = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, types, classes, entry: 'add', outputId: 3 })
+  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, types, classes, entry: 'add', outputId: 3 })
 })
 
 test('malformed files are rejected with a ProjectError', () => {
   assert.throws(() => parseProject('not json'), ProjectError)
   assert.throws(() => parseProject('{"version": 99, "nodes": {}, "functionBodies": {}}'), ProjectError)
   assert.throws(() => parseProject('{"version": 2, "nodes": {}, "functionBodies": {}, "types": []}'), ProjectError)
+  assert.throws(() => parseProject('{"version": 3, "nodes": {}, "functionBodies": {}, "classes": []}'), ProjectError)
   assert.throws(() => parseProject('{"version": 1, "nodes": {"a": {"id": "b", "type": "number"}}, "functionBodies": {}}'), ProjectError)
 })
 
@@ -51,6 +53,19 @@ test('mergeBuiltins keeps user layout but takes code-owned fields from code', ()
   assert.ok(merged.nodes.custom)
   assert.deepEqual(merged.functionBodies.add, builtinBodies.add)
   assert.equal(merged.entry, null)
+})
+
+test('mergeBuiltins keeps a node plugged into a call whose id contains colons', () => {
+  const saved = {
+    nodes: {
+      'call-prelude:show-1': { id: 'call-prelude:show-1', type: 'function', sourceFunctionId: 'prelude:show', params: ['5'], mounted: ['five'] },
+      five: { id: 'five', type: 'number', value: '5', mountedTo: 'call-prelude:show-1:0', connected: true },
+    },
+    functionBodies: {},
+    entry: null,
+    outputId: 0,
+  }
+  assert.equal(mergeBuiltins(saved, builtinNodes, builtinBodies).nodes.five.mountedTo, 'call-prelude:show-1:0')
 })
 
 test('history skips no-op records and supports undo/redo', () => {

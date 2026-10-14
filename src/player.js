@@ -7,7 +7,7 @@
 // directly — no editor, no type checker — and played like gloss's `play`,
 // with the game state saved in localStorage and time away applied on
 // return (in one step when the exporter found `step` to be a monoid action).
-import { createEvaluator, EvalError } from './evaluator.js'
+import { createEvaluator, elaborationIndex, EvalError } from './evaluator.js'
 import { createGame, isProgram } from './runtime.js'
 
 /**
@@ -87,7 +87,9 @@ body{margin:0;font-family:ui-monospace,'DM Mono',monospace;background:#f8f7fc;co
  * exactTime } inside `root`. Returns the game (handy for tests).
  */
 export function startPlayer(data, root, { storage = globalThis.localStorage, now = () => Date.now() } = {}) {
-  const ev = createEvaluator({ nodes: data.definitions, functionBodies: data.functionBodies, types: data.types })
+  // `elaboration`: which instance each call means (user classes), worked out by the editor's type pass.
+  const elaboration = data.elaboration ? elaborationIndex(data.elaboration, data.definitions, data.functionBodies) : null
+  const ev = createEvaluator({ nodes: data.definitions, functionBodies: data.functionBodies, types: data.types, elaboration: () => elaboration })
   const program = ev.run(data.definitions, data.entry)
   if (!isProgram(program)) throw new EvalError('The exported entry point is not a Program')
   const game = createGame(ev, program, { exactTime: data.exactTime })

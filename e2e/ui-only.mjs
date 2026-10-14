@@ -69,7 +69,7 @@ async function activeGraph() {
 async function toScreen(graph) {
   const zoom = await js(`parseFloat(document.querySelector('#zoom-level').textContent) / 100`)
   for (const n of Object.values(graph)) {
-    if (n.type !== 'function' || n.lambda || (n.mountedTo && !n.unfolded) || !n.params?.length) continue
+    if (n.type !== 'function' || n.lambda || !n.params?.length) continue
     const r = JSON.parse(await js(`JSON.stringify(document.querySelector('.param-slot[data-function-id="${n.id}"][data-index="0"]')?.getBoundingClientRect() ?? null)`))
     if (!r) continue
     const ox = r.x + r.width / 2 - (n.x + 118) * zoom, oy = r.y + r.height / 2 - n.y * zoom
@@ -120,7 +120,7 @@ async function openBody(label) {
 async function back() { await js(`document.querySelector('#back-graph').click()`); await sleep(400) }
 async function add(kind, label) {
   const before = new Set(Object.keys((await activeGraph()).graph))
-  const sel = kind === 'derived' ? '#type-library .derived-item' : kind === 'prelude' ? '#prelude-library .derived-item' : '.function-library-item'
+  const sel = kind === 'derived' ? '#type-library .derived-item' : kind === 'class' ? '#class-library .derived-item' : kind === 'prelude' ? '#prelude-library .derived-item' : '.function-library-item'
   await js(`[...document.querySelectorAll(${JSON.stringify(sel)})].find((e) => e.querySelector('b').textContent === ${JSON.stringify(label)}).click()`); await sleep(300)
   const { graph } = await activeGraph()
   const id = Object.keys(graph).find((k) => !before.has(k))
@@ -161,7 +161,10 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await send('Runtime.enable'); await send('Page.enable')
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
   for (let i = 0; i < 60; i++) { try { await fetch(`http://localhost:${PORT}/`); break } catch { await sleep(250) } }
-  await send('Page.navigate', { url: `http://localhost:${PORT}/` }); await sleep(5000)
+  await send('Page.navigate', { url: `http://localhost:${PORT}/` })
+  // A cold Vite start can take a while to serve the app: wait for it to render.
+  for (let i = 0; i < 120 && !(await js(`!!document.querySelector('.add-type')`).catch(() => false)); i++) await sleep(250)
+  await sleep(500)
   console.log('Building a game through the UI only:')
 
   await check('declare Model and Msg in the type editor', async () => {
@@ -255,21 +258,126 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(!Object.values((await activeGraph()).graph).some((n) => n.sourceFunctionId === 'prelude:showCompact'), 'multi-delete left nodes behind')
     await back()
   })
-  await check('renaming a field marks the calls that used it as broken', async () => {
-    await js(`[...document.querySelectorAll('.type-item')].find((e) => e.dataset.typeName === 'Model').click()`); await sleep(250)
+  const openType = async (name) => { await js(`[...document.querySelectorAll('.type-item')].find((e) => e.dataset.typeName === ${JSON.stringify(name)}).click()`); await sleep(250) }
+  const closeType = async () => { await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150) }
+  await check('renaming a field renames every call to what it derives', async () => {
+    await openType('Model')
     await setField('.te-fname[data-fi="0"]', 'total'); await sleep(200)
-    await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
+    await closeType()
     await openBody('handle')
     const { graph } = await activeGraph()
-    const ov = Object.values(graph).find((n) => n.sourceFunctionId === 'type:Model:over count')
+    const ov = Object.values(graph).find((n) => n.sourceFunctionId === 'type:Model:over total')
+    expect(ov && ov.label === 'over total', 'over count was not renamed to over total')
     await clickNode(ov.id)
-    const broken = await js(`document.querySelector('.broken-call .connection-tag')?.textContent ?? ''`)
+    const broken = await js(`document.querySelector('.broken-call') ? 'broken' : ''`)
     await back()
-    await js(`[...document.querySelectorAll('.type-item')].find((e) => e.dataset.typeName === 'Model').click()`); await sleep(250)
+    await openType('Model')
     await setField('.te-fname[data-fi="0"]', 'count'); await sleep(200)
-    await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
-    expect(broken.includes('no longer exists'), broken)
-    return broken
+    await closeType()
+    const again = Object.values((await project()).functionBodies).flatMap((b) => Object.values(b)).some((n) => n.sourceFunctionId === 'type:Model:over count')
+    expect(!broken && again, `${broken} / renamed back: ${again}`)
+    return 'over count → over total → over count'
+  })
+  await check('a derived function can be customized (body starts as its primitive) and reset', async () => {
+    await openType('Model')
+    await js(`document.querySelector('[data-edit="type:Model:count"]').click()`); await sleep(600)
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    const { p, graph } = await activeGraph()
+    const prim = Object.values(graph).find((n) => n.sourceFunctionId === 'prim:type:Model:count')
+    expect(p.nodes['type:Model:count']?.override === 'Model' && prim?.label === 'count#', `${crumb}: ${JSON.stringify(prim)}`)
+    await back()
+    await openType('Model')
+    await js(`document.querySelector('[data-reset="type:Model:count"]').click()`); await sleep(200)
+    await closeType()
+    expect(!(await project()).nodes['type:Model:count'], 'reset left the customization behind')
+    return `${crumb} = count# model`
+  })
+  await check('renaming a function renames its calls', async () => {
+    const stepId = Object.values((await project()).nodes).find((n) => n.custom && n.label === 'step').id
+    await clickNode(stepId)
+    await setField('#function-rename', 'tick'); await sleep(300)
+    const p = await project()
+    const callLabels = Object.values(p.functionBodies).flatMap((b) => Object.values(b)).filter((n) => n.sourceFunctionId === stepId).map((n) => n.label)
+    await clickNode(stepId)
+    await setField('#function-rename', 'step'); await sleep(300)
+    expect(p.nodes[stepId].label === 'tick' && callLabels.length && callLabels.every((l) => l === 'tick'), `${p.nodes[stepId].label} / ${callLabels}`)
+    return `step → tick (${callLabels.length} call)`
+  })
+  await check('a type with a parameter', async () => {
+    await js(`document.querySelector('.add-type').click()`); await sleep(250)
+    await setField('.te-name', 'Box'); await sleep(150)
+    await setField('.te-params', 'a'); await sleep(150)
+    await js(`document.querySelector('[data-te="add-field"]').click()`); await sleep(150)
+    const sig = await js(`document.querySelector('.te-sig').textContent`)
+    const status = await editorStatus()
+    await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
+    expect(sig === 'Box :: a → Box a' && status.includes('applied'), `${sig} / ${status}`)
+    return sig
+  })
+  await check('a hand-written instance gets a function per method, checked against the method type', async () => {
+    await openType('Msg')
+    await setField('.te-add-instance', 'Show'); await sleep(300)
+    const row = await js(`document.querySelector('.te-instance')?.textContent ?? ''`)
+    const fnId = await js(`document.querySelector('.te-method select').value`)
+    const p = await project()
+    await js(`document.querySelector('[data-te="drop-instance"]').click()`); await sleep(200)
+    await closeType()
+    expect(/instance Show Msg/.test(row) && /Output is not connected/.test(row) && p.nodes[fnId]?.label === 'showMsg', `${row} / ${fnId}`)
+    return 'instance Show Msg where show = showMsg'
+  })
+  await check('a derived instance is written out as graphs (deriving Eq → eqModel), and derived again', async () => {
+    await openType('Model')
+    await js(`document.querySelector('[data-graph="Eq"]').click()`); await sleep(500)
+    const row = await js(`document.querySelector('.te-instance')?.textContent ?? ''`)
+    const badLaws = await js(`[...document.querySelectorAll('.law.bad')].map((e) => e.textContent).join(' | ')`)
+    const p = await project()
+    const fn = Object.values(p.nodes).find((n) => n.label === 'eqModel')
+    const callees = fn ? Object.values(p.functionBodies[fn.id]).map((n) => n.sourceFunctionId).filter(Boolean) : []
+    await js(`document.querySelector('[data-te="derive-again"]').click()`); await sleep(500)
+    const after = await project()
+    await closeType()
+    expect(/instance Eq Model/.test(row) && /written out from deriving stock/.test(row) && !badLaws, `${row} / ${badLaws}`)
+    expect(callees.includes('type:Model:count') && callees.includes('eq') && p.types.Model.instances[0]?.methods.eq === fn.id, JSON.stringify(callees))
+    expect(!Object.values(after.nodes).some((n) => n.label === 'eqModel') && !after.types.Model.instances.length && after.types.Model.deriving.some((c) => c.classes.includes('Eq')), 'not derived again')
+    return 'eqModel x y = count x == count y'
+  })
+  await check('a user class: declare it, give Model an instance, and call its method — picked by type', async () => {
+    await js(`document.querySelector('.add-class').click()`); await sleep(300)
+    await setField('.ce-name', 'Pretty'); await sleep(200)
+    await setField('.ce-mname', 'pretty'); await sleep(200)
+    await setField('.ce-add-instance', 'Model'); await sleep(400)
+    const status = await editorStatus()
+    const implId = await js(`document.querySelector('.te-instance select[data-method]').value`)
+    // prettyModel x = show x
+    await js(`document.querySelector('.te-instance [data-open]').click()`); await sleep(600)
+    const sh = await add('prelude', 'show'); await plug(await paramId('x'), sh, 0); await toOutput(sh); await back()
+    // shown = pretty initial
+    await createFunction('shown', []); await openBody('shown')
+    const pr = await add('class', 'pretty'); const init = await add('function', 'initial'); await plug(init, pr, 0); await toOutput(pr); await back()
+    const p = await project()
+    const shownId = Object.values(p.nodes).find((n) => n.custom && n.label === 'shown').id
+    await clickNode(shownId)
+    await js(`document.querySelector('#evaluate').click()`); await sleep(600)
+    const result = Object.values((await project()).nodes).filter((n) => n.type === 'value').pop()
+    let text = ''
+    for (let l = result?.data; l?.ctorIndex === 1; l = l.args[1]) text += l.args[0]
+    expect(status.includes('applied') && p.nodes[implId]?.label === 'prettyModel' && text === 'Model {count = 0}', `${status} / ${p.nodes[implId]?.label} / ${JSON.stringify(text)}`)
+    return `pretty initial = ${JSON.stringify(text)}`
+  })
+  await check('an ambiguous connection is refused, as GHC would reject it (show mempty)', async () => {
+    await createFunction('vague', []); await openBody('vague')
+    const sh = await add('prelude', 'show'); const me = await add('prelude', 'mempty')
+    const { graph } = await activeGraph()
+    await drag((await toScreen(graph))(graph[me]), await slotCenter(sh, 0))
+    const toast = await js(`document.querySelector('#toast')?.textContent ?? ''`)
+    const after = (await activeGraph()).graph[sh]
+    // a defaultable one is fine: show 3
+    await fill(sh, 0, '3'); await sleep(300)
+    await clickNode(sh)
+    const flagged = await js(`document.querySelector('.broken-call') ? 'flagged' : ''`)
+    await back()
+    expect(!after.mounted[0] && /Ambiguous type variable/.test(toast) && !flagged, `${JSON.stringify(after.mounted)} / ${toast} / ${flagged}`)
+    return toast.slice(0, 90) + '…'
   })
   await check('a λ is created, opened in place and printed as a lambda', async () => {
     await createFunction('twice', ['x']); await openBody('twice')

@@ -13,7 +13,7 @@
 // other side's shape, and functions/Endo extensionally on sample points.
 import { concreteMempty, isClosure, isData, isMempty, MEMPTY, showValue } from './evaluator.js'
 import { classClosure, entails } from './prelude.js'
-import { pred, showType } from './typeSystem.js'
+import { applySubst, pred, showType } from './typeSystem.js'
 
 const MAX_SAMPLES = 5
 
@@ -43,21 +43,16 @@ export function samplesOf(type, types, fns, depth = 0) {
     if (type.name === 'StdGen') return [1, 99, 2026].map((seed) => ({ kind: 'data', type: 'StdGen', ctor: 'StdGen', ctorIndex: 0, args: [seed] }))
     if (type.name === 'Color') return [[1, 0, 0], [0, 0.5, 1]].map((rgb) => ({ kind: 'data', type: 'Color', ctor: 'RGB', ctorIndex: 0, args: rgb }))
     if (type.name === '()') return [{ kind: 'data', type: '()', ctor: '()', ctorIndex: 0, args: [] }]
-    const decl = types[type.name]
-    if (!decl || depth > 2) return null
-    const out = []
-    decl.constructors.forEach((c, ctorIndex) => {
-      const fieldSamples = c.fields.map((f) => samplesOf(f.type, types, fns, depth + 1))
-      if (fieldSamples.some((fs) => !fs || !fs.length)) return
-      // A few combinations: the i-th sample of every field, rotating.
-      const count = c.fields.length ? Math.max(...fieldSamples.map((fs) => fs.length)) : 1
-      for (let i = 0; i < count; i++) out.push({ kind: 'data', type: decl.name, ctor: c.name, ctorIndex, args: fieldSamples.map((fs, k) => fs[(i + k) % fs.length]) })
-    })
-    return out.length ? spread(out) : null
+    return declSamples(types[type.name], [], types, fns, depth)
   }
   if (type.kind === 'fun') return fns && sameType(type.from, type.to) ? fns(type.from) : null
   if (type.kind === 'app') {
     const h = head(type)
+    if (h.kind === 'con' && types[h.name]) {
+      const args = []
+      for (let u = type; u.kind === 'app'; u = u.fn) args.unshift(u.arg)
+      return declSamples(types[h.name], args, types, fns, depth)
+    }
     const inner = samplesOf(argOf(type), types, fns, depth + 1)
     if (!inner) return null
     if (isCon(h, 'List')) return [nilV, consV(inner[0], nilV), consV(inner[1 % inner.length], consV(inner[2 % inner.length], nilV))]
@@ -69,6 +64,21 @@ export function samplesOf(type, types, fns, depth = 0) {
     }
   }
   return null
+}
+
+// Samples of declared type `decl` at type arguments `args` (for its parameters).
+function declSamples(decl, args, types, fns, depth) {
+  if (!decl || depth > 2) return null
+  const at = new Map((decl.params || []).map((p, k) => [p, args[k]]).filter(([, a]) => a))
+  const out = []
+  decl.constructors.forEach((c, ctorIndex) => {
+    const fieldSamples = c.fields.map((f) => samplesOf(applySubst(at, f.type), types, fns, depth + 1))
+    if (fieldSamples.some((fs) => !fs || !fs.length)) return
+    // A few combinations: the i-th sample of every field, rotating.
+    const count = c.fields.length ? Math.max(...fieldSamples.map((fs) => fs.length)) : 1
+    for (let i = 0; i < count; i++) out.push({ kind: 'data', type: decl.name, ctor: c.name, ctorIndex, args: fieldSamples.map((fs, k) => fs[(i + k) % fs.length]) })
+  })
+  return out.length ? spread(out) : null
 }
 
 function spread(list) {
@@ -93,10 +103,12 @@ function sameType(a, b) {
  */
 export function equalValues(a, b, ctx, points = []) {
   if (isMempty(a) && isMempty(b)) return true
-  if (isMempty(a)) return isData(b) ? equalValues(concreteMempty(b), b, ctx, points) : false
+  // (MEMPTY and bare numbers stand for a value of the other side's type —
+  // made concrete by the evaluator, which knows hand-written instances.)
+  if (isMempty(a)) return isData(b) ? equalValues(ctx.ev.concretize ? ctx.ev.concretize(a, b) : concreteMempty(b), b, ctx, points) : false
   if (isMempty(b)) return equalValues(b, a, ctx, points)
   if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)) || (Number.isNaN(a) && Number.isNaN(b))
-  if (typeof a === 'number' && isData(b)) return b.args.every((f) => equalValues(a, f, ctx, points)) // a broadcast number
+  if (typeof a === 'number' && isData(b)) return ctx.ev.concretize ? equalValues(ctx.ev.concretize(a, b), b, ctx, points) : b.args.every((f) => equalValues(a, f, ctx, points)) // a broadcast number
   if (typeof b === 'number' && isData(a)) return equalValues(b, a, ctx, points)
   if (isClosure(a) || isClosure(b)) return points.every((p) => equalValues(ctx.ev.apply(a, [p]), ctx.ev.apply(b, [p]), ctx, points))
   if (isData(a) && isData(b)) {
