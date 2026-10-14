@@ -16,7 +16,7 @@
 - `src/classDecls.js`: 사용자 클래스 선언(메서드·기본 구현·상위 클래스·인스턴스) 검사와 해석, 인스턴스의 사전(dictionary) 증거.
 - `src/inferGraph.js`: 캔버스 그래프 연결로부터 타입을 추론하는 패스(사용자 클래스 호출의 사전 전달 elaboration, GHC식 모호성 검사·디폴팅 포함).
 - `src/evaluator.js`: 그래프를 지연 평가하는 실행기.
-- `src/literals.js`: 슬롯 인라인 리터럴 파서.
+- `src/literals.js`: 리터럴 파서(리터럴 노드의 값, 예전 프로젝트의 슬롯 인라인 텍스트).
 - `src/dataTypes.js`: 내장 유도 타입(리스트, Maybe, Char, ())의 인스턴스와 런타임 표현.
 - `src/laws.js`: 클래스·함수 법칙 검사기.
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.

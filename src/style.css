@@ -185,11 +185,13 @@ body{margin:0;min-width:1040px;min-width:0!important}
    text-bearing UI (sidebar, inspector) on its way — suppress selection
    page-wide for the duration so that never turns into a text-selection drag. */
 body.dragging{user-select:none;-webkit-user-select:none}
-.param-slot{position:absolute;pointer-events:auto;box-shadow:0 3px 10px #211d3414;transition:box-shadow .15s ease,transform .15s ease;background:#fdfcff;border-radius:50%;border:2px dashed}
-.param-slot.filled{border-style:solid;box-shadow:0 3px 10px #211d3428}
+.param-slot{position:absolute;pointer-events:auto;box-sizing:border-box;box-shadow:0 1px 3px #211d3424;transition:box-shadow .15s ease,transform .15s ease;background:#fdfcff;border-radius:50%;border:2px solid;cursor:pointer}
+.param-slot:hover{transform:scale(1.25)}
+.param-slot.invalid{box-shadow:0 0 0 3px #e0537d55}
+.literal-input{position:absolute;z-index:4;pointer-events:auto;box-sizing:border-box;border:0;border-radius:8px;background:var(--accent-soft);color:var(--ink);font-family:ui-monospace,monospace;font-weight:600;padding:0 8px;outline:2px solid var(--accent)}
+.literal-input::placeholder{color:var(--muted-2);font-weight:400}
+.param-slot.filled{border-color:#fff !important;box-shadow:0 1px 4px #211d3440}
 .param-slot.snap-target{box-shadow:0 0 0 4px #6c5ce755,0 4px 12px #211d3424;transform:scale(1.08);z-index:1}
-.param-chip{position:absolute;inset:0;border-radius:50%;display:flex;align-items:center;justify-content:center;padding:0 10px;color:#fff;font:600 11px 'DM Mono';cursor:grab;user-select:none;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.param-chip:active{cursor:grabbing}
 /* One pill above the slot, styled like a Haskell type annotation
    (`n :: Int`) — name in ink, `::` muted, the type itself colored to match
    the slot's own ring (colorForType), so the tag and the ring always agree.
@@ -204,15 +206,11 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .out-port.filled,.in-port.filled{background:var(--accent)}
 .in-port{cursor:default}
 .in-port.filled{cursor:crosshair}
-.param-value{position:absolute;inset:0;border:0;background:transparent;text-align:center;font:11px 'DM Mono';color:var(--ink);outline:0;width:100%;padding-top:4px}
-.param-value::placeholder{color:var(--muted-2)}
-.param-value:focus{box-shadow:inset 0 0 0 2px var(--accent-soft-2);border-radius:inherit}
 .param-remove,.param-add{position:absolute;border:0;background:var(--ink);color:#fff;border-radius:50%;cursor:pointer;text-align:center;font:12px/16px 'DM Mono';z-index:2;pointer-events:auto}
 .param-remove{right:0;top:0;width:16px;height:16px;background:#e0537d}
 .param-add{width:26px;height:26px;font-size:18px;line-height:20px;box-shadow:0 3px 8px #211d3428;background:var(--accent)}
 .tool-button.icon-only{padding:8px 11px}
 .tool-button:disabled{opacity:.4;cursor:default;background:var(--panel);color:var(--muted)}
-.param-value.invalid{box-shadow:inset 0 0 0 2px #e0537d;border-radius:inherit;color:#c0335e}
 .entry-toggle,.delete-node{width:100%;border:1.5px solid var(--line);border-radius:var(--radius-sm);background:var(--panel);padding:9px 11px;font:11px 'DM Mono';color:var(--muted);text-align:left;cursor:pointer}
 .entry-toggle:hover{background:var(--bg);color:var(--ink)}
 .entry-toggle.on{background:var(--accent-soft);border-color:var(--accent-soft-2);color:var(--accent-ink)}

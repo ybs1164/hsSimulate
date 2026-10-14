@@ -867,6 +867,11 @@ export function createEvaluator(registry) {
     }
     if (node.type === 'boolean') return node.value === 'true'
     if (node.type === 'text') return fromJsString(String(node.value ?? ''))
+    if (node.type === 'literal') {
+      const lit = parseLiteral(node.value)
+      if (!lit) throw new EvalError(`${JSON.stringify(String(node.value ?? ''))} is not a literal (a number, True/False, "text" or 'c')`)
+      return lit.kind === 'string' ? fromJsString(lit.value) : lit.value
+    }
     if (node.type === 'ref') {
       if (!graph[node.target]) throw new EvalError(`${node.label}: the original node is gone`)
       return force(nodeValue(graph, node.target, env)) // shares the target's thunk: evaluated once

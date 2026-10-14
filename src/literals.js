@@ -1,7 +1,7 @@
-// Inline literal text typed straight into a slot ('3', '-1.5', 'true'). Both
-// the type pass (inferGraph) and the evaluator treat such a slot exactly like
-// one with a literal node mounted in it, so the two always agree on which
-// slots of a function node are applied. Haskell literal syntax: numbers,
+// Literal text: a literal node's value ('3', '-1.5', 'True'), or — in projects
+// from before slots were dots — text typed straight into a slot (the editor
+// turns that into a literal node; the type pass and the evaluator still read
+// it the same way, so the two always agree on which slots are applied). Haskell literal syntax: numbers,
 // True/False, "text" (a String) and 'c' (a Char). Anything else — '' or a
 // placeholder parameter name like 'n' — leaves the slot open (curried).
 export function parseLiteral(text) {

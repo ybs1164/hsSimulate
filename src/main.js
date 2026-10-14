@@ -15,6 +15,7 @@ import { asciiType, printDefinitionTokens } from './haskellPrint.js'
 import { buildDefinitionView, isEditableView, restoreDefinition, takeOverDefinition, viewIdOf } from './definitionViews.js'
 import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
+import { parseLiteral } from './literals.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
 import { buildDice } from './examples/dice.js'
@@ -1066,7 +1067,7 @@ const FN_H = 96          // function block height
 const FN_LEFT = 46       // world px from node.x (head badge center) to the block's left edge
 const SLOT_START = 118   // world px from node.x to the first parameter slot's center
 const SLOT_STRIDE = 94   // world px between consecutive slot centers
-const SLOT_D = 64        // embedded parameter slot circle diameter
+const SLOT_D = 22        // parameter slot: an in-port dot a wire is dropped on
 const FN_TAIL = 52       // right padding after the last slot before the block's right edge — room for the ▶ badge on the top border, clear of the last slot's tag
 const TAG_MIN_ZOOM = .45 // below this zoom slot tags are hidden (too small to read)
 const TAG_GAP = 8        // world px kept free between neighbouring slot tags (a tag is at most SLOT_STRIDE - TAG_GAP wide)
@@ -1087,9 +1088,6 @@ function colorForType(type, namer) {
   if (type.kind === 'app') return colorForType(type.fn, namer) // `Maybe Int` reads as its head, `Maybe`
   return VAR_PALETTE[namer(type.id).charCodeAt(0) % VAR_PALETTE.length]
 }
-// Still worth flagging that a slot wants a function specifically — not as a
-// shape, just placeholder text ("ƒ" vs "?") so the affordance stays legible.
-function slotExpectsFunction(node, index, pass) { return pass.perNode.get(node.id)?.paramTypes?.[index]?.kind === 'fun' }
 function point(node) { return { x: node.x * state.zoom + state.offset.x, y: node.y * state.zoom + state.offset.y } }
 function toScreen(world) { return { x: world.x * state.zoom + state.offset.x, y: world.y * state.zoom + state.offset.y } }
 function slotWorldCenter(node, index) { return { x: node.x + SLOT_START + index * SLOT_STRIDE, y: node.y } }
@@ -1518,8 +1516,9 @@ function parameterOf(node, graph = activeNodes()) {
   return target?.type === 'parameter' ? target : null
 }
 function nodeName(node, graph = activeNodes()) { return parameterOf(node, graph)?.label ?? node.label }
-function nodeTypeLabel(node) { if (parameterOf(node)) return 'Parameter'; return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : node.type === 'law' ? 'Law claim' : `Number · ${node.annotation || 'literal'}` }
-// The short text a node shows inside its chip / a slot's nested chip. A
+function literalGlyph(node) { const kind = parseLiteral(node.value)?.kind; return kind === 'string' ? '"' : kind === 'char' ? "'" : kind === 'bool' ? '◉' : '#' }
+function nodeTypeLabel(node) { if (parameterOf(node)) return 'Parameter'; if (node.type === 'literal') return 'Literal · double-click to edit'; return node.type === 'boolean' ? 'Boolean · Bool' : node.type === 'curried' ? 'Curried function' : node.type === 'ref' ? 'Reference · another use (Δ)' : node.type === 'parameter' ? 'Parameter' : node.type === 'value' ? `Value · ${node.data?.type ?? '?'}` : node.type === 'text' ? 'Text · String' : node.type === 'law' ? 'Law claim' : `Number · ${node.annotation || 'literal'}` }
+// The short text a node shows inside its chip (and Output shows of its source). A
 // reference shows what it refers to, so it always reads the same as its
 // original even after the original's value is edited.
 function nodeDisplayText(node, graph = activeNodes()) {
@@ -1716,6 +1715,7 @@ function draw() {
   ctx.strokeStyle = '#ecebf5'; ctx.lineWidth = 1
   for (let x = state.offset.x % 24; x < w; x += 24) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke() }
   for (let y = state.offset.y % 24; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
+  materializeLiterals(activeNodes())
   placeNewArguments()
   drawReferenceLinks()
   drawOutputLink()
@@ -1777,15 +1777,18 @@ function drawValueChip(node, pass, selected, snapHighlight) {
   const isFunctionValued = node.type === 'curried'
   const typeColor = colorForType(resolvedValueQual(node, activeNodes(), pass).type, labelNamer)
   const badgeColor = node.type === 'law' ? (lawNodeResults.get(node.id)?.ok ? '#1f8f74' : '#c0335e') : isFunctionValued ? ACCENT : typeColor
-  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' && !parameterOf(node) ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : node.type === 'law' ? '⚖' : '#'
+  const glyph = isFunctionValued ? 'ƒ' : node.type === 'output' ? '→' : node.type === 'boolean' ? '◉' : node.type === 'ref' && !parameterOf(node) ? '↪' : node.type === 'value' ? '◆' : node.type === 'text' ? '"' : node.type === 'law' ? '⚖' : node.type === 'literal' ? literalGlyph(node) : '#'
+  // A literal reads red when its text isn't a literal, or doesn't fit the slot it's in.
+  const literalSlot = node.type === 'literal' && slotHost(node)
+  const badLiteral = node.type === 'literal' && state.editingLiteral !== node.id && (!parseLiteral(node.value) || (literalSlot && pass.perNode.get(literalSlot.host.id)?.invalidSlots?.includes(literalSlot.index)))
   ctx.save()
   ctx.shadowColor = snapHighlight ? `${ACCENT}66` : selected ? `${ACCENT}40` : '#211d3414'
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 3
   roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (CHIP_H / 2) * state.zoom)
   ctx.fillStyle = '#fff'; ctx.fill()
   ctx.shadowColor = 'transparent'
-  ctx.lineWidth = snapHighlight ? 4 : selected ? 3 : 2
-  ctx.strokeStyle = snapHighlight || selected ? ACCENT : NEUTRAL_BORDER
+  ctx.lineWidth = snapHighlight ? 4 : selected || badLiteral ? 3 : 2
+  ctx.strokeStyle = badLiteral ? '#e0537d' : snapHighlight || selected ? ACCENT : NEUTRAL_BORDER
   ctx.stroke()
   // Same proportions as a function block's head: a 23px badge, 46px in from the left end.
   const badgeX = rect.left + 46 * state.zoom
@@ -1884,14 +1887,15 @@ function isSignatureEditable(node) {
 }
 function updatePortEditor(pass = typePass()) {
   // The overlay is rebuilt from scratch on every draw(), including the one a
-  // keystroke in a slot triggers — remember which slot had focus (and the
-  // caret) so typing `12` doesn't lose focus after the `1`.
-  const focused = editor.contains(document.activeElement) && document.activeElement.classList.contains('param-value')
-    ? { fn: document.activeElement.closest('.param-slot').dataset.functionId, index: document.activeElement.closest('.param-slot').dataset.index, start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+  // keystroke in a literal triggers — remember the caret so typing `12`
+  // doesn't lose focus after the `1`.
+  const focused = editor.contains(document.activeElement) && document.activeElement.classList.contains('literal-input')
+    ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
     : null
+  rebuildingEditor = true
   editor.innerHTML = ''
-  // A function node plugged into a slot is hidden (it lives in that slot's
-  // nested chip), so its own slots aren't shown either.
+  rebuildingEditor = false
+  // A call folded away inside another's (folded) slot is hidden, and so are its own slots.
   const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
   // One fold toggle per call, on the top border above its head badge: folds
   // (or opens) all its slots, and everything plugged into them, at once.
@@ -1940,49 +1944,28 @@ function updatePortEditor(pass = typePass()) {
     // drifting out of place at anything but 100% zoom.
     tag.style.fontSize = `${10 * state.zoom}px`
     tag.style.padding = `${2 * state.zoom}px ${7 * state.zoom}px`
-    tag.style.marginBottom = `${5 * state.zoom}px`
+    tag.style.marginBottom = `${(FN_H / 2 - SLOT_D / 2 - 18) * state.zoom}px` // up near the block's top, clear of the dot
     tag.style.maxWidth = `${(SLOT_STRIDE - TAG_GAP) * state.zoom}px`
     // Zoomed far out the tag is a few px of unreadable text (or, under a
     // browser minimum font size, a full-size pill piling onto its
     // neighbours) — leave it to the tooltip until it can be read.
     if (state.zoom >= TAG_MIN_ZOOM) slot.append(tag)
     else slot.title = tag.title
-    if (mountedNode) {
-      // Snapped-in: render the plugged node as a nested chip — colored by
-      // its resolved TYPE (not the slot's own decorative node color), so a
-      // slot and whatever's plugged into it always agree — grabbing it
-      // pulls it back out, magnet-style, as a free node under the cursor.
-      const chip = document.createElement('div')
-      chip.className = 'param-chip'
-      chip.style.background = colorForType(resolvedValueQual(mountedNode, activeNodes(), pass).type, labelNamer)
-      chip.textContent = nodeDisplayText(mountedNode)
-      chip.style.fontSize = `${11 * state.zoom}px`
-      chip.style.padding = `0 ${10 * state.zoom}px`
-      chip.title = '드래그해서 떼어내기'
-      chip.addEventListener('pointerdown', (event) => {
-        event.preventDefault(); event.stopPropagation()
-        if (viewingReadonly()) { state.selected = mountedNode.id; updateInspector(); draw(); return }
-        const world = canvasPoint(event)
-        const moving = detachMounted(node, index)
-        if (!moving) return
-        moving.x = world.x; moving.y = world.y
-        beginDrag(moving, world, { moved: true })
-        state.selected = moving.id
-        updateInspector(); draw()
-      })
-      slot.append(chip)
-    } else {
-      const input = document.createElement('input')
-      input.className = 'param-value'; input.type = 'text'
-      input.placeholder = slotExpectsFunction(node, index, pass) ? 'ƒ' : '?'
-      input.value = rawValue; input.title = `Parameter ${index + 1}`
-      input.readOnly = viewingReadonly()
-      if (pass.perNode.get(node.id)?.invalidSlots?.includes(index)) { input.classList.add('invalid'); input.title = `"${rawValue}" doesn't fit ${paramDisplayName(node, index)} :: ${expectedParamType(node, index, activeNodes(), labelNamer, pass)}` }
-      input.style.fontSize = `${11 * state.zoom}px`
-      input.style.paddingTop = `${4 * state.zoom}px`
-      input.addEventListener('input', () => { node.params[index] = input.value; state.selected = node.id; updateInspector(); draw() })
-      slot.append(input)
-    }
+    // A slot is just an in-port: a dot that wires are dropped on. What fills
+    // it is always a node on the canvas, wired in — a value like `3` too, as
+    // a literal node: clicking an empty dot makes one, plugged in and ready
+    // to type into. A filled dot takes the colour of its type; one whose
+    // literal doesn't fit is marked.
+    const invalid = pass.perNode.get(node.id)?.invalidSlots?.includes(index)
+    if (mountedNode) slot.style.background = invalid ? '#e0537d' : slotColor
+    if (invalid) { slot.classList.add('invalid'); slot.title = `${nodeDisplayText(mountedNode)} doesn't fit ${tag.title}` }
+    else if (!mountedNode && !viewingReadonly()) slot.title = `${tag.title} — click to type a value, or drop a wire here`
+    slot.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation() })
+    slot.addEventListener('click', (event) => {
+      event.stopPropagation()
+      if (mountedNode) { state.selected = mountedNode.id; updateInspector(); draw() }
+      else createLiteralIn(node, index)
+    })
     // Slots can only be added/removed where that means something: a custom
     // function's definition (its signature — synced to its body and every
     // call, see signature.js) or a list literal (its length). Everywhere else
@@ -1992,7 +1975,7 @@ function updatePortEditor(pass = typePass()) {
     const remove = document.createElement('button')
     remove.className = 'param-remove'; remove.type = 'button'; remove.textContent = '−'; remove.title = editable === 'signature' ? `Remove parameter ${paramDisplayName(node, index)} (from the body and every call)` : 'Remove this element'
     remove.style.width = remove.style.height = `${16 * state.zoom}px`
-    remove.style.right = remove.style.top = '0'
+    remove.style.right = remove.style.top = `${-14 * state.zoom}px`
     remove.style.fontSize = `${12 * state.zoom}px`; remove.style.lineHeight = `${16 * state.zoom}px`
     remove.addEventListener('click', (event) => {
       event.stopPropagation()
@@ -2061,10 +2044,75 @@ function updatePortEditor(pass = typePass()) {
     port.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); if (source && isVisible(source)) beginWire(source, event) })
     editor.append(port)
   }
-  if (focused) {
-    const input = editor.querySelector(`.param-slot[data-function-id="${CSS.escape(focused.fn)}"][data-index="${focused.index}"] .param-value`)
-    if (input) { input.focus(); input.setSelectionRange(focused.start, focused.end) }
+  // The literal being typed into: an input laid over its chip's text.
+  const editing = state.editingLiteral && graph[state.editingLiteral]
+  if (editing && isVisible(editing) && !viewingReadonly()) {
+    const rect = valueBlockScreenRect(editing)
+    const left = rect.left + (46 + 23 + 10) * state.zoom
+    const input = document.createElement('input')
+    input.className = 'literal-input'; input.type = 'text'; input.spellcheck = false
+    input.value = editing.value ?? ''
+    input.placeholder = '3, "text", True'
+    input.style.left = `${left}px`; input.style.top = `${rect.top + rect.height / 2 - 16 * state.zoom}px`
+    input.style.width = `${Math.max(90 * state.zoom, rect.right - 22 * state.zoom - left)}px`; input.style.height = `${32 * state.zoom}px`
+    input.style.fontSize = `${CHIP_FONT * state.zoom}px`
+    input.addEventListener('pointerdown', (event) => event.stopPropagation())
+    input.addEventListener('input', () => { editing.value = input.value; updateInspector(); draw() })
+    input.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === 'Escape') { event.preventDefault(); input.blur() } })
+    input.addEventListener('blur', () => { if (!rebuildingEditor) finishLiteralEdit(editing.id) })
+    editor.append(input)
+    input.focus()
+    if (focused) input.setSelectionRange(focused.start, focused.end)
+    else input.select()
   }
+}
+// Clicking an empty slot: a literal node, plugged into it and laid out to the
+// left of the call with its other arguments, open for typing its value.
+let rebuildingEditor = false
+function createLiteralIn(host, index) {
+  if (readonlyBlocked()) return
+  const graph = activeNodes()
+  const id = `literal-${Date.now()}`
+  graph[id] = { id, type: 'literal', label: 'literal', value: '', color: '#4f8ef7', x: host.x, y: host.y, mountedTo: `${host.id}:${index}`, connected: true, placed: true }
+  host.mounted[index] = id
+  host.params[index] = ''
+  layoutTree(host)
+  state.selected = id
+  state.editingLiteral = id
+  updateInspector(); draw()
+}
+// Done typing: a literal left empty goes away (its slot is open again).
+function finishLiteralEdit(id) {
+  if (state.editingLiteral !== id) return
+  state.editingLiteral = null
+  const n = activeNodes()[id]
+  if (n && String(n.value ?? '').trim() === '') return deleteNode(id)
+  const at = n && slotHost(n)
+  if (at) at.host.params[at.index] = nodeDisplayText(n)
+  updateInspector(); draw()
+}
+function startLiteralEdit(n) {
+  if (viewingReadonly() || n?.type !== 'literal') return
+  state.selected = n.id
+  state.editingLiteral = n.id
+  updateInspector(); draw()
+}
+// Slot text from before slots were dots (a `3` typed straight into a slot)
+// becomes a literal node plugged into that slot — same meaning, now visible.
+function materializeLiterals(graph) {
+  let changed = false
+  for (const n of Object.values(graph)) {
+    if (n?.type !== 'function') continue
+    ;(n.params || []).forEach((text, i) => {
+      if (n.mounted?.[i] || !parseLiteral(text)) return
+      const id = `literal-${n.id}-${i}-${Math.random().toString(36).slice(2, 7)}`
+      graph[id] = { id, type: 'literal', label: 'literal', value: text.trim(), color: '#4f8ef7', x: n.x, y: n.y, mountedTo: `${n.id}:${i}`, connected: true, placed: false }
+      n.mounted = n.mounted || n.params.map(() => null)
+      n.mounted[i] = id
+      changed = true
+    })
+  }
+  return changed
 }
 // After a `number` node's type annotation changes, any existing wire into it
 // may no longer type-check (e.g. it was plugged into an Int-only port, then
@@ -2104,7 +2152,7 @@ function renderValueInspector(n) {
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
   if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — click to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — click to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — click to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' || n.type === 'literal' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
 }
 // Why `n` can't be deleted, or null if it can. Builtins are the language
 // itself; a function's Output and parameters are its signature, changed
@@ -2421,7 +2469,7 @@ function updateInspector() {
   // very input on every keystroke and steal focus/cursor position. draw()
   // alone is enough to keep the canvas label live; the inspector's own TYPE
   // line catches up next time something reselects this node.
-  if (valueInput && (n.type === 'number' || n.type === 'text')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
+  if (valueInput && (n.type === 'number' || n.type === 'text' || n.type === 'literal')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
 }
 // Plays `fn`: evaluates it as a value (callee applied to its applied slots —
 // see src/evaluator.js) and drops the result next to it. A fully-applied
@@ -2469,9 +2517,7 @@ function executeFunction(fn) {
   state.selected = id; updateInspector(); draw()
   setTimeout(() => { state.running = false; draw() }, 300)
 }
-// Nodes currently snapped into a slot have no meaningful standalone
-// position/hitbox on the open canvas — they're only reachable through the
-// slot's own nested chip (see updatePortEditor's detach handler).
+// The node under a canvas point (hidden ones — inside a folded call — have no hitbox).
 function hitNode(x, y) {
   return Object.values(activeNodes()).find(n => {
     if (!isVisible(n)) return false
@@ -2487,7 +2533,7 @@ function hitNode(x, y) {
 // already shows text (a typed literal, or a builtin's placeholder name) is
 // overridden by a wire dropped on it; one with a node plugged in is not —
 // pull that wire out first.
-const WIRE_SLOT_RADIUS = SLOT_D / 2 + 14
+const WIRE_SLOT_RADIUS = 42 // a dot is small: a wire's end catches it from a little way off
 function findWireTarget(source, at) {
   if (viewingReadonly()) return null // nodes may be moved around to look, never reconnected
   if (!source || source.type === 'output' || source.type === 'law') return null
@@ -2610,6 +2656,7 @@ function setZoom(nextZoom, clientX = canvas.clientWidth / 2, clientY = canvas.cl
   draw()
 }
 canvas.addEventListener('pointerdown', (event) => {
+  if (state.editingLiteral) finishLiteralEdit(state.editingLiteral) // clicking away is done typing
   const p = canvasPoint(event), node = hitNode(p.x, p.y)
   canvas.setPointerCapture(event.pointerId)
   if (node) {
@@ -2704,6 +2751,8 @@ canvas.addEventListener('click', (event) => {
 // you took over), as does "Open definition".
 canvas.addEventListener('dblclick', (event) => {
   const p = canvasPoint(event)
+  const literal = Object.values(activeNodes()).find((n) => n.type === 'literal' && isVisible(n) && pointInValueBlock(n, p.x, p.y))
+  if (literal) return startLiteralEdit(literal)
   const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
   const definitionId = selected && (selected.sourceFunctionId || selected.id)
   if (selected && definitions[definitionId]?.lambda) enterFunction(definitionId)
@@ -3002,6 +3051,8 @@ function loadProject(project) {
   Object.assign(nodes, project.nodes)
   Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
   Object.assign(functionBodies, project.functionBodies)
+  ;[nodes, ...Object.values(functionBodies)].forEach(materializeLiterals)
+  state.editingLiteral = null
   applyTypes(project.types || {}, project.classes || {})
   if (typeEditor) { if (types[typeEditor.original]) { typeEditor = editorFor(typeEditor.original); renderTypeEditor() } else closeTypeEditor() }
   if (classEditor) { if (classes[classEditor.original]) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }

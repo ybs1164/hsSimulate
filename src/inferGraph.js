@@ -370,6 +370,25 @@ function resolveNodeType(id, graph, ctx, memo) {
     memo.set(id, entry)
     return entry
   }
+  if (node.type === 'literal') {
+    // Plugged in, its host types it (with the slot): resolve the host first.
+    const at = String(node.mountedTo || '').lastIndexOf(':')
+    const hostId = at < 0 ? null : node.mountedTo.slice(0, at)
+    if (hostId && graph[hostId]?.mounted?.includes(id)) {
+      resolveNodeType(hostId, graph, ctx, memo)
+      if (memo.has(id)) return memo.get(id)
+    }
+    // Free-standing: the type its text alone gives (`3 :: Semiring a => a`).
+    const lit = parseLiteral(node.value)
+    const valueType = !lit || lit.kind === 'number' ? freshVar() : lit.kind === 'string' ? tlist(tcon('Char')) : lit.kind === 'char' ? tcon('Char') : Bool
+    if (lit?.kind === 'number') {
+      ctx.preds.push(pred(literalClass(lit.text), valueType))
+      ctx.origins.push({ id, preds: [pred(literalClass(lit.text), valueType)], label: lit.text })
+    }
+    const entry = { kind: 'value', valueType }
+    memo.set(id, entry)
+    return entry
+  }
   if (node.type === 'text') {
     const entry = { kind: 'value', valueType: tlist(tcon('Char')) }
     memo.set(id, entry)
@@ -431,6 +450,17 @@ function resolveNodeType(id, graph, ctx, memo) {
     memo.set(id, entry) // set before recursing so a stray self-mount can't loop
     paramTypes.forEach((paramType, i) => {
       const mountedId = node.mounted?.[i]
+      if (mountedId && graph[mountedId]?.type === 'literal') {
+        // A literal node plugged in is typed exactly like the same text typed
+        // inline (below): settled against the slot, flagged there if it
+        // doesn't fit. It reads as the slot's own type.
+        applied[i] = true
+        memo.set(mountedId, { kind: 'value', valueType: paramType })
+        const lit = parseLiteral(graph[mountedId].value)
+        if (lit) ctx.pendingLiterals.push({ graph, id, index: i, paramType, lit })
+        else markInvalid(ctx, graph, id, i)
+        return
+      }
       if (mountedId && graph[mountedId]) {
         applied[i] = true
         const argEntry = resolveNodeType(mountedId, graph, ctx, memo)

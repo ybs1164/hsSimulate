@@ -1,6 +1,6 @@
 // End-to-end: build and play a whole game through the editor UI only — no
 // templates, no JSON import. Declares types in the type editor, creates
-// functions, adds nodes from the sidebar, types literals into slots, wires
+// functions, adds nodes from the sidebar, types literals (literal nodes made from empty slots), wires
 // nodes (from their out-ports) into slots and onto Output, sets the entry point and plays. Also
 // exercises search, λ nodes, broken-call marking, multi-select copy/paste
 // and keyboard subscriptions.
@@ -133,8 +133,10 @@ async function add(kind, label) {
   return id
 }
 async function fill(fnId, i, text) {
-  await js(`(() => { const el = document.querySelector('.param-slot[data-function-id="${fnId}"][data-index="${i}"] .param-value'); el.value = ${JSON.stringify(text)}; el.dispatchEvent(new Event('input')) })()`)
-  await js(`document.activeElement?.blur?.()`)
+  // clicking an empty slot makes a literal node plugged into it, open for typing
+  await js(`document.querySelector('.param-slot[data-function-id="${fnId}"][data-index="${i}"]').click()`); await sleep(150)
+  await js(`(() => { const el = document.querySelector('.literal-input'); el.value = ${JSON.stringify(text)}; el.dispatchEvent(new Event('input')) })()`)
+  await js(`document.querySelector('.literal-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`); await sleep(150)
 }
 async function addSlot(fnId) {
   // the + of this node is the one on its row (or, with no slots yet, the most recently added button)
@@ -143,7 +145,7 @@ async function addSlot(fnId) {
 }
 async function plug(nodeId, fnId, i) {
   await drag(await outPort(nodeId), await slotCenter(fnId, i))
-  expect(await js(`!!document.querySelector('.param-slot[data-function-id="${fnId}"][data-index="${i}"] .param-chip')`), `plugging ${nodeId} into ${fnId}#${i} did not connect`)
+  expect(await js(`!!document.querySelector('.param-slot.filled[data-function-id="${fnId}"][data-index="${i}"]')`), `plugging ${nodeId} into ${fnId}#${i} did not connect`)
 }
 async function toOutput(nodeId) {
   await drag(await outPort(nodeId), await portCenter('.in-port'))
@@ -396,10 +398,11 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const crumb = await js(`document.querySelector('#graph-name').textContent`)
     const text = await definitionText()
     const count = await js(`document.querySelector('#node-count').textContent`)
-    const fold = await js(`[...document.querySelectorAll('#port-editor .param-slot')].find((s) => s.querySelector('.param-chip'))?.dataset.functionId`)
+    const fold = await js(`[...document.querySelectorAll('#port-editor .param-slot')].find((s) => s.classList.contains('filled'))?.dataset.functionId`)
     await js(`document.querySelector('.library-item[data-type=number]').click()`); await sleep(300) // refused: read-only
     const after = await js(`document.querySelector('#node-count').textContent`)
-    const inputsLocked = await js(`[...document.querySelectorAll('#port-editor .param-value')].every((e) => e.readOnly)`)
+    await js(`document.querySelector('#port-editor .param-slot:not(.filled)')?.click()`); await sleep(300) // no literal typed into a read-only view
+    const inputsLocked = !(await js(`!!document.querySelector('.literal-input')`)) && (await js(`document.querySelector('#node-count').textContent`)) === after
     await back()
     await clickToken('showFFloat')
     await js(`document.querySelector('#open-definition').click()`); await sleep(700)
@@ -418,9 +421,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const crumb = await js(`document.querySelector('#graph-name').textContent`)
     // (++) xs ys = xs: pull xs out of foldr's last slot, then wire it to Output
     const fold = Object.values((await activeGraph()).graph).find((n) => n.sourceFunctionId === 'prelude:foldr').id
-    const chip = JSON.parse(await js(`JSON.stringify(document.querySelector('.param-slot[data-function-id="${fold}"][data-index="2"] .param-chip').getBoundingClientRect())`))
-    await drag({ x: chip.x + chip.width / 2, y: chip.y + chip.height / 2 }, { x: chip.x + chip.width / 2, y: chip.y + 200 })
-    await toOutput(await paramId('xs'))
+    await toOutput((await activeGraph()).graph[fold].mounted[2]) // pulling its wire out of the slot and into Output
     const text = await definitionText()
     await back(); await back()
     const edited = await playText()

@@ -148,6 +148,7 @@ function printBody(fnId, definitions, functionBodies) {
 
   function print(n) {
     if (n.type === 'number') return literal(String(n.value ?? '0'), n.id)
+    if (n.type === 'literal') return literal(String(n.value ?? ''), n.id)
     if (n.type === 'boolean') return atom([tok(n.value === 'true' ? 'True' : 'False', n.id, { role: 'literal' })])
     if (n.type === 'text') return atom([tok(JSON.stringify(String(n.value ?? '')), n.id, { role: 'literal' })])
     if (n.type === 'output') return n.source ? expr(n.source) : atom([{ text: 'undefined' }])
