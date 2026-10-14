@@ -308,7 +308,10 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .ce-method{margin:0 0 8px}
 .ce-method .ce-sig{width:240px}
 .ce-sigshow{color:var(--muted)}
-.ce-context{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:2px 6px;width:120px}
+.ce-instance-head{display:flex;align-items:center;flex-wrap:wrap;gap:.35em;font-family:'DM Mono',monospace}
+.ce-instance-head .tc-ctx{margin-right:0}
+.ce-head{font-weight:600}
+.ce-hvar{display:inline-flex;padding:0 .35em;margin:0 .1em;border-radius:4px;cursor:default}
 .te-instance{border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:8px 12px;margin:0 0 10px;font:11px/1.8 'DM Mono';max-width:720px}
 .te-instance small{color:var(--muted)}
 .te-method{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-left:14px}

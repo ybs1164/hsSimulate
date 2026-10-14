@@ -903,12 +903,23 @@ function renameMethodCalls(before, after) {
     }
   }
 }
+// The type variables of an instance head: `Maybe a` has a, `Double` none.
+function instanceHeadVars(c, inst) {
+  const arity = (types[inst.head] ? (types[inst.head].params || []).length : (constructorArity[inst.head] || 0)) - (resolvedClasses.find((r) => r.name === c.name)?.arity || 0)
+  return ['a', 'b', 'c', 'd'].slice(0, Math.max(0, arity))
+}
 // The instance head as Haskell writes it: `Double`, `(Maybe a)`, `[]`.
 function classInstanceHead(c, inst) {
-  const arity = (types[inst.head] ? (types[inst.head].params || []).length : (constructorArity[inst.head] || 0)) - (resolvedClasses.find((r) => r.name === c.name)?.arity || 0)
-  const vars = ['a', 'b', 'c', 'd'].slice(0, Math.max(0, arity))
+  const vars = instanceHeadVars(c, inst)
   if (inst.head === 'List' && vars.length === 1) return '[a]'
   return vars.length ? `(${[showHead(inst.head), ...vars].join(' ')})` : showHead(inst.head)
+}
+// The same, with each type variable a token a class from CLASSES can be dropped on.
+function classInstanceHeadHtml(c, inst) {
+  const vars = instanceHeadVars(c, inst)
+  const v = (name) => `<span class="tn tn-var ce-hvar" data-var="${name}" title="Drag a class from CLASSES here to ask it of ${name}: Show ${name} ⇒ …">${name}</span>`
+  if (inst.head === 'List' && vars.length === 1) return `[${v('a')}]`
+  return vars.length ? `(${escapeAttr(showHead(inst.head))} ${vars.map(v).join(' ')})` : escapeAttr(showHead(inst.head))
 }
 const methodArity = (sig) => {
   // arrows at the top level of the signature (outside parentheses), after any context
@@ -949,7 +960,10 @@ function renderClassEditor(error = '') {
       <div class="property"><label>INSTANCES</label>
         ${d.instances.map((inst, ii) => {
           const rInst = applied?.instances.find((r) => r.headName === inst.head)
-          return `<div class="te-instance" data-ii="${ii}"><div><b>instance</b> <input class="ce-context" value="${escapeAttr((inst.context || []).map((q) => `${q.cls} ${q.var}`).join(', '))}" placeholder="context" title="What the instance needs of its type variables, e.g. ${escapeAttr(d.name)} a" spellcheck="false" /> ⇒ <b>${escapeAttr(d.name)} ${escapeAttr(classInstanceHead(d, inst))}</b> <button class="te-x" data-ce="drop-instance" title="Remove this instance (its functions stay)">×</button></div>
+          const ctx = inst.context || []
+          const chips = ctx.map((q, k) => `<span class="cc pinned" data-ci="${k}" title="${escapeAttr(`${q.cls} ${q.var} — drop another class here to change it, _ to remove it`)}">${escapeAttr(`${q.cls} ${q.var}`)}<button class="cc-x" title="Remove ${escapeAttr(`${q.cls} ${q.var}`)}">×</button></span>`)
+          const context = chips.length ? `<span class="tc-ctx ce-ctx">${chips.length > 1 ? '<i>(</i>' : ''}${chips.join('<i>,</i> ')}${chips.length > 1 ? '<i>)</i>' : ''} ⇒</span>` : ''
+          return `<div class="te-instance" data-ii="${ii}"><div class="ce-instance-head"><b>instance</b> ${context} <b>${escapeAttr(d.name)}</b> <span class="ce-head">${classInstanceHeadHtml(d, inst)}</span> <button class="te-x" data-ce="drop-instance" title="Remove this instance (its functions stay)">×</button></div>
             ${d.methods.map((m) => {
               const fnId = inst.methods?.[m.name]
               const rm = applied?.methods.find((x) => x.name === m.name)
@@ -992,8 +1006,40 @@ function renderClassEditor(error = '') {
   typePanel.querySelectorAll('.te-instance').forEach((row) => {
     const inst = d.instances[Number(row.dataset.ii)]
     row.querySelector('[data-ce="drop-instance"]').onclick = () => update(() => { d.instances.splice(Number(row.dataset.ii), 1) })
-    row.querySelector('.ce-context').onchange = (e) => update(() => {
-      inst.context = e.target.value.split(',').map((s) => s.trim()).filter(Boolean).map((s) => { const [cls, v] = s.split(/\s+/); return { cls, var: v } })
+    // The context is built by dragging classes from the workspace: onto a
+    // type variable of the head to ask that class of it, onto a constraint to
+    // change its class; _ or × removes one. A context the class can't take is rolled back.
+    const setContext = (next) => {
+      const before = inst.context
+      inst.context = next
+      const error = applyClassDraft()
+      if (error) inst.context = before
+      renderClassEditor(error)
+    }
+    const ctx = inst.context || []
+    const stop = (el) => el.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
+    row.querySelectorAll('.ce-hvar').forEach((el) => {
+      const v = el.dataset.var
+      stop(el)
+      dropZone(el, {
+        take: () => showToast(`Drag a class from CLASSES onto ${v} to ask it of ${v}`),
+        constrain: (_, cls) => {
+          if (classArity(cls)) return showToast(`${cls} is a class of type constructors (* ▸ *) — ${v} is a type`)
+          if (ctx.some((q) => q.cls === cls && q.var === v)) return showToast(`${cls} ${v} is already in the context`)
+          setContext([...ctx, { cls, var: v }])
+        },
+      })
+      el.addEventListener('click', () => showToast(`Drag a class from CLASSES onto ${v} to ask it of ${v}`))
+    })
+    row.querySelectorAll('.ce-ctx .cc').forEach((chip) => {
+      const q = ctx[Number(chip.dataset.ci)]
+      const without = () => ctx.filter((c) => c !== q)
+      stop(chip)
+      dropZone(chip, {
+        take: (sub) => (isHole(sub) ? setContext(without()) : showToast('Drop a class here to change this constraint, or _ to remove it')),
+        constrain: (_, cls) => setContext(ctx.filter((c) => c === q || !(c.cls === cls && c.var === q.var)).map((c) => (c === q ? { cls, var: q.var } : c))),
+      })
+      chip.querySelector('.cc-x').addEventListener('click', (event) => { event.stopPropagation(); setContext(without()) })
     })
     row.querySelectorAll('select[data-method]').forEach((sel) => {
       sel.onchange = () => update(() => {

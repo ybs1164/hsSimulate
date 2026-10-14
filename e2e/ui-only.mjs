@@ -375,6 +375,33 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(status.includes('applied') && p.nodes[implId]?.label === 'prettyModel' && text === 'Model {count = 0}', `${status} / ${p.nodes[implId]?.label} / ${JSON.stringify(text)}`)
     return `pretty initial = ${JSON.stringify(text)}`
   })
+  await check("an instance's context is built by dragging classes onto the head's type variables", async () => {
+    await js(`document.querySelector('.class-item[data-class-name="Pretty"]').click()`); await sleep(300)
+    await setField('.ce-add-instance', 'Maybe'); await sleep(400)
+    const row = `[...document.querySelectorAll('.te-instance')].find((r) => /Maybe/.test(r.querySelector('.ce-head')?.textContent))`
+    const context = async () => ((await project()).classes.Pretty.instances.find((i) => i.head === 'Maybe')?.context || []).map((q) => `${q.cls} ${q.var}`).join(', ')
+    const shown = () => js(`${row}.querySelector('.ce-instance-head').textContent.replace(/×/g, '').replace(/\\s+/g, ' ').trim()`)
+    const fresh = await context()
+    // Show onto the a of Pretty (Maybe a)
+    await dragType('data-cls="Show"', `${row}.querySelector('.ce-hvar[data-var="a"]')`)
+    const added = await context()
+    const line = await shown()
+    // Eq onto the Pretty a constraint changes it
+    await dragType('data-cls="Eq"', `${row}.querySelector('.ce-ctx .cc[data-ci="0"]')`)
+    const changed = await context()
+    // a constructor class doesn't go on a
+    await dragType('data-cls="Functor"', `${row}.querySelector('.ce-hvar[data-var="a"]')`)
+    const refused = await js(`document.querySelector('#toast')?.textContent ?? ''`)
+    // × removes one
+    await js(`${row}.querySelector('.ce-ctx .cc[data-ci="0"] .cc-x').click()`); await sleep(300)
+    const removed = await context()
+    const boxes = await js(`document.querySelectorAll('.te-instance input').length`)
+    await js(`${row}.querySelector('[data-ce="drop-instance"]').click()`); await sleep(300)
+    await js(`document.querySelector('[data-ce="close"]').click()`); await sleep(200)
+    expect(fresh === 'Pretty a' && added === 'Pretty a, Show a' && /^instance \(Pretty a, Show a\) ⇒ Pretty \(Maybe a\)$/.test(line), `${fresh} / ${added} / ${line}`)
+    expect(changed === 'Eq a, Show a' && /type constructors/.test(refused) && removed === 'Show a' && boxes === 0, `${changed} / ${refused} / ${removed} / ${boxes}`)
+    return line
+  })
   await check('an ambiguous connection is refused, as GHC would reject it (show mempty)', async () => {
     await createFunction('vague', []); await openBody('vague')
     const sh = await add('prelude', 'show'); const me = await add('prelude', 'mempty')
