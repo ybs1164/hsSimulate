@@ -1,7 +1,7 @@
 // End-to-end: build and play a whole game through the editor UI only — no
 // templates, no JSON import. Declares types in the type editor, creates
-// functions, adds nodes from the sidebar, types literals into slots, drags
-// nodes into slots and onto Output, sets the entry point and plays. Also
+// functions, adds nodes from the sidebar, types literals into slots, wires
+// nodes (from their out-ports) into slots and onto Output, sets the entry point and plays. Also
 // exercises search, λ nodes, broken-call marking, multi-select copy/paste
 // and keyboard subscriptions.
 //
@@ -82,6 +82,12 @@ async function slotCenter(fnId, i) {
   if (!r) throw new Error(`no slot ${fnId}#${i}`)
   return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
 }
+async function portCenter(sel) {
+  const r = JSON.parse(await js(`JSON.stringify(document.querySelector(${JSON.stringify(sel)})?.getBoundingClientRect() ?? null)`))
+  if (!r) throw new Error(`no port ${sel}`)
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+}
+const outPort = (nodeId) => portCenter(`.out-port[data-node-id="${nodeId}"]`)
 async function drag(from, to) {
   await mouse('mousePressed', from.x, from.y)
   for (let k = 1; k <= 14; k++) { await mouse('mouseMoved', from.x + ((to.x - from.x) * k) / 14, from.y + ((to.y - from.y) * k) / 14); await sleep(12) }
@@ -137,14 +143,11 @@ async function addSlot(fnId) {
   await sleep(200)
 }
 async function plug(nodeId, fnId, i) {
-  const { graph } = await activeGraph()
-  await drag((await toScreen(graph))(graph[nodeId]), await slotCenter(fnId, i))
+  await drag(await outPort(nodeId), await slotCenter(fnId, i))
   expect(await js(`!!document.querySelector('.param-slot[data-function-id="${fnId}"][data-index="${i}"] .param-chip')`), `plugging ${nodeId} into ${fnId}#${i} did not connect`)
 }
 async function toOutput(nodeId) {
-  const { graph } = await activeGraph()
-  const map = await toScreen(graph)
-  await drag(map(graph[nodeId]), map(graph.output))
+  await drag(await outPort(nodeId), await portCenter('.in-port'))
   expect((await activeGraph()).graph.output.source === nodeId, `${nodeId} did not connect to Output`)
 }
 const paramId = async (name) => Object.values((await activeGraph()).graph).find((n) => n.type === 'parameter' && n.label === name).id
@@ -367,8 +370,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await check('an ambiguous connection is refused, as GHC would reject it (show mempty)', async () => {
     await createFunction('vague', []); await openBody('vague')
     const sh = await add('prelude', 'show'); const me = await add('prelude', 'mempty')
-    const { graph } = await activeGraph()
-    await drag((await toScreen(graph))(graph[me]), await slotCenter(sh, 0))
+    await drag(await outPort(me), await slotCenter(sh, 0))
     const toast = await js(`document.querySelector('#toast')?.textContent ?? ''`)
     const after = (await activeGraph()).graph[sh]
     // a defaultable one is fine: show 3
