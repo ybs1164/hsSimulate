@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { DeclError, declareTypes, derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
 import { showQual, showType } from '../src/typeSystem.js'
@@ -41,9 +42,10 @@ test('declarations are checked like GHC would', () => {
   bad('data Foo = Foo Int deriving Ord', /needs an Eq instance/)
   bad('data Foo = Foo a', /isn't a parameter/)
   bad('data Foo a a = Foo a', /appears twice/)
-  bad('data Foo f = Foo (f Int)', /can't be applied/)
+  bad('data Foo f = Foo (f Int) f', /doesn't fit together/) // f is a type constructor and a type at once
   bad('newtype Foo = Foo Int Int', /exactly one field/)
-  bad('data Foo = Foo (Maybe)', /wrong number of type arguments/)
+  bad('data Foo = Foo (Maybe)', /doesn't fit together/)
+  bad('data Foo = Foo (Maybe Int Int)', /too many type arguments/)
 })
 
 test('recursive types may derive classes that rely on themselves', () => {
@@ -58,7 +60,7 @@ test('String is [Char] and fields may mention other declared types', () => {
 })
 
 // ---- Evaluation: the categorical laws of products and coproducts ----------
-const registry = { nodes: { ...defs, plus: { id: 'plus', builtin: 'plus', label: '(+)' }, eq: { id: 'eq', builtin: 'eq', label: '(==)' }, geq: { id: 'geq', builtin: 'geq', label: '(>=)' }, negate: { id: 'negate', builtin: 'negate', label: 'negate' } }, functionBodies: {} }
+const registry = { types, nodes: { ...defs, plus: { id: 'plus', builtin: 'plus', label: '(+)' }, eq: { id: 'eq', builtin: 'eq', label: '(==)' }, geq: { id: 'geq', builtin: 'geq', label: '(>=)' }, negate: { id: 'negate', builtin: 'negate', label: 'negate' } }, functionBodies: {} }
 const ev = createEvaluator(registry)
 const id = (label) => Object.values(defs).find((d) => d.label === label).id
 const call = (key, label, slots) => ({ id: key, type: 'function', sourceFunctionId: registry.nodes[label] ? label : id(label), label, params: slots.map((s) => (typeof s === 'string' ? s : '')), mounted: slots.map((s) => (typeof s === 'string' ? null : s.node)) })
@@ -147,4 +149,16 @@ test('an inductive type gets its recursor (structural recursion)', () => {
   const g = graphOf(c('z', 'Z', []), c('s1', 'S', [{ node: 'z' }]), c('s2', 'S', [{ node: 's1' }]), c('s3', 'S', [{ node: 's2' }]), c('inc', 'succ', ['']), c('toInt', 'foldNat', ['0', { node: 'inc' }, { node: 's3' }]))
   assert.equal(createEvaluator(reg).run(g, 'toInt'), 3)
   assert.equal(showValue(createEvaluator(reg).run(g, 's3'), t), 'S (S (S Z))')
+})
+
+test('kinds are inferred from the fields, as GHC does', async () => {
+  const { inferKinds } = await import('../src/typeDecls.js')
+  const { showKind } = await import('../src/typeSystem.js')
+  const t = declareTypes({}, 'data Fix f = Fix (f (Fix f))\ndata Compose f g a = Compose (f (g a))\ndata Rose a = Rose a [Rose a]\ndata Nested = Nested (Fix Maybe) (Compose Maybe Maybe Int)')
+  const kinds = Object.fromEntries(Object.entries(inferKinds(t)).map(([n, k]) => [n, showKind(k.kind)]))
+  assert.deepEqual(kinds, { Fix: '(* -> *) -> *', Compose: '(* -> *) -> (* -> *) -> * -> *', Rose: '* -> *', Nested: '*' })
+  // A type where a type constructor is wanted: refused.
+  assert.throws(() => declareTypes({}, 'data Fix f = Fix (f (Fix f))\ndata Bad = Bad (Fix Int)'), /doesn't fit together/)
+  // deriving asks the class of plain parameters only — and an `f (Fix f)` field needs more than that
+  assert.throws(() => declareTypes({}, 'data Fix f = Fix (f (Fix f)) deriving Show'), /has type f \(Fix f\), which has no Show instance/)
 })

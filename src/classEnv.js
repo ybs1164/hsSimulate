@@ -64,19 +64,41 @@ export function classArity(name) {
  * starting with `$` (instance-local pattern variables, never confused with
  * a real program type's variables); `context` constrains them.
  */
-export function declareInstance(cls, head, context = []) {
-  staticInstances.push({ cls, head, context })
+export function declareInstance(cls, head, context = [], impl = { how: 'prim' }) {
+  staticInstances.push({ ...impl, cls, head, context, key: instanceKey(cls, head) })
 }
+
+/** The constructor at the head of a type (`Maybe` for `Maybe a`, `List` for `[a]`), or null for a variable or function type. */
+export function headName(t) {
+  while (t.kind === 'app') t = t.fn
+  return t.kind === 'con' ? t.name : null
+}
+
+/**
+ * An instance's key: its class and its head's constructor, `Show@Maybe` —
+ * unique, since instances never overlap. It names the instance's
+ * dictionary at runtime (see instanceTable.js and evaluator.js).
+ */
+export function instanceKey(cls, head) {
+  return `${cls}@${headName(head)}`
+}
+
+const keyed = (list) => list.map((i) => (i.key ? i : { ...i, key: instanceKey(i.cls, i.head) }))
 
 /** Replace every instance derived from user type declarations (see typeDecls.js). */
 export function setDynamicInstances(list) {
-  dynamicInstances = list
+  dynamicInstances = keyed(list)
+}
+
+/** The instances currently set by setDynamicInstances. */
+export function listDynamicInstances() {
+  return dynamicInstances
 }
 
 /** Run `fn` with `list` as the derived instances in scope, then restore the previous ones. */
 export function withDynamicInstances(list, fn) {
   const before = dynamicInstances
-  dynamicInstances = list
+  dynamicInstances = keyed(list)
   try {
     return fn()
   } finally {
@@ -173,7 +195,7 @@ function byInst(p) {
 }
 
 /** The instance that applies to `p` and the obligations using it leaves, or null. */
-function findInstance(p) {
+export function findInstance(p) {
   for (const inst of allInstances()) {
     if (inst.cls !== p.cls) continue
     const s = match(inst.head, p.type)
@@ -184,10 +206,10 @@ function findInstance(p) {
 
 /**
  * Evidence for `p` — how to build its dictionary — or null if there is
- * none. Only user classes have dictionaries (builtin classes dispatch on
- * runtime values), so obligations of builtin classes are just checked.
- * `given` are the dictionaries in hand: `[{ pred, expr }]`. Evidence is
- * JSON data the evaluator interprets:
+ * none. Every class is passed as a dictionary, as GHC compiles them: the
+ * builtin ones too (their dictionaries' methods are primitives, or derived
+ * structurally — see instanceTable.js). `given` are the dictionaries in
+ * hand: `[{ pred, expr }]`. Evidence is JSON data the evaluator interprets:
  *
  *   given.expr                 a dictionary in hand (a function's dictionary parameter, …)
  *   { super: cls, of: e }      the superclass `cls` dictionary inside dictionary e
@@ -199,14 +221,12 @@ export function evidence(given, p) {
     if (path) return path.reduce((e, cls) => ({ super: cls, of: e }), g.expr)
   }
   const found = findInstance(p)
-  if (!found || !found.inst.key) return null
+  if (!found) return null
   const sub = []
   for (const q of found.obligations) {
-    if (isUserClass(q.cls)) {
-      const e = evidence(given, q)
-      if (!e) return null
-      sub.push(e)
-    } else if (!entails(given.map((g) => g.pred), q)) return null
+    const e = evidence(given, q)
+    if (!e) return null
+    sub.push(e)
   }
   return { inst: found.inst.key, sub }
 }

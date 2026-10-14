@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { inferGraph } from '../src/inferGraph.js'
-import { createEvaluator } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { printDefinition } from '../src/haskellPrint.js'
 import { showQual } from '../src/typeSystem.js'
 

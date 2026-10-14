@@ -84,7 +84,7 @@ test('a method call is resolved by type: Money, Int and Double each get their ow
   const int = { id: 'i', type: 'number', value: '3', label: '3', annotation: 'Int' }
   const dbl = { id: 'd', type: 'number', value: '3', label: '3', annotation: 'Double' }
   assert.equal(text(run([int, call('r', m('Pretty', 'pretty'), [n('i')])], 'r').v), 'int 3')
-  assert.equal(text(run([dbl, call('r', m('Pretty', 'pretty'), [n('d')])], 'r').v), 'double 3')
+  assert.equal(text(run([dbl, call('r', m('Pretty', 'pretty'), [n('d')])], 'r').v), 'double 3.0') // Haskell's show for a Double
 })
 
 test('a method with no argument (return-type polymorphism) is picked by where its result goes', () => {

@@ -6,6 +6,6 @@ import './numericClasses.js'
 import './dataTypes.js'
 import './categoryClasses.js'
 
-export { ContextError, classArity, classClosure, classNames, evidence, isUserClass, setDynamicClasses, withDynamicClasses, defaultTypes, entails, instancesOf, isClass, listInstances, pickDefault, predsOnVar, reduce, setDynamicInstances, simplify, superclassesOf, withDynamicInstances } from './classEnv.js'
+export { ContextError, findInstance, headName, instanceKey, listDynamicInstances, classArity, classClosure, classNames, evidence, isUserClass, setDynamicClasses, withDynamicClasses, defaultTypes, entails, instancesOf, isClass, listInstances, pickDefault, predsOnVar, reduce, setDynamicInstances, simplify, superclassesOf, withDynamicInstances } from './classEnv.js'
 export { literalClass, numericTypes } from './numericClasses.js'
 export { productLiftable } from './categoryClasses.js'

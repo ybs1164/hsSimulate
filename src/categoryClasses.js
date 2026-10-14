@@ -7,7 +7,9 @@
 //                       a lattice has its products (/\, meet) and
 //                       coproducts (\/, join)
 //   VectorSpace         (vector-space package, scalar fixed to Double)
-//   Functor, Foldable   (base) — constructor classes over `f :: * -> *`
+//   Functor, Foldable,  (base) — constructor classes over `f :: * -> *`
+//   Traversable,
+//   Applicative, Monad
 import { declareClass, declareInstance } from './classEnv.js'
 import { pred, tapp, tcon, tlist, ttuple, tvar } from './typeSystem.js'
 
@@ -18,6 +20,9 @@ declareClass('Lattice', ['PartialOrd']) // the lattices package keeps these sepa
 declareClass('VectorSpace', ['AddAbelianGroup'])
 declareClass('Functor', [], { arity: 1 })
 declareClass('Foldable', [], { arity: 1 })
+declareClass('Traversable', ['Functor', 'Foldable'], { arity: 1 })
+declareClass('Applicative', ['Functor'], { arity: 1 })
+declareClass('Monad', ['Applicative'], { arity: 1 })
 
 const $a = tvar('$a')
 const app = (name, t) => tapp(tcon(name), t)
@@ -51,10 +56,17 @@ declareInstance('Semigroup', app('Sub', $a))
 declareInstance('Monoid', app('Sub', $a))
 declareInstance('Functor', tcon('Sub'))
 
-for (const f of ['List', 'Maybe']) {
-  declareInstance('Functor', tcon(f))
-  declareInstance('Foldable', tcon(f))
+// The containers: lists, Maybe, `Either e` and `(,) w` (the writer, an
+// applicative and a monad when w is a monoid), as in base.
+const containers = [[tcon('List'), []], [tcon('Maybe'), []], [app('Either', $a), []], [app('(,)', $a), [pred('Monoid', $a)]]]
+for (const [f, monoidal] of containers) {
+  for (const cls of ['Functor', 'Foldable', 'Traversable']) declareInstance(cls, f)
+  for (const cls of ['Applicative', 'Monad']) declareInstance(cls, f, monoidal)
 }
+// Ordering is a monoid (lexicographic: the first non-EQ wins), Either a semigroup (the first Right).
+declareInstance('Semigroup', tcon('Ordering'))
+declareInstance('Monoid', tcon('Ordering'))
+declareInstance('Semigroup', tapp(app('Either', $a), $b))
 
 /**
  * Classes a product (single-constructor record) may derive pointwise, by

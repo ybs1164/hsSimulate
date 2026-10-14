@@ -9,18 +9,24 @@
 //   when a builtin actually needs them, so `select`/`ifThenElse` evaluate
 //   only the branch they take and a recursive custom function with a base
 //   case terminates.
-// - User classes (classDecls.js) are passed as dictionaries: the type pass
-//   elaborates each call with evidence (inferGraph.js), a custom function
-//   polymorphic in a user class receives dictionaries as hidden arguments,
-//   and a method call looks its implementation up in the dictionary.
-// - Runtime values are numbers, booleans, closures and data values (a
-//   constructor of a user-declared type applied to its fields — lazily, as
-//   Haskell constructors are). Closures and data values are plain data once
-//   forced (`run` returns them that way), so they can be stored on a node
-//   and survive save/load.
+// - Classes are passed as dictionaries, the way GHC compiles them — every
+//   class, builtin or declared (classDecls.js). The type pass elaborates
+//   each call with evidence (inferGraph.js); a custom function polymorphic
+//   in a class receives dictionaries as hidden arguments; a method looks its
+//   implementation up in the dictionary it is given (see instanceTable.js
+//   for what a dictionary holds). So which instance runs is decided by the
+//   types, never by looking at a value: `show` of a Double is "1.0", of an
+//   Int "1", though both are the same number at runtime, and `mempty`,
+//   `addZero` and a literal `3` become a value of the type the context asks
+//   for — `[]`, a record of zeros, `fromInteger 3` of a hand-written ring.
+// - Runtime values are numbers, booleans, characters (one-character
+//   strings), closures and data values (a constructor applied to its fields
+//   — lazily, as Haskell constructors are). Closures and data values are
+//   plain data once forced (`run` returns them that way), so they can be
+//   stored on a node and survive save/load.
 import { parseLiteral } from './literals.js'
-import { cons, just, nil, nothing, pair, stdGen } from './dataTypes.js'
-import { METHOD_CLASS, METHOD_LABEL } from './classMethods.js'
+import { cons, just, left, nil, nothing, ordering, pair, right, stdGen, unit } from './dataTypes.js'
+import { METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 
 export class EvalError extends Error {}
 
@@ -65,29 +71,25 @@ export function isData(v) {
 }
 
 function show(v) {
-  return isClosure(v) ? `ƒ ${v.callee}` : isData(v) ? v.ctor : isMempty(v) ? 'mempty' : String(v)
+  return isClosure(v) ? `ƒ ${v.callee}` : isData(v) ? v.ctor : String(v)
 }
 
 /**
- * Haskell `show`-style rendering of a forced value: `Model {clicks = 1, perClick = 2}`,
- * `Tick 0.5`, `Buy (Just 3)`. `types` (the project's declarations) supplies
- * record field names; without it records print positionally. `custom(v)`
- * may render a data value itself (a hand-written Show), or return null.
+ * Haskell `show`-style rendering of a forced value without its type (for
+ * displaying a stored value): `Model {clicks = 1, perClick = 2}`, `Tick 0.5`,
+ * `Buy (Just 3)`. `types` (the project's declarations) supplies record field
+ * names; without it records print positionally. Knowing the type, the
+ * evaluator's `showAt` shows a value through its Show instance instead.
  */
-export function showValue(v, types = {}, asArg = false, custom = null) {
+export function showValue(v, types = {}, asArg = false) {
   if (isClosure(v)) return `ƒ ${v.callee}`
-  if (custom && isData(v)) {
-    const s = custom(v)
-    if (s !== null) return asArg && /\s/.test(s) && !/^[([{"']/.test(s) ? `(${s})` : s
-  }
-  const showValue_ = (x, t, arg = false) => showValue(x, t, arg, custom)
-  if (isMempty(v)) return 'mempty'
-  if (typeof v === 'string') return `'${v}'` // a Char
+  const showValue_ = (x, t, arg = false) => showValue(x, t, arg)
+  if (typeof v === 'string') return showChar(v) // a Char
   if (isData(v) && v.type === '(,)') return `(${showValue_(v.args[0], types)},${showValue_(v.args[1], types)})`
   if (isData(v) && v.type === 'List') {
     const items = []
     for (let l = v; l.ctorIndex === 1; l = l.args[1]) items.push(l.args[0])
-    if (items.length && items.every((c) => typeof c === 'string')) return JSON.stringify(items.join('')) // a String
+    if (items.length && items.every((c) => typeof c === 'string')) return showString(items.join('')) // a String
     return `[${items.map((x) => showValue_(x, types)).join(',')}]`
   }
   if (typeof v === 'boolean') return v ? 'True' : 'False'
@@ -100,6 +102,56 @@ export function showValue(v, types = {}, asArg = false, custom = null) {
     : `${v.ctor} ${v.args.map((a) => showValue_(a, types, true)).join(' ')}`
   return asArg ? `(${rendered})` : rendered
 }
+
+// ---- Haskell's show for the primitive types -------------------------------
+
+const ESCAPES = { '\n': '\\n', '\t': '\\t', '\r': '\\r', '\\': '\\\\', '\0': '\\NUL', '\b': '\\b', '\f': '\\f', '\v': '\\v', '\x07': '\\a' }
+// One character as it appears inside a literal (`quote` is the delimiter that needs escaping).
+function escapeChar(c, quote) {
+  if (c === quote) return `\\${c}`
+  if (ESCAPES[c]) return ESCAPES[c]
+  const code = c.codePointAt(0)
+  return code >= 32 && code < 127 ? c : `\\${code}`
+}
+/** `show 'a'` = "'a'". */
+export function showChar(c) {
+  return `'${escapeChar(c, "'")}'`
+}
+/** `show "a\nb"` = "\"a\\nb\"" — a numeric escape followed by a digit gets `\&`, as GHC writes it. */
+export function showString(s) {
+  let out = ''
+  const chars = [...s]
+  chars.forEach((c, i) => {
+    const e = escapeChar(c, '"')
+    out += e
+    if (/^\\\d+$/.test(e) && /\d/.test(chars[i + 1] || '')) out += '\\&'
+  })
+  return `"${out}"`
+}
+/** `show` of a Double or Float, as GHC prints it: `1.0`, `0.1`, `1.0e7`, `1.5e-2`, `NaN`, `Infinity`. */
+export function showDouble(x) {
+  if (Number.isNaN(x)) return 'NaN'
+  if (!Number.isFinite(x)) return x > 0 ? 'Infinity' : '-Infinity'
+  if (x < 0 || Object.is(x, -0)) return `-${showDouble(-x)}`
+  if (x === 0) return '0.0'
+  // floatToDigits: x = 0.d₁d₂… × 10^e (the shortest digits that read back as x).
+  const [mantissa, exp] = x.toExponential().split('e')
+  const ds = mantissa.replace('.', '')
+  const e = Number(exp) + 1
+  if (x >= 0.1 && x < 1e7) {
+    if (e <= 0) return `0.${'0'.repeat(-e)}${ds}`
+    const whole = ds.slice(0, e).padEnd(e, '0')
+    return `${whole}.${ds.slice(e) || '0'}`
+  }
+  return `${ds[0]}.${ds.slice(1) || '0'}e${e - 1}`
+}
+/** A host number as a fraction n / d (exactly: it's dyadic) — how a Rational is shown, `1 % 2`. */
+function asFraction(q) {
+  let d = 1
+  while (!Number.isInteger(q * d) && d < 2 ** 60) d *= 2
+  return [q * d, d]
+}
+const paren = (yes, s) => (yes ? `(${s})` : s)
 
 // A closure over a function that takes dictionaries carries them (plain data).
 const closure = (callee, args, dicts) => (dicts?.length ? { kind: 'closure', callee, args, dicts } : { kind: 'closure', callee, args })
@@ -121,8 +173,8 @@ function reviveValue(v) {
 
 /**
  * Look-ups into the type pass's elaboration (`{ main, functions, instances }`,
- * see inferGraph.js and classDecls.js' instanceEvidence) — which graph is the
- * top-level one is known only to the caller, so it's passed along.
+ * see inferGraph.js and instanceTable.js) — which graph is the top-level one
+ * is known only to the caller, so it's passed along.
  */
 export function elaborationIndex(data, mainGraph, functionBodies) {
   return {
@@ -134,36 +186,6 @@ export function elaborationIndex(data, mainGraph, functionBodies) {
     forFunction: (id) => data.functions?.[id]?.nodes || {},
     instance: (key) => data.instances?.[key],
   }
-}
-
-// ---- Runtime algebra ------------------------------------------------------
-// The evaluator is untyped, so class methods dispatch on the shape of the
-// values they meet:
-//
-// - Arithmetic, lattice and vector operations work on numbers and lift
-//   pointwise over data values (a record that derives AddGroup adds field by
-//   field — the product of the structures).
-// - A bare number meeting a data value is broadcast along it: the diagonal
-//   ℤ → R × S, which is the (unique) ring map, so `0`/`addZero` and
-//   `1`/`mulOne` already are the zero and one of any product ring.
-// - `mempty` can't be a number (lists, Maybe have no map from ℤ), so
-//   it is a formal identity, MEMPTY, that `<>` absorbs and that becomes a
-//   concrete value of the right shape whenever it's observed: `[]`,
-//   `Nothing`, or a record of MEMPTYs.
-// - A type with a hand-written instance (`instance AddMonoid Wallet`) uses
-//   its own methods instead, and its own identities for literals and
-//   mempty (see "Hand-written instances" below).
-export const MEMPTY = Object.freeze({ kind: 'mempty' })
-export const isMempty = (v) => v === MEMPTY || (v !== null && typeof v === 'object' && v.kind === 'mempty')
-
-/** MEMPTY made concrete in the shape of `like`. */
-export function concreteMempty(like) {
-  if (!isData(like)) throw new EvalError(`mempty has no ${show(like)}-shaped value`)
-  if (like.type === 'List') return nil
-  if (like.type === 'Maybe') return nothing
-  if (like.type === 'Picture') return picture('Blank', 0, [])
-  if (like.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'None', ctorIndex: 0, args: [] }
-  return { ...like, args: like.args.map(() => now(MEMPTY)) }
 }
 
 const num = (t) => {
@@ -199,6 +221,7 @@ export function showCompact(x) {
 
 const picture = (ctor, ctorIndex, args) => ({ kind: 'data', type: 'Picture', ctor, ctorIndex, args })
 const colour = (r, g, b) => ({ kind: 'data', type: 'Color', ctor: 'RGB', ctorIndex: 0, args: [r, g, b] })
+const sub = (ctor, ctorIndex, args) => ({ kind: 'data', type: 'Sub', ctor, ctorIndex, args })
 
 /** One step of mulberry32: a 32-bit state in, [a uniform number in [0, 1), the next state] out. */
 function mulberry32(state) {
@@ -209,22 +232,24 @@ function mulberry32(state) {
   return [((t ^ (t >>> 14)) >>> 0) / 4294967296, next]
 }
 
-/** Haskell's `round`: halves go to the even neighbour. */
-function roundHalfEven(x) {
-  const r = Math.round(x)
-  return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r
-}
+const NUMERIC = new Set(['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational'])
+const headOf = (key) => key.slice(key.indexOf('@') + 1)
+const shown = (key) => key.replace('@', ' ').replace(' List', ' []')
 
 /**
- * `registry` is `{ nodes, functionBodies }` (main.js's live objects): `nodes`
- * holds every function definition, `functionBodies` every custom body.
+ * `registry` is `{ nodes, functionBodies, types, elaboration }` (main.js's
+ * live objects): `nodes` holds every function definition, `functionBodies`
+ * every custom body, `elaboration()` the type pass's elaboration (see
+ * elaborationIndex) — without it, nothing that needs a dictionary can run
+ * (typedEvaluator.js computes one).
  */
 export function createEvaluator(registry) {
   let steps = 0
 
-  // [arity, implementation]. Implementations receive argument thunks and
-  // force only what they need. The first seven are the protected builtins
-  // (CLAUDE.md) — same results as their original implementations.
+  // [arity, implementation]. Implementations receive argument thunks — and,
+  // after them, the call's dictionaries — and force only what they need.
+  // The first seven are the protected builtins (CLAUDE.md) — same results
+  // as their original implementations.
   const builtins = {
     succ: [1, (n) => num(n) + 1],
     zero: [0, () => 0],
@@ -234,57 +259,39 @@ export function createEvaluator(registry) {
     isZero: [1, (n) => num(n) === 0],
     ifThenElse: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
 
-    plus: [2, (x, y) => lift2((a, b) => a + b, x, y, 'plus')],
-    negate: [1, (x) => lift1((a) => -a, x, 'negate')],
-    minus: [2, (x, y) => lift2((a, b) => a - b, x, y, 'minus')],
-    times: [2, (x, y) => lift2((a, b) => a * b, x, y, 'times')],
-    addZero: [0, () => 0],
-    mulOne: [0, () => 1],
-    divide: [2, (x, y) => lift2((a, b) => a / b, x, y, 'divide')],
-    sqrt: [1, (x) => lift1(Math.sqrt, x, 'sqrt')],
-    // The numeric conversions, the Haskell Report way (builtinSchemes.js).
-    // The class methods — toRational, toInteger, div/mod, properFraction —
-    // take a value of a user type through its hand-written instance
-    // (or a newtype's field); on a number they're the host's arithmetic
-    // (number types share one representation, so a change of type is
-    // type-level only). fromInteger and fromRational aren't methods: ℤ is
-    // the initial ring (ℚ the initial field of characteristic 0), so they're
-    // fixed by the target's instance — built at a user type the type pass
-    // names (see `call`), else a number standing for itself in whatever ring
-    // it meets, as a literal does. The rest are written with these as graphs
-    // (definitionViews.js) and run natively here, the same way, unless edited.
-    toRational: [1, (x) => convert(x, 'toRational', (n) => n)],
-    toInteger: [1, (x) => integer(convert(x, 'toInteger', (n) => n), 'toInteger')],
-    fromInteger: [1, (n) => integer(n, 'fromInteger')],
-    fromRational: [1, (r) => num(r)],
-    properFraction: [1, (x) => convert(x, 'properFraction', (v) => {
-      const n = Math.trunc(v) + 0 // + 0: no -0
-      return pair(now(n), now(v - n))
-    })],
-    div: [2, (x, y) => lift2((a, b) => Math.floor(a / nonZero(b)) + 0, x, y, 'div')],
-    mod: [2, (x, y) => lift2((a, b) => a - nonZero(b) * Math.floor(a / b) + 0, x, y, 'mod')],
-    abs: [1, (x) => (builtins.geq[1](x, now(0)) ? force(x) : builtins.negate[1](x))], // select (x >= 0) x (negate x)
-    fromIntegral: [1, (x) => builtins.toInteger[1](x)], // fromInteger . toInteger
-    realToFrac: [1, (x) => builtins.toRational[1](x)], // fromRational . toRational
-    truncate: [1, (x) => fraction(x)[0]], // fst (properFraction x)
-    floor: [1, (x) => {
-      const [n, r] = fraction(x)
-      return builtins.geq[1](r, now(0)) ? n : builtins.minus[1](now(n), now(1))
+    // Not methods, but written with them (dictionaries in hand).
+    minus: [2, (x, y, [d]) => invoke(toClass(d, 'AddSemigroup'), 'plus', [x, delay(() => invoke(toClass(d, 'AddGroup'), 'negate', [y]))])], // x + negate y
+    abs: [1, (x, [d]) => (bool(invoke(toClass(d, 'Ord'), 'geq', [x, now(fromIntegerVia(d, 0))])) ? force(x) : invoke(toClass(d, 'AddGroup'), 'negate', [x]))], // select (x >= 0) x (negate x)
+    // The numeric conversions, the Haskell Report way (builtinSchemes.js):
+    // fromInteger and fromRational aren't methods — ℤ is the initial ring
+    // (ℚ the initial field of characteristic 0), so they're fixed by the
+    // target's dictionary (fromIntegerVia). The rest are written with them
+    // and the methods toInteger, toRational and properFraction as graphs
+    // (definitionViews.js), and run natively here, the same way, unless edited.
+    fromInteger: [1, (n, [d]) => fromIntegerVia(d, integer(n, 'fromInteger'))],
+    fromRational: [1, (r, [d]) => fromRationalVia(d, num(r))],
+    fromIntegral: [1, (x, [a, b]) => fromIntegerVia(b, integer(invoke(a, 'toInteger', [x]), 'toInteger'))], // fromInteger . toInteger
+    realToFrac: [1, (x, [a, b]) => fromRationalVia(b, num(invoke(a, 'toRational', [x])))], // fromRational . toRational
+    truncate: [1, (x, ds) => fraction(x, ds)[0]], // fst (properFraction x)
+    floor: [1, (x, [a, b]) => {
+      const [n, r] = fraction(x, [a, b])
+      return bool(invoke(toClass(a, 'Ord'), 'geq', [r, now(fromIntegerVia(a, 0))])) ? n : invoke(toClass(b, 'AddSemigroup'), 'plus', [now(n), now(fromIntegerVia(b, -1))])
     }],
-    ceiling: [1, (x) => {
-      const [n, r] = fraction(x)
-      return builtins.geq[1](now(0), r) ? n : builtins.plus[1](now(n), now(1))
+    ceiling: [1, (x, [a, b]) => {
+      const [n, r] = fraction(x, [a, b])
+      return bool(invoke(toClass(a, 'Ord'), 'geq', [now(fromIntegerVia(a, 0)), r])) ? n : invoke(toClass(b, 'AddSemigroup'), 'plus', [now(n), now(fromIntegerVia(b, 1))])
     }],
     // To the nearer of n and the integer on r's side, and on a half to the even one.
-    round: [1, (x) => {
-      const [n, r] = fraction(x)
-      const m = delay(() => (builtins.geq[1](r, now(0)) ? builtins.plus[1](now(n), now(1)) : builtins.minus[1](now(n), now(1))))
-      const a = now(builtins.abs[1](r))
-      if (builtins.eq[1](a, now(0.5))) return builtins.eq[1](now(builtins.mod[1](now(n), now(2))), now(0)) ? n : force(m)
-      return builtins.geq[1](a, now(0.5)) ? force(m) : n
+    round: [1, (x, [a, b]) => {
+      const [n, r] = fraction(x, [a, b])
+      const plusB = (k) => invoke(toClass(b, 'AddSemigroup'), 'plus', [now(n), now(fromIntegerVia(b, k))])
+      const m = delay(() => plusB(bool(invoke(toClass(a, 'Ord'), 'geq', [r, now(fromIntegerVia(a, 0))])) ? 1 : -1))
+      const size = now(builtins.abs[1](r, [toClass(a, 'OrderedRing')]))
+      const half = now(fromRationalVia(toClass(a, 'Field'), 0.5))
+      const even = () => bool(invoke(toClass(b, 'Eq'), 'eq', [now(invoke(b, 'mod', [now(n), now(fromIntegerVia(b, 2))])), now(fromIntegerVia(b, 0))]))
+      if (bool(invoke(toClass(a, 'Eq'), 'eq', [size, half]))) return even() ? n : force(m)
+      return bool(invoke(toClass(a, 'Ord'), 'geq', [size, half])) ? force(m) : n
     }],
-    geq: [2, (x, y) => compareValues(x, y, 'geq') >= 0],
-    eq: [2, (x, y) => compareValues(x, y, 'eq') === 0],
     select: [3, (c, a, b) => (bool(c) ? force(a) : force(b))],
     and: [2, (p, q) => bool(p) && bool(q)], // lazy in q, as Haskell's (&&)
     or: [2, (p, q) => bool(p) || bool(q)],
@@ -301,25 +308,13 @@ export function createEvaluator(registry) {
       }
       return go(xs)
     }],
-    map: [2, (f, xs) => {
-      const go = (t) => {
-        const l = list(t)
-        return l.ctorIndex === 0 ? nil : cons(delay(() => applyValue(f, [l.args[0]])), delay(() => go(l.args[1])))
-      }
-      return go(xs)
-    }],
+    map: [2, (f, xs) => mapList(f, xs)],
     length: [1, (xs) => {
       let n = 0
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) n++
       return n
     }],
-    append: [2, (xs, ys) => {
-      const go = (t) => {
-        const l = list(t)
-        return l.ctorIndex === 0 ? force(ys) : cons(l.args[0], delay(() => go(l.args[1])))
-      }
-      return go(xs)
-    }],
+    append: [2, (xs, ys) => appendList(xs, ys)],
     index: [2, (xs, i) => {
       let n = num(i)
       if (n < 0) return nothing
@@ -342,53 +337,28 @@ export function createEvaluator(registry) {
     }],
     nothing: [0, () => nothing],
     just: [1, (x) => just(x)],
+    left: [1, (x) => left(x)],
+    right: [1, (x) => right(x)],
     maybe: [3, (b, f, m) => {
       const v = force(m)
       if (!isData(v) || v.type !== 'Maybe') throw new EvalError(`Expected a Maybe, got ${show(v)}`)
       return v.ctorIndex === 0 ? force(b) : applyValue(f, [v.args[0]])
     }],
-    show: [1, (x) => fromJsString(showWithInstances(x))],
-    // showsPrec d x "" — simplified to return the String, like showFFloat. Above 10 (an argument), a constructor application or negative number gets parentheses.
-    showsPrec: [2, (d, x) => fromJsString(showWithInstances(x, num(d) > 10))],
+    // Numeric.showFFloat (Just digits) x "" — simplified to take the digit count directly.
     showFFloat: [2, (d, x) => fromJsString(num(x).toFixed(Math.max(0, Math.min(20, num(d)))))],
     showCompact: [1, (x) => fromJsString(showCompact(num(x)))],
     listOf: [null, (...xs) => xs.reduceRight((tail, x) => cons(x, now(tail)), nil)], // arity = the node's slot count
 
-    // Category classes (categoryClasses.js).
-    mappend: [2, (x, y) => mappend(x, y)],
-    mempty: [0, () => MEMPTY],
-    fmap: [2, (f, t) => {
-      const v = force(t)
-      const own = userMethod(v, 'fmap')
-      if (own) return call(own, [f, now(v)])
-      if (isData(v) && v.type === 'Maybe') return v.ctorIndex === 0 ? nothing : just(delay(() => applyValue(f, [v.args[0]])))
-      if (isMempty(v) || (isData(v) && v.type === 'Sub')) return { kind: 'data', type: 'Sub', ctor: 'Map', ctorIndex: 4, args: [f, now(v)] }
-      return builtins.map[1](f, now(v))
-    }],
-    foldMap: [2, (f, t) => {
-      const v = force(t)
-      const own = userMethod(v, 'foldMap')
-      if (own) return call(own, [f, now(v)])
-      if (isData(v) && v.type === 'Maybe') return v.ctorIndex === 0 ? MEMPTY : applyValue(f, [v.args[0]])
-      const go = (u) => {
-        const l = list(u)
-        return l.ctorIndex === 0 ? MEMPTY : mappend(delay(() => applyValue(f, [l.args[0]])), delay(() => go(l.args[1])))
-      }
-      return go(now(v))
-    }],
-    leq: [2, (x, y) => leq(x, y)],
-    join: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a || b : Math.max(a, b)), x, y, 'join')],
-    meet: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a && b : Math.min(a, b)), x, y, 'meet')],
-    scale: [2, (k, v) => scaleValue(k, v)],
     // Games (runtime.js): a Program and its widgets are plain lazy data.
     // A Program carries its settings after the four functions: steps per
     // second, the longest time away that counts (seconds), subscriptions.
-    program: [4, (model, view, handle, step) => ({ kind: 'data', type: 'Program', ctor: 'Program', ctorIndex: 0, args: [model, view, handle, step, now(10), now(7 * 24 * 3600), now(MEMPTY)] })],
+    program: [4, (model, view, handle, step) => ({ kind: 'data', type: 'Program', ctor: 'Program', ctorIndex: 0, args: [model, view, handle, step, now(10), now(7 * 24 * 3600), now(NO_SUBSCRIPTIONS)] })],
+    noSubscriptions: [1, () => sub('None', 0, [])], // const mempty
     setStepsPerSecond: [2, (n, p) => setProgramField(p, 4, n)],
     setMaxOffline: [2, (s, p) => setProgramField(p, 5, s)],
     setSubscriptions: [2, (f, p) => setProgramField(p, 6, f)],
-    every: [2, (seconds, msg) => ({ kind: 'data', type: 'Sub', ctor: 'Every', ctorIndex: 1, args: [seconds, msg] })],
-    onKey: [1, (f) => ({ kind: 'data', type: 'Sub', ctor: 'OnKey', ctorIndex: 2, args: [f] })],
+    every: [2, (seconds, msg) => sub('Every', 1, [seconds, msg])],
+    onKey: [1, (f) => sub('OnKey', 2, [f])],
     wText: [1, (s) => ({ kind: 'data', type: 'Widget', ctor: 'Text', ctorIndex: 0, args: [s] })],
     wButton: [2, (label, msg) => ({ kind: 'data', type: 'Widget', ctor: 'Button', ctorIndex: 1, args: [label, msg] })],
     wColumn: [1, (ws) => ({ kind: 'data', type: 'Widget', ctor: 'Column', ctorIndex: 2, args: [ws] })],
@@ -411,121 +381,44 @@ export function createEvaluator(registry) {
     black: [0, () => colour(0, 0, 0)],
     white: [0, () => colour(1, 1, 1)],
   }
-
-  // ---- Hand-written instances ----------------------------------------------
-  // A type's `instance C T` (typeDecls.js) names a custom function for each
-  // method; a method meeting a value of T calls it instead of the structural
-  // default. Literals and `mempty` meeting such a value become T's own
-  // identities: 0 is its addZero, n its n-fold sum of mulOne (the unique
-  // semiring map from ℕ), mempty its mempty.
-
-  /** The custom function implementing `method` for value `v`'s type, or null if the type has no hand-written instance of its class. */
-  function userMethod(v, method) {
-    if (!isData(v)) return null
-    const inst = registry.types?.[v.type]?.instances?.find((i) => i.cls === METHOD_CLASS[method])
-    if (!inst) return null
-    const fnId = inst.methods?.[method]
-    if (!fnId || !registry.nodes[fnId]) throw new EvalError(`instance ${inst.cls} ${v.type} has no ${METHOD_LABEL[method]} yet — pick a function for it in the type editor`)
-    return fnId
+  // Every class method is a builtin that calls its dictionary: `plus x y` is
+  // `(+) dict x y`. Its further dictionaries (foldMap's Monoid) ride along.
+  for (const m of Object.keys(METHOD_CLASS)) {
+    builtins[m] = [METHOD_PARAMS[m].length, (...xs) => {
+      const dicts = xs.pop()
+      if (!dicts?.[0]) throw new EvalError(`${METHOD_LABEL[m]}: a method of ${METHOD_CLASS[m]} needs to know its type — run it from a graph (the type pass picks the instance)`)
+      return invoke(dicts[0], m, xs, dicts.slice(1))
+    }]
   }
-  const hasWritten = (v, classes) => isData(v) && !!registry.types?.[v.type]?.instances?.some((i) => classes.includes(i.cls))
-  const ARITHMETIC = ['AddSemigroup', 'AddMonoid', 'AddGroup', 'MulSemigroup', 'MulMonoid']
 
-  /**
-   * The numeric literal `n` as a value of `like`'s type, some of whose
-   * arithmetic is hand-written: 0 is its addZero, n the n-fold sum of its
-   * mulOne. A method still derived is the pointwise one (the diagonal).
-   */
-  function literalAt(n, like) {
-    const fail = (why) => new EvalError(`The literal ${n} has no ${like.type} value: ${why}`)
-    const has = (cls) => hasWritten(like, [cls]) || !!registry.types?.[like.type]?.deriving?.some((c) => c.classes.includes(cls))
-    const diagonal = (k) => ({ ...like, args: like.args.map((f) => delay(() => spread(k, force(f)))) })
-    const own = (method) => userMethod(like, method)
-    if (n === 0) {
-      if (!has('AddMonoid')) throw fail(`${like.type} has no AddMonoid (addZero)`)
-      return own('addZero') ? call(own('addZero'), []) : diagonal(0)
+  const NO_SUBSCRIPTIONS = { kind: 'closure', callee: '#noSubscriptions', args: [null] }
+
+  function mapList(f, xs) {
+    const go = (t) => {
+      const l = list(t)
+      return l.ctorIndex === 0 ? nil : cons(delay(() => applyValue(f, [l.args[0]])), delay(() => go(l.args[1])))
     }
-    if (!Number.isInteger(n)) throw fail('only whole numbers mean something in any semiring')
-    if (!has('MulMonoid') || !has('AddSemigroup')) throw fail(`${like.type} needs MulMonoid (mulOne) and AddSemigroup (+)`)
-    const plusFn = own('plus')
-    const add = (p, q) => (plusFn ? call(plusFn, [now(p), now(q)]) : lift2((a, b) => a + b, now(p), now(q), 'plus'))
-    // n · 1 by doubling: O(log n) additions.
-    let result = null
-    let power = own('mulOne') ? call(own('mulOne'), []) : diagonal(1)
-    for (let k = Math.abs(n); k > 0; k = Math.floor(k / 2)) {
-      if (k % 2) result = result === null ? power : add(result, power)
-      if (k > 1) power = add(power, power)
+    return go(xs)
+  }
+  function appendList(xs, ys) {
+    const go = (t) => {
+      const l = list(t)
+      return l.ctorIndex === 0 ? force(ys) : cons(l.args[0], delay(() => go(l.args[1])))
     }
-    if (n > 0) return result
-    if (!has('AddGroup')) throw fail('a negative literal needs AddGroup (negate)')
-    return own('negate') ? call(own('negate'), [now(result)]) : lift1((a) => -a, now(result), 'negate')
-  }
-
-  /** A number meeting data value `like`: its own literal if `like`'s arithmetic is hand-written, else broadcast along it (the diagonal). */
-  function spread(n, like) {
-    if (!isData(like)) return n
-    if (hasWritten(like, ARITHMETIC)) return literalAt(n, like)
-    return { ...like, args: like.args.map((f) => delay(() => spread(n, force(f)))) }
-  }
-
-  /**
-   * A conversion out of the numeric tower: through `x`'s hand-written
-   * instance (`method`), through a newtype's field (its instance is the
-   * field's, by newtype deriving), or `onNumber` on a plain number.
-   */
-  function convert(x, method, onNumber) {
-    const a = force(x)
-    const own = userMethod(a, method)
-    if (own) return call(own, [now(a)])
-    if (isData(a) && a.args.length === 1) return convert(a.args[0], method, onNumber)
-    return onNumber(num(now(a)))
+    return go(xs)
   }
 
   /** `properFraction x` taken apart: the integral part (forced) and the fractional part (a thunk). */
-  function fraction(x) {
-    const p = force(builtins.properFraction[1](x))
+  function fraction(x, [a, b]) {
+    const p = force(invoke(a, 'properFraction', [x], [b]))
     return [force(p.args[0]), p.args[1]]
   }
 
-  /** `v` checked to be an Integer — what a hand-written toInteger must give. */
+  /** `v` checked to be an Integer — what a toInteger must give. */
   function integer(v, what) {
     const n = force(v)
     if (typeof n !== 'number' || !Number.isInteger(n)) throw new EvalError(`${what} must give a whole number (an Integer), got ${show(n)}`)
     return n
-  }
-
-  /**
-   * `fromInteger n` at user type `type`: the unique ring map ℤ → type (ℤ is
-   * the initial ring) — n · mulOne through hand-written arithmetic, else n
-   * in every field (the diagonal). A value that already is one (a
-   * hand-written round's result) is left alone.
-   */
-  function fromIntegerAt(v, type) {
-    const n = force(v)
-    const decl = registry.types?.[type]
-    if (typeof n !== 'number' || !decl) return n
-    const only = decl.constructors.length === 1 ? decl.constructors[0] : null
-    const like = only ? { kind: 'data', type, ctor: only.name, ctorIndex: 0, args: only.fields.map(() => now(0)) } : { kind: 'data', type, args: [] }
-    return spread(n, like)
-  }
-
-  /**
-   * `fromRational q` at user type `type`: q = n / m (exactly — a host number
-   * is dyadic), so it's fromInteger n / fromInteger m by the type's Field.
-   */
-  function fromRationalAt(v, type) {
-    const q = force(v)
-    if (typeof q !== 'number' || !registry.types?.[type]) return q
-    let m = 1
-    while (!Number.isInteger(q * m) && m < 2 ** 53) m *= 2
-    if (!Number.isInteger(q * m)) return q
-    return m === 1 ? fromIntegerAt(q, type) : builtins.divide[1](now(fromIntegerAt(q * m, type)), now(fromIntegerAt(m, type)))
-  }
-
-  /** MEMPTY made concrete in the shape of `like` — through a hand-written Monoid when there is one. */
-  function memptyAt(like) {
-    const fn = userMethod(like, 'mempty')
-    return fn ? call(fn, []) : concreteMempty(like)
   }
 
   /** A JS string from a (forced, lazy) Haskell String. */
@@ -535,197 +428,367 @@ export function createEvaluator(registry) {
     return s
   }
 
-  /** `show`, with any hand-written Show instances (at any depth); `asArg` shows it as an argument (precedence 11). */
-  function showWithInstances(x, asArg = false) {
-    const custom = (v) => {
-      const fn = userMethod(v, 'show')
-      return fn ? jsString(call(fn, [now(reviveValue(v))])) : null
-    }
-    return showValue(serializeValue(x), registry.types || {}, asArg, custom)
-  }
-
-  /**
-   * Comparison, as Haskell's derived Eq/Ord: numbers by value, False < True,
-   * data values by constructor order and then field by field — except where
-   * a type has a hand-written `(==)` (`method` 'eq') or `(>=)` ('geq').
-   * Returns -1, 0 or 1 (for 'eq', only whether it's 0 matters).
-   */
-  function compareValues(x, y, method) {
-    let a = force(x)
-    let b = force(y)
-    if (isMempty(a) && isMempty(b)) return 0
-    if (isMempty(a)) a = memptyAt(b)
-    if (isMempty(b)) b = memptyAt(a)
-    if (typeof a === 'number' && isData(b)) a = spread(a, b)
-    if (typeof b === 'number' && isData(a)) b = spread(b, a)
-    if ((typeof a === 'number' && typeof b === 'number') || (typeof a === 'string' && typeof b === 'string')) return a < b ? -1 : a > b ? 1 : 0
-    if (typeof a === 'boolean' && typeof b === 'boolean') return a === b ? 0 : a ? 1 : -1
-    if (isData(a) && isData(b)) {
-      const fn = userMethod(a, method)
-      if (fn && method === 'eq') return bool(call(fn, [now(a), now(b)])) ? 0 : 1
-      if (fn) {
-        const ge = bool(call(fn, [now(a), now(b)]))
-        const le = bool(call(fn, [now(b), now(a)]))
-        return ge && le ? 0 : ge ? 1 : -1
-      }
-      if (a.ctorIndex !== b.ctorIndex) return a.ctorIndex < b.ctorIndex ? -1 : 1
-      for (let i = 0; i < a.args.length; i++) {
-        const c = compareValues(a.args[i], b.args[i], method)
-        if (c !== 0) return c
-      }
-      return 0
-    }
-    throw new EvalError(`Cannot compare ${show(a)} with ${show(b)}`)
-  }
-
-  /** `k *^ v`: pointwise over data values, or a hand-written VectorSpace. */
-  function scaleValue(k, x) {
-    const a = force(x)
-    const fn = userMethod(a, 'scale')
-    if (fn) return call(fn, [k, now(a)])
-    if (isData(a)) return { ...a, args: a.args.map((f) => delay(() => scaleValue(k, f))) }
-    return num(k) * num(now(a))
-  }
-
   /** A Program with setting `index` replaced (record update). Programs from older saves get the defaults first. */
   function setProgramField(p, index, value) {
     const v = force(p)
     if (!isData(v) || v.type !== 'Program') throw new EvalError(`Expected a Program, got ${show(v)}`)
-    const args = [...v.args, now(10), now(7 * 24 * 3600), now(MEMPTY)].slice(0, 7)
+    const args = [...v.args, now(10), now(7 * 24 * 3600), now(NO_SUBSCRIPTIONS)].slice(0, 7)
     args[index] = value
     return { ...v, args }
   }
 
-  /** A unary numeric/boolean operation, lifted pointwise over data values (or a hand-written `method`). */
-  function lift1(op, x, method) {
-    const a = force(x)
-    const own = method && userMethod(a, method)
-    if (own) return call(own, [now(a)])
-    if (isData(a)) return { ...a, args: a.args.map((f) => delay(() => lift1(op, f, method))) }
-    if (typeof a !== 'number' && typeof a !== 'boolean') throw new EvalError(`Expected a number, got ${show(a)}`)
-    return op(a)
-  }
-
-  /**
-   * A binary operation, lifted pointwise over data values; a bare number is
-   * broadcast along the other side. A type with a hand-written instance for
-   * `method` uses it instead (and `x - y` is `x + negate y` for a
-   * hand-written AddGroup).
-   */
-  function lift2(op, x, y, method) {
-    let a = force(x)
-    let b = force(y)
-    if (typeof a === 'number' && isData(b)) a = spread(a, b)
-    if (typeof b === 'number' && isData(a)) b = spread(b, a)
-    if (method === 'minus' && hasWritten(a, ['AddGroup'])) return lift2(op, now(a), delay(() => lift1(null, now(b), 'negate')), 'plus')
-    const own = method && method !== 'minus' && userMethod(a, method)
-    if (own) return call(own, [now(a), now(b)])
-    if (isData(a) && isData(b)) {
-      if (a.ctorIndex !== b.ctorIndex) throw new EvalError(`Cannot combine ${a.ctor} with ${b.ctor}`)
-      return { ...a, args: a.args.map((f, i) => delay(() => lift2(op, f, b.args[i], method))) }
-    }
-    const ok = (v) => typeof v === 'number' || typeof v === 'boolean'
-    if (!ok(a) || !ok(b)) throw new EvalError(`Expected numbers, got ${show(a)} and ${show(b)}`)
-    return op(a, b)
-  }
-
-  /** The partial order: pointwise on data values (a product of posets), or a hand-written one. */
-  function leq(x, y) {
-    let a = force(x)
-    let b = force(y)
-    if (typeof a === 'number' && isData(b)) a = spread(a, b)
-    if (typeof b === 'number' && isData(a)) b = spread(b, a)
-    const own = userMethod(a, 'leq')
-    if (own) return bool(call(own, [now(a), now(b)]))
-    if (isData(a) && isData(b)) return a.ctorIndex === b.ctorIndex && a.args.every((f, i) => leq(f, b.args[i]))
-    if (typeof a === 'boolean') return !a || b
-    return num(now(a)) <= num(now(b))
-  }
-
-  /** The monoid operation, by the shape of its arguments. MEMPTY is absorbed. */
-  function mappend(x, y) {
-    const a = force(x)
-    if (isMempty(a)) return force(y)
-    const own = userMethod(a, 'mappend')
-    if (own) return call(own, [now(a), y])
-    if (isData(a) && a.type === 'List') return builtins.append[1](now(a), y) // the free monoid: (++), lazy in y
-    const b = force(y)
-    if (isMempty(b)) return a
-    if (!isData(a) || !isData(b)) throw new EvalError(`No (<>) for ${show(a)}`)
-    if (a.type === 'Maybe') return a.ctorIndex === 0 ? b : b.ctorIndex === 0 ? a : just(delay(() => mappend(a.args[0], b.args[0])))
-    if (a.type === 'Picture') return picture('Pictures', 6, [now(a), now(b)])
-    if (a.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'Batch', ctorIndex: 3, args: [now(a), now(b)] }
-    // A record deriving Semigroup via Generically: fieldwise.
-    if (a.ctorIndex !== b.ctorIndex) throw new EvalError(`Cannot combine ${a.ctor} with ${b.ctor}`)
-    return { ...a, args: a.args.map((f, i) => delay(() => mappend(f, b.args[i]))) }
-  }
-
   function list(t) {
     const v = force(t)
-    if (isMempty(v)) return nil
     if (!isData(v) || v.type !== 'List') throw new EvalError(`Expected a list, got ${show(v)}`)
     return v
   }
 
   function definition(callee) {
+    // `#name`: a builtin by name, for closures the runtime builds itself (traverse's `fmap (:)`).
+    if (callee.startsWith('#')) return { builtin: callee.slice(1), label: callee.slice(1) }
     const def = registry.nodes[callee]
     if (!def) throw new EvalError(`Unknown function: ${callee}`)
     return def
   }
+  const fn = (name, ...args) => closure(`#${name}`, [...args, ...Array(builtins[name][0] - args.length).fill(null)])
 
-  // ---- Dictionaries (user classes) ---------------------------------------
+  // ---- Dictionaries ---------------------------------------------------------
   // A dictionary is plain data `{ kind: 'dict', key, sub }` — instance `key`
   // and the dictionaries of its context — or `{ kind: 'dict', error }` when
   // the type pass found no evidence; that error is raised only if it's used.
-  // A conversion into a user type gets `{ kind: 'dict', fromInteger: type }`
-  // (or `fromRational`): the one thing its Ring (Field) dictionary is needed
-  // for (see fromIntegerAt, fromRationalAt).
+  // `{ kind: 'dict', param: i }` stands for a dictionary a stored closure
+  // will be given when it is used again (inferGraph's rootParams).
   let elab = null // the elaboration index, fetched once per run
 
   /** Build the dictionary evidence `e` describes, in `env` ({ dicts, ctx, self, extra }). */
   function dictionary(e, env) {
     if (!e) return { kind: 'dict', error: 'no evidence for a class constraint' }
     if (e.error) return { kind: 'dict', error: e.error }
-    if ('param' in e) return env.dicts?.[e.param] ?? { kind: 'dict', error: 'a class-constrained function was called without its dictionary (call it from a graph so its types are known)' }
+    if ('param' in e) return env.dicts ? env.dicts[e.param] ?? { kind: 'dict', error: 'a class-constrained function was called without its dictionary (call it from a graph so its types are known)' } : { kind: 'dict', param: e.param }
     if ('ctx' in e) return env.ctx[e.ctx]
     if (e.self) return env.self
     if ('extra' in e) return env.extra[e.extra]
     if (e.inst) return { kind: 'dict', key: e.inst, sub: e.sub.map((s) => dictionary(s, env)) }
-    if (e.fromInteger) return { kind: 'dict', fromInteger: e.fromInteger }
-    if (e.fromRational) return { kind: 'dict', fromRational: e.fromRational }
-    if (e.super) {
-      const d = dictionary(e.of, env)
-      if (d.error) return d
-      const info = instanceInfo(d)
-      return dictionary(info.supers[e.super], { ctx: d.sub, self: d })
-    }
+    if (e.super) return superDict(dictionary(e.of, env), e.super)
     return { kind: 'dict', error: 'malformed evidence' }
   }
 
   function instanceInfo(d) {
+    if (!d) throw new EvalError('A class-constrained function was run without its dictionaries — run it from a graph so the type pass picks them')
     if (d.error) throw new EvalError(d.error)
+    if ('param' in d) throw new EvalError("This value's type was still open when it was played — play it where its type is known")
     const info = elab?.instance(d.key)
-    if (!info) throw new EvalError(`No instance ${d.key.replace('@', ' ')} (declare it in the class editor)`)
+    if (!info) throw new EvalError(`No instance ${shown(d.key)}${elab ? '' : ' (the type pass gave no instances)'}`)
     return info
   }
-
-  /** A class method applied to `args`: its implementation from the dictionary, given the dictionaries it needs. */
-  function callMethod(def, args, dicts) {
-    const { cls, name } = def.method
-    if (!dicts?.length) throw new EvalError(`${name}: a method of class ${cls} needs to know its type — run it from a graph (the type pass picks the instance)`)
-    const d = dicts[0]
+  /** The superclass `cls` dictionary inside dictionary `d` (of a stand-in: one remembering the way there). */
+  function superDict(d, cls) {
+    if ('param' in d) return { ...d, path: [...(d.path || []), cls] }
+    if (d.error) return d
     const info = instanceInfo(d)
-    const fnId = info.methods[name]
-    if (!fnId) throw new EvalError(`instance ${d.key.replace('@', ' ')} has no ${name} (and ${cls} gives no default) — pick a function for it in the class editor`)
-    const needs = info.implDicts[name]
+    if (!info.supers[cls]) return { kind: 'dict', error: `${shown(d.key)} has no superclass ${cls}` }
+    return dictionary(info.supers[cls], { ctx: d.sub, self: d })
+  }
+  /** The dictionary of class `cls` (`d`'s own class or one of its superclasses, at the same type) reached from `d`. */
+  function toClass(d, cls) {
+    const found = (function find(x, seen) {
+      const info = instanceInfo(x)
+      if (info.cls === cls) return x
+      for (const s of Object.keys(info.supers)) {
+        if (seen.has(s)) continue
+        seen.add(s)
+        const sd = superDict(x, s)
+        if (sd.error) continue
+        const r = find(sd, seen)
+        if (r) return r
+      }
+      return null
+    })(d, new Set())
+    if (!found) throw new EvalError(`${shown(d.key)} doesn't give ${cls}`)
+    return found
+  }
+  /** Replace the stand-in dictionaries `{ param: i }` inside a stored value with `dicts`. */
+  function fillDicts(v, dicts) {
+    const fill = (d) => ('param' in d ? (dicts[d.param] ? (d.path || []).reduce(superDict, dicts[d.param]) : d) : d.sub ? { ...d, sub: d.sub.map(fill) } : d)
+    if (v?.kind === 'literal') return literalAt(v.value, v.text, fill(v.dict))
+    if (isData(v)) return { ...v, args: v.args.map((a) => now(fillDicts(force(a), dicts))) }
+    if (!isClosure(v)) return v
+    return closure(v.callee, v.args.map((a) => (a === null ? null : now(fillDicts(force(a), dicts)))), v.dicts?.map(fill))
+  }
+
+  // ---- Methods --------------------------------------------------------------
+  /** Method `m` of dictionary `d`, applied to argument thunks `args`; `extra` are the call's further dictionaries. */
+  function invoke(d, m, args, extra = []) {
+    if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
+    const info = instanceInfo(d)
+    if (info.how === 'written') {
+      if (info.methods[m]) return runWritten(d, info, m, args, extra)
+    } else if (info.how === 'newtype') return viaNewtype(d, info, m, args, extra)
+    else {
+      const impl = info.how === 'prim' ? prim(d.key, m) : info.how === 'stock' ? STOCK[m] : info.how === 'pointwise' ? POINTWISE[m] : null
+      if (impl) return impl(args, d, info, extra)
+    }
+    const def = DEFAULTS[m]
+    if (def) return def(args, d, info, extra)
+    throw new EvalError(`instance ${shown(d.key)} has no ${METHOD_LABEL[m] || m} — pick a function for it in the class editor`)
+  }
+  /** Whether dictionary `d` defines method `m` itself (rather than by its class's default). */
+  function defines(d, m) {
+    const info = instanceInfo(d)
+    if (info.how === 'written') return !!info.methods[m]
+    if (info.how === 'newtype') return defines(dictionary(info.inner, { ctx: d.sub, self: d }), m)
+    return !!(info.how === 'prim' ? prim(d.key, m) : info.how === 'stock' ? STOCK[m] : info.how === 'pointwise' ? POINTWISE[m] : null)
+  }
+
+  /** A hand-written method: its custom function, given the dictionaries it needs. */
+  function runWritten(d, info, m, args, extra) {
+    const fnId = info.methods[m]
+    const needs = info.implDicts[m]
     if (needs?.error) throw new EvalError(needs.error)
-    const implDicts = (needs || []).map((e) => dictionary(e, { ctx: d.sub, self: d, extra: dicts.slice(1) }))
+    if (!registry.nodes[fnId]) throw new EvalError(`instance ${shown(d.key)}: the function for ${METHOD_LABEL[m] || m} is gone`)
+    const implDicts = (needs || []).map((e) => dictionary(e, { ctx: d.sub, self: d, extra }))
     const arity = arityOf(fnId)
     if (arity === 0) {
       const v = call(fnId, [], implDicts)
       return args.length ? applyValue(now(v), args) : v
     }
     return applyValue(now(closure(fnId, Array(arity).fill(null), implDicts)), args)
+  }
+
+  // Newtype deriving: the wrapped type's method, coerced through the
+  // constructor wherever the method's type mentions the class variable.
+  function viaNewtype(d, info, m, args, extra) {
+    const inner = dictionary(info.inner, { ctx: d.sub, self: d })
+    const mt = info.coerce?.[m]
+    if (!mt) return invoke(inner, m, args, extra)
+    const wrap = (t) => now({ kind: 'data', type: info.type, ctor: info.ctor, ctorIndex: 0, args: [t] })
+    const unwrap = (t) => delay(() => force(force(t).args[0]))
+    const coerce = (type, t, out) => {
+      if (type.kind === 'var' && type.id === mt.classVar) return out ? wrap(t) : unwrap(t)
+      if (type.kind === 'app' && type.fn.kind === 'app' && type.fn.fn.name === '(,)') return delay(() => { const p = force(t); return pair(coerce(type.fn.arg, p.args[0], out), coerce(type.arg, p.args[1], out)) })
+      return t
+    }
+    let type = mt.type
+    const coerced = args.map((a) => { const from = type.from; type = type.to; return coerce(from, a, false) })
+    return force(coerce(type, now(invoke(inner, m, coerced, extra)), true))
+  }
+
+  // Helpers on dictionaries, in the names of their methods.
+  const eqAt = (d, x, y) => bool(invoke(d, 'eq', [x, y]))
+  const cmpAt = (d, x, y) => force(invoke(d, 'compare', [x, y])).ctorIndex - 1
+  const leAt = (d, x, y) => bool(invoke(d, 'le', [x, y]))
+  const memptyAt = (d) => invoke(toClass(d, 'Monoid'), 'mempty', [])
+  const mappendAt = (d, x, y) => invoke(toClass(d, 'Semigroup'), 'mappend', [x, y])
+  const fmapAt = (d, f, x) => invoke(toClass(d, 'Functor'), 'fmap', [f, x])
+  const field = (d, info, c, i) => dictionary(info.ctors[c].ev[i], { ctx: d.sub, self: d })
+
+  /** `fromInteger n` at dictionary `d` (any class of the numeric tower that gives a Semiring): the unique ring map ℤ → its type. */
+  function fromIntegerVia(d, n) {
+    const info = instanceInfo(d)
+    if (info.how === 'prim' && NUMERIC.has(headOf(d.key))) return n
+    if (info.how === 'newtype') return { kind: 'data', type: info.type, ctor: info.ctor, ctorIndex: 0, args: [now(fromIntegerVia(dictionary(info.inner, { ctx: d.sub, self: d }), n))] }
+    if (info.how === 'pointwise') return { kind: 'data', type: info.type, ctor: info.ctors[0].name, ctorIndex: 0, args: info.ctors[0].ev.map((_, i) => delay(() => fromIntegerVia(field(d, info, 0, i), n))) } // the diagonal ℤ → R × S
+    // n · 1 by doubling (O(log n) additions); 0 is addZero; a negative n is negated.
+    if (n === 0) return invoke(toClass(d, 'AddMonoid'), 'addZero', [])
+    const plus = toClass(d, 'AddSemigroup')
+    const add = (p, q) => invoke(plus, 'plus', [now(p), now(q)])
+    let result = null
+    let power = invoke(toClass(d, 'MulMonoid'), 'mulOne', [])
+    for (let k = Math.abs(n); k > 0; k = Math.floor(k / 2)) {
+      if (k % 2) result = result === null ? power : add(result, power)
+      if (k > 1) power = add(power, power)
+    }
+    return n > 0 ? result : invoke(toClass(d, 'AddGroup'), 'negate', [now(result)])
+  }
+  /** `fromRational q` at a Field dictionary: q = n / m exactly (a host number is dyadic), so fromInteger n / fromInteger m. */
+  function fromRationalVia(d, q) {
+    const info = instanceInfo(d)
+    if (info.how === 'prim' && NUMERIC.has(headOf(d.key))) return q
+    if (info.how === 'newtype') return { kind: 'data', type: info.type, ctor: info.ctor, ctorIndex: 0, args: [now(fromRationalVia(dictionary(info.inner, { ctx: d.sub, self: d }), q))] }
+    if (Number.isInteger(q)) return fromIntegerVia(d, q)
+    const [n, m] = asFraction(q)
+    return invoke(toClass(d, 'Field'), 'divide', [now(fromIntegerVia(d, n)), now(fromIntegerVia(d, m))])
+  }
+  /**
+   * A numeric literal's value at its dictionary (none: the literal stands
+   * for itself). At a stand-in dictionary (a stored closure's, see
+   * fillDicts) it waits, as `{ kind: 'literal' }`, for the real one.
+   */
+  function literalAt(value, text, d) {
+    if (!d || typeof value !== 'number') return value
+    if ('param' in d) return { kind: 'literal', value, text: String(text), dict: d }
+    return /\./.test(String(text)) ? fromRationalVia(d, value) : fromIntegerVia(d, value)
+  }
+
+  /** `showsPrec p x` at a Show dictionary, as a JS string. */
+  function showAt(d, p, x) {
+    const info = instanceInfo(d)
+    if (info.how === 'written') {
+      if (info.methods.showsPrec) return jsString(runWritten(d, info, 'showsPrec', [now(p), x], []))
+      if (info.methods.show) return jsString(runWritten(d, info, 'show', [x], []))
+      throw new EvalError(`instance ${shown(d.key)} defines neither show nor showsPrec`)
+    }
+    if (info.how === 'newtype') return showAt(dictionary(info.inner, { ctx: d.sub, self: d }), p, delay(() => force(force(x).args[0])))
+    if (info.how === 'stock') {
+      const v = force(x)
+      const c = info.ctors[v.ctorIndex]
+      if (!c.ev.length) return c.name
+      if (c.record) return paren(p >= 11, `${c.name} {${c.fieldNames.map((f, i) => `${f} = ${showAt(field(d, info, v.ctorIndex, i), 0, v.args[i])}`).join(', ')}}`)
+      return paren(p >= 11, `${c.name} ${v.args.map((a, i) => showAt(field(d, info, v.ctorIndex, i), 11, a)).join(' ')}`)
+    }
+    const head = headOf(d.key)
+    const v = force(x)
+    if (head === 'Double' || head === 'Float') return paren(p > 6 && (v < 0 || Object.is(v, -0)), showDouble(v))
+    if (head === 'Rational') {
+      const [n, m] = asFraction(v)
+      return paren(p > 7, `${paren(n < 0, String(n))} % ${m}`)
+    }
+    if (NUMERIC.has(head)) return paren(p > 6 && v < 0, String(v))
+    if (head === 'Bool') return v ? 'True' : 'False'
+    if (head === 'Char') return showChar(v)
+    if (head === 'StdGen') return paren(p >= 11, `StdGen ${v.args[0]}`)
+    if (head === '(,)') return `(${showAt(d.sub[0], 0, v.args[0])},${showAt(d.sub[1], 0, v.args[1])})`
+    if (head === 'List') {
+      const items = []
+      for (let l = list(now(v)); l.ctorIndex === 1; l = list(l.args[1])) items.push(l.args[0])
+      // Show Char's showList: a String reads as text (GHC's showList trick).
+      if (d.sub[0].key === 'Show@Char') return showString(items.map(force).join(''))
+      return `[${items.map((t) => showAt(d.sub[0], 0, t)).join(',')}]`
+    }
+    throw new EvalError(`No show for ${shown(d.key)}`)
+  }
+
+  // Structural instances (stock deriving, and the builtin types' Eq/Ord/Show).
+  const STOCK = {
+    eq: ([x, y], d, info) => {
+      const a = force(x)
+      const b = force(y)
+      return a.ctorIndex === b.ctorIndex && a.args.every((f, i) => eqAt(field(d, info, a.ctorIndex, i), f, b.args[i]))
+    },
+    compare: ([x, y], d, info) => {
+      const a = force(x)
+      const b = force(y)
+      if (a.ctorIndex !== b.ctorIndex) return ordering(a.ctorIndex < b.ctorIndex ? -1 : 1)
+      for (let i = 0; i < a.args.length; i++) {
+        const c = cmpAt(field(d, info, a.ctorIndex, i), a.args[i], b.args[i])
+        if (c) return ordering(c)
+      }
+      return ordering(0)
+    },
+    showsPrec: ([p, x], d) => fromJsString(showAt(d, num(p), x)),
+  }
+
+  // A product's structure field by field: a record that derives AddGroup
+  // adds field by field (the product of the fields' structures).
+  const fieldwise = (op) => ([x, y], d, info) => {
+    const a = force(x)
+    const b = force(y)
+    return { ...a, args: a.args.map((f, i) => delay(() => invoke(field(d, info, 0, i), op, [f, b.args[i]]))) }
+  }
+  const identity = (op) => (_, d, info) => ({ kind: 'data', type: info.type, ctor: info.ctors[0].name, ctorIndex: 0, args: info.ctors[0].ev.map((__, i) => delay(() => invoke(field(d, info, 0, i), op, []))) })
+  const POINTWISE = {
+    plus: fieldwise('plus'), times: fieldwise('times'), mappend: fieldwise('mappend'), join: fieldwise('join'), meet: fieldwise('meet'),
+    addZero: identity('addZero'), mulOne: identity('mulOne'), mempty: identity('mempty'),
+    negate: ([x], d, info) => { const a = force(x); return { ...a, args: a.args.map((f, i) => delay(() => invoke(field(d, info, 0, i), 'negate', [f]))) } },
+    scale: ([k, x], d, info) => { const a = force(x); return { ...a, args: a.args.map((f, i) => delay(() => invoke(field(d, info, 0, i), 'scale', [k, f]))) } },
+    leq: ([x, y], d, info) => { const a = force(x); const b = force(y); return a.args.every((f, i) => bool(invoke(field(d, info, 0, i), 'leq', [f, b.args[i]]))) },
+  }
+
+  // The classes' default methods (classMethods.js gives the minimal sets).
+  const lacks = (d, what) => { throw new EvalError(`instance ${shown(d.key)} defines none of ${what}`) }
+  const DEFAULTS = {
+    eq: ([x, y], d) => (defines(d, 'neq') ? !bool(invoke(d, 'neq', [x, y])) : lacks(d, '(==), (/=)')),
+    neq: ([x, y], d) => !eqAt(d, x, y),
+    compare: ([x, y], d) => {
+      if (!defines(d, 'le') && !defines(d, 'geq')) lacks(d, 'compare, (<=)')
+      return ordering(eqAt(toClass(d, 'Eq'), x, y) ? 0 : leAt(d, x, y) ? -1 : 1)
+    },
+    le: ([x, y], d) => (defines(d, 'geq') ? bool(invoke(d, 'geq', [y, x])) : defines(d, 'compare') ? cmpAt(d, x, y) <= 0 : lacks(d, 'compare, (<=)')),
+    geq: ([x, y], d) => (defines(d, 'le') ? leAt(d, y, x) : cmpAt(d, x, y) >= 0),
+    lt: ([x, y], d) => cmpAt(d, x, y) < 0,
+    gt: ([x, y], d) => cmpAt(d, x, y) > 0,
+    max: ([x, y], d) => (leAt(d, x, y) ? force(y) : force(x)),
+    min: ([x, y], d) => (leAt(d, x, y) ? force(x) : force(y)),
+    show: ([x], d) => fromJsString(showAt(d, 0, x)),
+    showsPrec: ([p, x], d) => fromJsString(showAt(d, num(p), x)),
+  }
+
+  // ---- Primitive instances --------------------------------------------------
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  const NUM = {
+    plus: ([x, y]) => num(x) + num(y), times: ([x, y]) => num(x) * num(y), negate: ([x]) => -num(x) + 0,
+    addZero: () => 0, mulOne: () => 1, divide: ([x, y]) => num(x) / num(y), sqrt: ([x]) => Math.sqrt(num(x)),
+    toRational: ([x]) => num(x), toInteger: ([x]) => num(x),
+    div: ([x, y]) => Math.floor(num(x) / nonZero(num(y))) + 0,
+    mod: ([x, y]) => { const a = num(x); const b = nonZero(num(y)); return a - b * Math.floor(a / b) + 0 },
+    properFraction: ([x], _d, _i, [b]) => { const v = num(x); const n = Math.trunc(v) + 0; return pair(now(fromIntegerVia(b, n)), now(v - n)) },
+    eq: ([x, y]) => force(x) === force(y), compare: ([x, y]) => ordering(cmp(force(x), force(y))),
+    leq: ([x, y]) => num(x) <= num(y), join: ([x, y]) => Math.max(num(x), num(y)), meet: ([x, y]) => Math.min(num(x), num(y)),
+    scale: ([k, v]) => num(k) * num(v),
+    showsPrec: STOCK.showsPrec,
+  }
+  const BOOL = {
+    eq: NUM.eq, compare: ([x, y]) => ordering(cmp(+bool(x), +bool(y))), showsPrec: STOCK.showsPrec,
+    leq: ([x, y]) => !bool(x) || bool(y), join: ([x, y]) => bool(x) || bool(y), meet: ([x, y]) => bool(x) && bool(y),
+  }
+  const lazyMaybe = (t) => { const v = force(t); if (!isData(v) || v.type !== 'Maybe') throw new EvalError(`Expected a Maybe, got ${show(v)}`); return v }
+  const foldList = (t, nilCase, consCase) => { const go = (u) => { const l = list(u); return l.ctorIndex === 0 ? nilCase() : consCase(l.args[0], delay(() => go(l.args[1]))) }; return go(t) }
+  const PRIM = {
+    Char: { eq: NUM.eq, compare: NUM.compare, showsPrec: STOCK.showsPrec },
+    StdGen: { showsPrec: STOCK.showsPrec },
+    List: {
+      showsPrec: STOCK.showsPrec,
+      mappend: ([x, y]) => appendList(x, y), mempty: () => nil, // the free monoid
+      fmap: ([f, t]) => mapList(f, t),
+      foldMap: ([f, t], _d, _i, [m]) => foldList(t, () => memptyAt(m), (x, rest) => mappendAt(m, delay(() => applyValue(f, [x])), rest)),
+      traverse: ([f, t], _d, _i, [g]) => foldList(t, () => invoke(g, 'pure', [now(nil)]), (x, rest) => invoke(g, 'ap', [delay(() => fmapAt(g, now(fn('cons')), delay(() => applyValue(f, [x])))), rest])),
+      pure: ([x]) => cons(x, now(nil)),
+      ap: ([fs, xs]) => foldList(fs, () => nil, (f, rest) => appendList(delay(() => mapList(f, xs)), rest)),
+      bind: ([xs, k]) => foldList(xs, () => nil, (x, rest) => appendList(delay(() => applyValue(k, [x])), rest)),
+    },
+    Maybe: {
+      mappend: ([x, y], d) => { const a = lazyMaybe(x); if (a.ctorIndex === 0) return force(y); const b = lazyMaybe(y); return b.ctorIndex === 0 ? a : just(delay(() => mappendAt(d.sub[0], a.args[0], b.args[0]))) },
+      mempty: () => nothing,
+      fmap: ([f, t]) => { const v = lazyMaybe(t); return v.ctorIndex === 0 ? nothing : just(delay(() => applyValue(f, [v.args[0]]))) },
+      foldMap: ([f, t], _d, _i, [m]) => { const v = lazyMaybe(t); return v.ctorIndex === 0 ? memptyAt(m) : applyValue(f, [v.args[0]]) },
+      traverse: ([f, t], _d, _i, [g]) => { const v = lazyMaybe(t); return v.ctorIndex === 0 ? invoke(g, 'pure', [now(nothing)]) : fmapAt(g, now(fn('just')), delay(() => applyValue(f, [v.args[0]]))) },
+      pure: ([x]) => just(x),
+      ap: ([mf, mx]) => { const f = lazyMaybe(mf); if (f.ctorIndex === 0) return nothing; const x = lazyMaybe(mx); return x.ctorIndex === 0 ? nothing : just(delay(() => applyValue(f.args[0], [x.args[0]]))) },
+      bind: ([mx, k]) => { const x = lazyMaybe(mx); return x.ctorIndex === 0 ? nothing : applyValue(k, [x.args[0]]) },
+    },
+    Either: {
+      mappend: ([x, y]) => (force(x).ctorIndex === 0 ? force(y) : force(x)), // the first Right
+      fmap: ([f, t]) => { const v = force(t); return v.ctorIndex === 0 ? v : right(delay(() => applyValue(f, [v.args[0]]))) },
+      foldMap: ([f, t], _d, _i, [m]) => { const v = force(t); return v.ctorIndex === 0 ? memptyAt(m) : applyValue(f, [v.args[0]]) },
+      traverse: ([f, t], _d, _i, [g]) => { const v = force(t); return v.ctorIndex === 0 ? invoke(g, 'pure', [now(v)]) : fmapAt(g, now(fn('right')), delay(() => applyValue(f, [v.args[0]]))) },
+      pure: ([x]) => right(x),
+      ap: ([ef, ex]) => { const f = force(ef); if (f.ctorIndex === 0) return f; const x = force(ex); return x.ctorIndex === 0 ? x : right(delay(() => applyValue(f.args[0], [x.args[0]]))) },
+      bind: ([ex, k]) => { const x = force(ex); return x.ctorIndex === 0 ? x : applyValue(k, [x.args[0]]) },
+    },
+    '(,)': {
+      showsPrec: STOCK.showsPrec,
+      mappend: ([x, y], d) => { const a = force(x); const b = force(y); return pair(delay(() => mappendAt(d.sub[0], a.args[0], b.args[0])), delay(() => mappendAt(d.sub[1], a.args[1], b.args[1]))) },
+      mempty: (_, d) => pair(delay(() => memptyAt(d.sub[0])), delay(() => memptyAt(d.sub[1]))),
+      // The writer: (w, x), its log w combined by w's monoid.
+      fmap: ([f, t]) => { const v = force(t); return pair(v.args[0], delay(() => applyValue(f, [v.args[1]]))) },
+      foldMap: ([f, t]) => applyValue(f, [force(t).args[1]]),
+      traverse: ([f, t], _d, _i, [g]) => { const v = force(t); return fmapAt(g, now(fn('pair', v.args[0])), delay(() => applyValue(f, [v.args[1]]))) },
+      pure: ([x], d) => pair(delay(() => memptyAt(d.sub[0])), x),
+      ap: ([pf, px], d) => { const f = force(pf); const x = force(px); return pair(delay(() => mappendAt(d.sub[0], f.args[0], x.args[0])), delay(() => applyValue(f.args[1], [x.args[1]]))) },
+      bind: ([px, k], d) => { const x = force(px); const y = delay(() => force(applyValue(k, [x.args[1]]))); return pair(delay(() => mappendAt(d.sub[0], x.args[0], delay(() => force(y).args[0]))), delay(() => force(force(y).args[1]))) },
+    },
+    '()': { mappend: () => unit, mempty: () => unit },
+    Ordering: { mappend: ([x, y]) => (force(x).ctorIndex === 1 ? force(y) : force(x)), mempty: () => ordering(0) },
+    Picture: { mappend: ([x, y]) => picture('Pictures', 6, [x, y]), mempty: () => picture('Blank', 0, []) }, // gloss: drawn one over the other
+    // Subscriptions: listening to both; fmap relabels messages with a hidden Map.
+    Sub: { mappend: ([x, y]) => sub('Batch', 3, [x, y]), mempty: () => sub('None', 0, []), fmap: ([f, t]) => sub('Map', 4, [f, t]) },
+  }
+  /** The primitive implementing method `m` of builtin instance `key`, or undefined. */
+  function prim(key, m) {
+    const head = headOf(key)
+    if (NUMERIC.has(head)) return NUM[m]
+    if (head === 'Bool') return BOOL[m]
+    return PRIM[head]?.[m]
   }
 
   function arityOf(callee) {
@@ -744,13 +807,12 @@ export function createEvaluator(registry) {
   function call(callee, args, dicts = []) {
     if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
     const def = definition(callee)
-    if (def.method) return callMethod(def, args, dicts)
-    if (def.derived) return runDerived(def.derived, args)
-    if (def.builtin) {
-      const v = builtins[def.builtin][1](...args)
-      const into = dicts.find((d) => d.fromInteger || d.fromRational) // a conversion whose result type is a user type
-      return !into ? v : into.fromInteger ? fromIntegerAt(v, into.fromInteger) : fromRationalAt(v, into.fromRational)
+    if (def.method) {
+      if (!dicts?.length) throw new EvalError(`${def.method.name}: a method of class ${def.method.cls} needs to know its type — run it from a graph (the type pass picks the instance)`)
+      return invoke(dicts[0], def.method.name, args, dicts.slice(1))
     }
+    if (def.derived) return runDerived(def.derived, args)
+    if (def.builtin) return def.builtin === 'listOf' ? builtins.listOf[1](...args) : builtins[def.builtin][1](...args, dicts)
     const body = registry.functionBodies[callee]
     const output = body?.output
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)
@@ -761,14 +823,6 @@ export function createEvaluator(registry) {
   function runDerived(d, args) {
     const record = (t) => {
       const v = force(t)
-      // A literal or MEMPTY standing for a whole value of a type with hand-written structure: its own identity.
-      const like = { kind: 'data', type: d.type, args: [] }
-      if (typeof v === 'number' && hasWritten(like, ARITHMETIC)) return record(now(literalAt(v, like)))
-      if (isMempty(v) && hasWritten(like, ['Monoid'])) return record(now(memptyAt(like)))
-      // MEMPTY standing for a value of the type: its identity (`Nothing`, a record of MEMPTYs).
-      if (isMempty(v)) return concreteMempty({ kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount ?? 0 }, () => now(MEMPTY)) })
-      // A broadcast number standing for a whole record: every field is that same value.
-      if (typeof v === 'number' && d.fieldCount !== undefined) return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount }, () => now(v)) }
       if (!isData(v) || v.type !== d.type) throw new EvalError(`Expected a ${d.type}, got ${show(v)}`)
       return v
     }
@@ -790,7 +844,7 @@ export function createEvaluator(registry) {
       const branches = args.slice(0, -1)
       const fold = (t) => {
         const v = record(t)
-        const fields = v.args.map((field, i) => (d.recursive[v.ctorIndex][i] ? delay(() => fold(field)) : field))
+        const fields = v.args.map((f, i) => (d.recursive[v.ctorIndex][i] ? delay(() => fold(f)) : f))
         return d.arities[v.ctorIndex] ? applyValue(branches[v.ctorIndex], fields) : force(branches[v.ctorIndex])
       }
       return fold(args[args.length - 1])
@@ -799,8 +853,8 @@ export function createEvaluator(registry) {
   }
 
   /** Apply a function value to argument thunks, filling its open slots left to right. */
-  function applyValue(fn, argThunks) {
-    let v = fn
+  function applyValue(f, argThunks) {
+    let v = f
     for (const arg of argThunks) {
       v = force(v)
       if (!isClosure(v)) throw new EvalError(`Cannot apply ${show(v)} — it is not a function`)
@@ -819,6 +873,9 @@ export function createEvaluator(registry) {
     return t
   }
 
+  // The dictionaries the type pass gave the call (or literal) `key` of this frame.
+  const dictsOf = (env, key) => (env.elab?.[key] || []).map((e) => dictionary(e, { dicts: env.dicts }))
+
   function computeNode(graph, id, env) {
     const node = graph[id]
     if (!node) throw new EvalError(`Missing node: ${id}`)
@@ -826,14 +883,14 @@ export function createEvaluator(registry) {
       const text = String(node.value ?? '').trim()
       const value = Number(text)
       if (text === '' || (Number.isNaN(value) && text !== 'NaN')) throw new EvalError(`${node.label}: "${node.value}" is not a number`)
-      return value
+      return literalAt(value, text, dictsOf(env, id)[0])
     }
     if (node.type === 'boolean') return node.value === 'true'
     if (node.type === 'text') return fromJsString(String(node.value ?? ''))
     if (node.type === 'literal') {
       const lit = parseLiteral(node.value)
       if (!lit) throw new EvalError(`${JSON.stringify(String(node.value ?? ''))} is not a literal (a number, True/False, "text" or 'c')`)
-      return lit.kind === 'string' ? fromJsString(lit.value) : lit.value
+      return lit.kind === 'string' ? fromJsString(lit.value) : literalAt(lit.value, lit.text, dictsOf(env, id)[0])
     }
     if (node.type === 'ref') {
       if (!graph[node.target]) throw new EvalError(`${node.label}: the original node is gone`)
@@ -850,10 +907,11 @@ export function createEvaluator(registry) {
       if (!node.source || !graph[node.source]) throw new EvalError('Output is not connected')
       return force(nodeValue(graph, node.source, env))
     }
-    if (node.type === 'value') return reviveValue(node.data) // a stored Play result: data value
+    // A stored Play result: its stand-in dictionaries get the ones this use's types pick.
+    if (node.type === 'value') return fillDicts(reviveValue(node.data), dictsOf(env, id))
     if (node.type === 'curried') {
       if (!isClosure(node.closure)) throw new EvalError(`${node.label}: no stored partial application — Play the function again`)
-      return reviveValue(node.closure)
+      return fillDicts(reviveValue(node.closure), dictsOf(env, id))
     }
     if (node.type === 'function') return functionNodeValue(graph, node, env)
     throw new EvalError(`${node.label || id}: cannot evaluate a ${node.type} node`)
@@ -869,42 +927,49 @@ export function createEvaluator(registry) {
       if (mountedId && graph[mountedId]) arg = nodeValue(graph, mountedId, env)
       else {
         const lit = parseLiteral(text)
-        if (lit) arg = now(lit.kind === 'string' ? fromJsString(lit.value) : lit.value)
+        if (lit) arg = delay(() => (lit.kind === 'string' ? fromJsString(lit.value) : literalAt(lit.value, lit.text, dictsOf(env, `${node.id}:${i}`)[0])))
       }
       if (!arg) return
       if (i >= arity) throw new EvalError(`${node.label}: slot ${i + 1} has no matching parameter`)
       args[i] = arg
     })
-    const dicts = (env.elab?.[node.id] || []).map((e) => dictionary(e, { dicts: env.dicts }))
+    const dicts = dictsOf(env, node.id)
     if (!args.includes(null)) return call(callee, args, dicts)
     return closure(callee, args, dicts)
   }
 
+  /** The dictionaries `evidence` (a list, closed: no parameters) describes. */
+  const dictsFrom = (evidence) => evidence.map((e) => dictionary(e, {}))
+
   return {
     /** Evaluate node `nodeId` of `graph` to JSON-safe data: a number, a boolean, a data value, or a closure. */
     run(graph, nodeId) {
-      return guarded(() => serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map(), elab: elab?.forGraph(graph) || {} })))
+      return guarded(() => serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map(), elab: elab?.forGraph(graph) || {} })), graph)
     },
-    /** Apply builtin `name` (e.g. 'mappend', 'plus') to already-built values — used by the law checker. */
-    invokeBuiltin(name, values) {
+    /** Apply builtin `name` to values, with the dictionaries `evidence` describes (closed evidence: see classEnv.js) — used by the law checker. */
+    invoke(name, values, evidence = []) {
       if (!builtins[name]) throw new EvalError(`Unknown builtin: ${name}`)
-      return guarded(() => serializeValue(builtins[name][1](...values.map((v) => now(reviveValue(v))))))
+      return guarded(() => serializeValue(builtins[name][1](...values.map((v) => now(reviveValue(v))), dictsFrom(evidence))))
+    },
+    /** The literal `n` at the type `evidence` (for its Semiring, Ring or Field) names. */
+    literal(n, evidence) {
+      return guarded(() => serializeValue(literalAt(n, String(n), dictsFrom([evidence])[0])))
+    },
+    /** `show` a value through the Show instance `evidence` names. */
+    showAt(value, evidence) {
+      return guarded(() => showAt(dictsFrom([evidence])[0], 0, now(reviveValue(value))))
     },
     /** Apply any function value (e.g. a closure over a custom function) to values. */
-    apply(fn, values) {
-      return guarded(() => serializeValue(applyValue(now(reviveValue(fn)), values.map((v) => now(reviveValue(v))))))
-    },
-    /** A number or MEMPTY as a value shaped like `like` (through hand-written instances) — for comparing law results. */
-    concretize(v, like) {
-      return guarded(() => serializeValue(isMempty(v) ? memptyAt(reviveValue(like)) : spread(v, reviveValue(like))))
+    apply(f, values) {
+      return guarded(() => serializeValue(applyValue(now(reviveValue(f)), values.map((v) => now(reviveValue(v))))))
     },
   }
 
-  function guarded(fn) {
+  function guarded(run, graph = null) {
     steps = 0
-    elab = registry.elaboration?.() || null
+    elab = registry.elaboration?.(graph) || null
     try {
-      return fn()
+      return run()
     } catch (e) {
       if (e instanceof RangeError) throw new EvalError('Recursion too deep')
       throw e

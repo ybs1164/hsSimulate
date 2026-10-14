@@ -12,7 +12,19 @@ test('snapshots round-trip', () => {
   const types = { Score: { name: 'Score', keyword: 'newtype', constructors: [{ name: 'Score', record: false, fields: [{ name: null, type: { kind: 'con', name: 'Int' } }] }], deriving: [], source: 'newtype Score = Score Int' } }
   const classes = { Pretty: { name: 'Pretty', param: 'a', supers: [], methods: [{ name: 'pretty', sig: 'a -> String', default: null }], instances: [] } }
   const text = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, types, classes, entry: 'add', outputId: 3 })
-  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, types, classes, entry: 'add', outputId: 3 })
+  const instances = { Show: [{ head: 'Score', context: [], methods: { show: 'showScore' } }] }
+  const text2 = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, types, classes, instances, entry: 'add', outputId: 3 })
+  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, types, classes, instances: {}, entry: 'add', outputId: 3 })
+  assert.deepEqual(parseProject(text2).instances, instances)
+})
+
+test('hand-written instances kept on a type move to their class, with the context they had', () => {
+  const pair = { name: 'Pair', keyword: 'data', params: ['p', 'q'], constructors: [{ name: 'Pair', record: false, fields: [{ name: null, type: { kind: 'var', id: 'q' } }] }], deriving: [], instances: [{ cls: 'Show', methods: { show: 'showPair' } }, { cls: 'Functor', methods: { fmap: 'mapPair' } }] }
+  const old = JSON.stringify({ version: 3, nodes: builtinNodes, functionBodies: builtinBodies, types: { Pair: pair }, classes: {} })
+  const project = upgradeProject(parseProject(old))
+  assert.equal(project.types.Pair.instances, undefined)
+  // Show asked of the parameters the fields use — the second, written b in an instance head; Functor needs none.
+  assert.deepEqual(project.instances, { Show: [{ head: 'Pair', context: [{ cls: 'Show', var: 'b' }], methods: { show: 'showPair' } }], Functor: [{ head: 'Pair', context: [], methods: { fmap: 'mapPair' } }] })
 })
 
 test('malformed files are rejected with a ProjectError', () => {

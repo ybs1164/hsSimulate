@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce } from '../src/prelude.js'
 import { showQual, showType } from '../src/typeSystem.js'

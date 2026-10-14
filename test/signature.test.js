@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { addParameter, removeParameter, renameParameter } from '../src/signature.js'
-import { createEvaluator } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { showType } from '../src/typeSystem.js'
 

@@ -9,11 +9,13 @@
 // Samples come from the type's structure (fields of a product, each
 // constructor of a sum, short lists, Maybe, newtypes, and builtin functions
 // for function-typed positions). Values are compared structurally with a
-// floating-point tolerance; `mempty` is compared as the identity of the
-// other side's shape, and functions/Endo extensionally on sample points.
-import { concreteMempty, isClosure, isData, isMempty, MEMPTY, showValue } from './evaluator.js'
-import { classClosure, entails } from './prelude.js'
-import { applySubst, pred, showType } from './typeSystem.js'
+// floating-point tolerance, functions/Endo extensionally on sample points.
+// Every operation runs at the type being checked — with that type's
+// dictionaries, as a call in a graph would (`op`).
+import { isClosure, isData, showValue } from './evaluator.js'
+import { builtinSchemes } from './builtinSchemes.js'
+import { classClosure, entails, evidence } from './prelude.js'
+import { applySubst, pred, showType, tcon } from './typeSystem.js'
 
 const MAX_SAMPLES = 5
 
@@ -92,19 +94,11 @@ function sameType(a, b) {
 }
 
 /**
- * Structural equality with a relative tolerance for floating point. MEMPTY
- * equals the identity of the other side's shape; closures and Endo values
- * are compared by applying them to `points`.
+ * Structural equality with a relative tolerance for floating point;
+ * closures and Endo values are compared by applying them to `points`.
  */
 export function equalValues(a, b, ctx, points = []) {
-  if (isMempty(a) && isMempty(b)) return true
-  // (MEMPTY and bare numbers stand for a value of the other side's type —
-  // made concrete by the evaluator, which knows hand-written instances.)
-  if (isMempty(a)) return isData(b) ? equalValues(ctx.ev.concretize ? ctx.ev.concretize(a, b) : concreteMempty(b), b, ctx, points) : false
-  if (isMempty(b)) return equalValues(b, a, ctx, points)
   if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)) || (Number.isNaN(a) && Number.isNaN(b))
-  if (typeof a === 'number' && isData(b)) return ctx.ev.concretize ? equalValues(ctx.ev.concretize(a, b), b, ctx, points) : b.args.every((f) => equalValues(a, f, ctx, points)) // a broadcast number
-  if (typeof b === 'number' && isData(a)) return equalValues(b, a, ctx, points)
   if (isClosure(a) || isClosure(b)) return points.every((p) => equalValues(ctx.ev.apply(a, [p]), ctx.ev.apply(b, [p]), ctx, points))
   if (isData(a) && isData(b)) {
     if (a.type !== b.type || a.ctorIndex !== b.ctorIndex || a.args.length !== b.args.length) return false
@@ -115,39 +109,62 @@ export function equalValues(a, b, ctx, points = []) {
 
 const show = (v, ctx) => showValue(v, ctx.types)
 
-// Laws per class: [name, arity, check(op, ...samples) → boolean]. `op(name, ...args)` runs a builtin.
+/** A closed dictionary (plain data, as a closure carries it) from closed evidence. */
+const dictOf = (e) => ({ kind: 'dict', key: e.inst, sub: e.sub.map(dictOf) })
+
+/**
+ * `op(name, ...args)` runs builtin `name` at `type`: its constraint on the
+ * class variable is solved at `type`, any other (properFraction's result)
+ * at Integer. Throws if `type` lacks an instance.
+ */
+function opAt(type, ctx) {
+  return (name, ...args) => {
+    const sch = builtinSchemes[name]
+    const main = sch.preds[0]?.type.id
+    const ev = sch.preds.map((p) => {
+      const q = pred(p.cls, p.type.id === main ? type : tcon('Integer'))
+      const e = evidence([], q)
+      if (!e) throw new Error(`No instance for ${q.cls} ${showType(q.type)}`)
+      return e
+    })
+    return ctx.ev.invoke(name, args, ev)
+  }
+}
+
+// Laws per class: [name, arity, check(op, ...samples) → boolean]. `op(name, ...args)` runs a builtin at the type checked.
 const LAWS = {
   Semigroup: [['associativity: (x <> y) <> z = x <> (y <> z)', 3, (op, x, y, z, eq) => eq(op('mappend', op('mappend', x, y), z), op('mappend', x, op('mappend', y, z)))]],
-  Monoid: [['identity: mempty <> x = x = x <> mempty', 1, (op, x, eq) => eq(op('mappend', MEMPTY, x), x) && eq(op('mappend', x, MEMPTY), x)]],
+  Monoid: [['identity: mempty <> x = x = x <> mempty', 1, (op, x, eq) => eq(op('mappend', op('mempty'), x), x) && eq(op('mappend', x, op('mempty')), x)]],
   AddSemigroup: [['associativity: (x + y) + z = x + (y + z)', 3, (op, x, y, z, eq) => eq(op('plus', op('plus', x, y), z), op('plus', x, op('plus', y, z)))]],
-  AddMonoid: [['identity: 0 + x = x', 1, (op, x, eq) => eq(op('plus', 0, x), x) && eq(op('plus', x, 0), x)]],
+  AddMonoid: [['identity: 0 + x = x', 1, (op, x, eq) => eq(op('plus', op('addZero'), x), x) && eq(op('plus', x, op('addZero')), x)]],
   AddCommutativeMonoid: [['commutativity: x + y = y + x', 2, (op, x, y, eq) => eq(op('plus', x, y), op('plus', y, x))]],
-  AddGroup: [['inverse: x + negate x = 0', 1, (op, x, eq) => eq(op('plus', x, op('negate', x)), 0)]],
+  AddGroup: [['inverse: x + negate x = 0', 1, (op, x, eq) => eq(op('plus', x, op('negate', x)), op('addZero'))]],
   AddAbelianGroup: [['commutativity: x + y = y + x', 2, (op, x, y, eq) => eq(op('plus', x, y), op('plus', y, x))]],
   MulSemigroup: [['associativity: (x * y) * z = x * (y * z)', 3, (op, x, y, z, eq) => eq(op('times', op('times', x, y), z), op('times', x, op('times', y, z)))]],
-  MulMonoid: [['identity: 1 * x = x', 1, (op, x, eq) => eq(op('times', 1, x), x) && eq(op('times', x, 1), x)]],
+  MulMonoid: [['identity: 1 * x = x', 1, (op, x, eq) => eq(op('times', op('mulOne'), x), x) && eq(op('times', x, op('mulOne')), x)]],
   Semiring: [
     ['distributivity: x * (y + z) = x * y + x * z', 3, (op, x, y, z, eq) => eq(op('times', x, op('plus', y, z)), op('plus', op('times', x, y), op('times', x, z)))],
-    ['annihilation: 0 * x = 0', 1, (op, x, eq) => eq(op('times', 0, x), 0)],
+    ['annihilation: 0 * x = 0', 1, (op, x, eq) => eq(op('times', op('addZero'), x), op('addZero'))],
   ],
   // The conversions out of the tower are ring maps that respect the order,
   // and toInteger is ℤ's copy of the type: faithful, and agreeing with toRational.
+  // (A Rational or an Integer is a host number: compared with host arithmetic.)
   OrderedRing: [
-    ['toRational is a ring map: toRational (x + y) = toRational x + toRational y, and so for *', 2, (op, x, y, eq) => eq(op('toRational', op('plus', x, y)), op('plus', op('toRational', x), op('toRational', y))) && eq(op('toRational', op('times', x, y)), op('times', op('toRational', x), op('toRational', y)))],
-    ['toRational is monotone: x >= y ⇒ toRational x >= toRational y', 2, (op, x, y) => !op('geq', x, y) || op('geq', op('toRational', x), op('toRational', y))],
+    ['toRational is a ring map: toRational (x + y) = toRational x + toRational y, and so for *', 2, (op, x, y, eq) => eq(op('toRational', op('plus', x, y)), op('toRational', x) + op('toRational', y)) && eq(op('toRational', op('times', x, y)), op('toRational', x) * op('toRational', y))],
+    ['toRational is monotone: x >= y ⇒ toRational x >= toRational y', 2, (op, x, y) => !op('geq', x, y) || op('toRational', x) >= op('toRational', y)],
   ],
   EuclideanRing: [
-    ['toInteger is a ring map: toInteger (x + y) = toInteger x + toInteger y, and so for *', 2, (op, x, y, eq) => eq(op('toInteger', op('plus', x, y)), op('plus', op('toInteger', x), op('toInteger', y))) && eq(op('toInteger', op('times', x, y)), op('times', op('toInteger', x), op('toInteger', y)))],
+    ['toInteger is a ring map: toInteger (x + y) = toInteger x + toInteger y, and so for *', 2, (op, x, y, eq) => eq(op('toInteger', op('plus', x, y)), op('toInteger', x) + op('toInteger', y)) && eq(op('toInteger', op('times', x, y)), op('toInteger', x) * op('toInteger', y))],
     ['toInteger is faithful: toInteger x = toInteger y ⇒ x = y', 2, (op, x, y, eq) => !eq(op('toInteger', x), op('toInteger', y)) || eq(x, y)],
     ['toRational x = fromInteger (toInteger x)', 1, (op, x, eq) => eq(op('toRational', x), op('toInteger', x))],
     ['division with remainder: (x `div` y) * y + x `mod` y = x, for y ≠ 0', 2, (op, x, y, eq) => op('toInteger', y) === 0 || eq(op('plus', op('times', op('div', x, y), y), op('mod', x, y)), x)],
   ],
   OrderedField: [['properFraction x = (n, r): x = n + r, n whole, |r| < 1', 1, (op, x) => {
-    const [n, r] = op('properFraction', x).args.map((v, i) => (i ? op('toRational', v) : op('toInteger', v)))
+    const [n, r] = op('properFraction', x).args.map((v, i) => (i ? op('toRational', v) : v)) // n: an Integer
     const v = op('toRational', x)
     return Math.abs(v - (n + r)) <= 1e-9 * Math.max(1, Math.abs(v)) && Math.abs(r) < 1
   }]],
-  Transcendental: [['sqrt x * sqrt x = x, for x >= 0', 1, (op, x, eq) => !op('geq', x, 0) || eq(op('times', op('sqrt', x), op('sqrt', x)), x)]],
+  Transcendental: [['sqrt x * sqrt x = x, for x >= 0', 1, (op, x, eq) => !op('geq', x, op('addZero')) || eq(op('times', op('sqrt', x), op('sqrt', x)), x)]],
   Eq: [['reflexivity: x == x', 1, (op, x) => op('eq', x, x) === true]],
   PartialOrd: [
     ['reflexivity: leq x x', 1, (op, x) => op('leq', x, x) === true],
@@ -167,10 +184,13 @@ const LAWS = {
   ],
 }
 
-/** Function samples `a → a` for function-typed positions: closures over numeric builtins. */
+/** Function samples `a → a` for function-typed positions: closures over numeric builtins, carrying their dictionaries. */
 function functionSamples(type) {
-  if (type.kind === 'con' && NUMBERS[type.name]) return [{ kind: 'closure', callee: 'plus', args: [1, null] }, { kind: 'closure', callee: 'negate', args: [null] }, { kind: 'closure', callee: 'times', args: [3, null] }]
-  return null
+  if (type.kind !== 'con' || !NUMBERS[type.name]) return null
+  const at = (cls) => [dictOf(evidence([], pred(cls, type)))]
+  const samples = [{ kind: 'closure', callee: '#plus', args: [1, null], dicts: at('AddSemigroup') }, { kind: 'closure', callee: '#times', args: [3, null], dicts: at('MulSemigroup') }]
+  if (entails([], pred('AddGroup', type))) samples.splice(1, 0, { kind: 'closure', callee: '#negate', args: [null], dicts: at('AddGroup') })
+  return samples
 }
 
 /**
@@ -183,7 +203,7 @@ export function checkClassLaws(cls, type, ctx) {
   // Functions (inside Endo) are compared extensionally, at samples of their domain.
   const points = isCon(head(type), 'Endo') ? samplesOf(argOf(type), ctx.types, functionSamples) || [] : []
   const eq = (a, b) => equalValues(a, b, ctx, points)
-  const op = (name, ...args) => ctx.ev.invokeBuiltin(name, args)
+  const op = opAt(type, ctx)
   const results = []
   for (const c of classClosure(cls).reverse()) {
     for (const [law, arity, check] of LAWS[c] || []) {
@@ -226,16 +246,16 @@ export function lawfulClassesOf(type) {
  */
 export const FUNCTION_LAWS = ['homomorphism', 'action', 'inflationary']
 
-function monoidOps(type) {
-  if (entails([], pred('Monoid', type))) return { name: '<>', mul: 'mappend', unit: MEMPTY }
-  if (entails([], pred('AddMonoid', type))) return { name: '+', mul: 'plus', unit: 0 }
+function monoidOps(type, ctx) {
+  const op = opAt(type, ctx)
+  if (entails([], pred('Monoid', type))) return { name: '<>', mul: (x, y) => op('mappend', x, y), unit: op('mempty') }
+  if (entails([], pred('AddMonoid', type))) return { name: '+', mul: (x, y) => op('plus', x, y), unit: op('addZero') }
   return null
 }
 
 export function checkFunctionLaw(kind, fn, fnType, ctx) {
   const points = []
   const eq = (a, b) => equalValues(a, b, ctx, points)
-  const op = (name, ...args) => ctx.ev.invokeBuiltin(name, args)
   const ap = (...args) => ctx.ev.apply(fn, args)
   const fail = (law, counterexample) => ({ law, ok: false, counterexample })
   const pass = (law) => ({ law, ok: true, counterexample: null })
@@ -243,27 +263,27 @@ export function checkFunctionLaw(kind, fn, fnType, ctx) {
     if (kind === 'homomorphism') {
       if (fnType.kind !== 'fun') return fail('homomorphism', 'not a function M → N')
       const [M, N] = [fnType.from, fnType.to]
-      const m = monoidOps(M), n = monoidOps(N)
+      const m = monoidOps(M, ctx), n = monoidOps(N, ctx)
       if (!m || !n) return fail('homomorphism', `${showType(m ? N : M)} is not a monoid (needs Monoid or AddMonoid)`)
       const xs = samplesOf(M, ctx.types, functionSamples)
       if (!xs) return fail('homomorphism', `can't build samples of ${showType(M)}`)
       if (!eq(ap(m.unit), n.unit)) return fail(`f (identity) = identity`, `f ${show(m.unit, ctx)} = ${show(ap(m.unit), ctx)}`)
       for (const x of xs) for (const y of xs) {
-        if (!eq(ap(op(m.mul, x, y)), op(n.mul, ap(x), ap(y)))) return fail(`f (x ${m.name} y) = f x ${n.name} f y`, `x = ${show(x, ctx)}, y = ${show(y, ctx)}`)
+        if (!eq(ap(m.mul(x, y)), n.mul(ap(x), ap(y)))) return fail(`f (x ${m.name} y) = f x ${n.name} f y`, `x = ${show(x, ctx)}, y = ${show(y, ctx)}`)
       }
       return pass(`f (x ${m.name} y) = f x ${n.name} f y`)
     }
     if (kind === 'action') {
       if (fnType.kind !== 'fun' || fnType.to.kind !== 'fun') return fail('action', 'not a function M → S → S')
       const [M, S] = [fnType.from, fnType.to.from]
-      const m = monoidOps(M)
+      const m = monoidOps(M, ctx)
       if (!m) return fail('action', `${showType(M)} is not a monoid (needs Monoid or AddMonoid)`)
       const as = samplesOf(M, ctx.types, functionSamples)?.filter((a) => typeof a !== 'number' || a >= 0)
       const ss = samplesOf(S, ctx.types, functionSamples)
       if (!as || !ss) return fail('action', `can't build samples of ${showType(as ? S : M)}`)
       for (const s of ss) if (!eq(ap(m.unit, s), s)) return fail('f identity = id', `s = ${show(s, ctx)}`)
       for (const a of as) for (const b of as) for (const s of ss) {
-        if (!eq(ap(op(m.mul, a, b), s), ap(a, ap(b, s)))) return fail(`f (a ${m.name} b) = f a ∘ f b`, `a = ${show(a, ctx)}, b = ${show(b, ctx)}, s = ${show(s, ctx)}`)
+        if (!eq(ap(m.mul(a, b), s), ap(a, ap(b, s)))) return fail(`f (a ${m.name} b) = f a ∘ f b`, `a = ${show(a, ctx)}, b = ${show(b, ctx)}, s = ${show(s, ctx)}`)
       }
       return pass(`f (a ${m.name} b) = f a ∘ f b`)
     }
@@ -272,7 +292,7 @@ export function checkFunctionLaw(kind, fn, fnType, ctx) {
       if (!entails([], pred('PartialOrd', fnType.from))) return fail('inflationary', `${showType(fnType.from)} has no PartialOrd`)
       const ss = samplesOf(fnType.from, ctx.types, functionSamples)
       if (!ss) return fail('inflationary', `can't build samples of ${showType(fnType.from)}`)
-      for (const s of ss) if (!op('leq', s, ap(s))) return fail('leq s (f s)', `s = ${show(s, ctx)}`)
+      for (const s of ss) if (!opAt(fnType.from, ctx)('leq', s, ap(s))) return fail('leq s (f s)', `s = ${show(s, ctx)}`)
       return pass('leq s (f s)')
     }
   } catch (e) {

@@ -21,7 +21,7 @@
 // primitives (`clicks#`) where the user has customized them, since deriving
 // means the structural meaning. λs are lambda-lifted hidden functions, as the
 // editor makes them (captured values in their leading slots).
-import { CLASS_METHODS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
+import { METHOD_LABEL, METHOD_PARAMS, minimalOf } from './classMethods.js'
 import { PRIM_PREFIX, primLabel, shape } from './typeEdits.js'
 
 // Where each method or helper a generated graph calls lives, and its label.
@@ -36,14 +36,25 @@ const LABEL = { ...METHOD_LABEL, and: '(&&)', select: 'select', showsPrec: 'show
 // &&), ordered lexicographically, shown, or a pointwise operation of some
 // arity (`k` for scale: a scalar first).
 const SHAPE = {
-  eq: 'all', leq: 'all', geq: 'lex', show: 'show',
+  eq: 'all', leq: 'all', geq: 'lex', show: 'show', showsPrec: 'showsPrec',
   plus: 'binary', times: 'binary', divide: 'binary', mappend: 'binary', join: 'binary', meet: 'binary',
   negate: 'unary', scale: 'scalar', addZero: 'nullary', mulOne: 'nullary', mempty: 'nullary',
 }
 
+/**
+ * The methods a derived instance of `cls` is written out with: a minimal
+ * complete definition (classMethods.js) whose methods all have a shape —
+ * the class's defaults give the rest (Eq's (/=), Ord's compare, …). Show is
+ * written with showsPrec, so a constructor argument keeps its parentheses.
+ */
+export function graphedMethods(cls) {
+  if (cls === 'Show') return ['showsPrec']
+  return minimalOf(cls).find((set) => set.length && set.every((m) => SHAPE[m])) || null
+}
+
 /** The classes of declaration `d` whose derived instance can be written out as graphs: `[{ cls, strategy }]`. */
 export function graphableDerivings(d) {
-  return d.deriving.flatMap((c) => c.classes.filter((cls) => CLASS_METHODS[cls]?.length && CLASS_METHODS[cls].every((m) => SHAPE[m])).map((cls) => ({ cls, strategy: c.strategy })))
+  return d.deriving.flatMap((c) => c.classes.filter((cls) => graphedMethods(cls)).map((cls) => ({ cls, strategy: c.strategy })))
 }
 
 /**
@@ -183,6 +194,12 @@ export function instanceGraphs(d, cls, opts) {
       case 'all': return all(b, m, xs, ys)
       case 'lex': return lex(b, xs, ys)
       case 'show': return showCtor(b, c, xs)
+      case 'showsPrec': {
+        // showsPrec d (C x …) = showParen (d >= 11) (showString "C " . showsPrec 11 x …)
+        const s = showCtor(b, c, xs)
+        if (!xs.length) return s
+        return builtin(b, 'select', [builtin(b, 'geq', [extra[0], { lit: '11' }]), builtin(b, 'append', [{ lit: '"("' }, builtin(b, 'append', [s, { lit: '")"' }])]), s])
+      }
       case 'binary': return pointwise(b, m, c, xs, ys)
       case 'unary': return pointwise(b, m, c, xs)
       case 'scalar': return pointwise(b, m, c, xs.map(() => extra[0]), xs)
@@ -191,7 +208,7 @@ export function instanceGraphs(d, cls, opts) {
   }
   const mismatch = (m, i, j) => ({ lit: SHAPE[m] === 'lex' ? (i > j ? 'True' : 'False') : 'False' })
 
-  for (const m of CLASS_METHODS[cls]) {
+  for (const m of graphedMethods(cls) || []) {
     const params = SHAPE[m] === 'nullary' ? [] : METHOD_PARAMS[m]
     const fnId = opts.newId(m)
     const b = bodyBuilder(fnId, params)
@@ -204,7 +221,7 @@ export function instanceGraphs(d, cls, opts) {
       const c = d.constructors[0]
       const project = (v) => c.fields.map((f) => derivedCall(b, f.name, [v]))
       const binary = ['all', 'lex', 'binary'].includes(SHAPE[m])
-      if (SHAPE[m] === 'scalar') result = match(m, b, 0, project(p[1]), null, [p[0]])
+      if (SHAPE[m] === 'scalar' || SHAPE[m] === 'showsPrec') result = match(m, b, 0, project(p[1]), null, [p[0]])
       else result = match(m, b, 0, project(p[0]), binary ? project(p[1]) : null)
     } else if (['all', 'lex', 'binary'].includes(SHAPE[m])) {
       // Take x apart, then y; equal constructors compare their fields.
@@ -222,7 +239,7 @@ export function instanceGraphs(d, cls, opts) {
       }), x)
     } else {
       // One value taken apart (a scalar, if any, captured first).
-      const extra = SHAPE[m] === 'scalar' ? [p[0]] : []
+      const extra = SHAPE[m] === 'scalar' || SHAPE[m] === 'showsPrec' ? [p[0]] : []
       const v = p.at(-1)
       result = caseOf(b, d.constructors.map((ci, i) => {
         const xs = names(ci, 0)

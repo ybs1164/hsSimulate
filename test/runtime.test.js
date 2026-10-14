@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { checkFunctionLaw } from '../src/laws.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
@@ -62,9 +63,11 @@ test('time passes through step: whole seconds pay rate, the elapsedeconds short 
 test('step is a monoid action, so offline progress is one call — and agrees with slicing', () => {
   setDynamicInstances(derivedInstances(example.types))
   try {
-    // the type program gives it (on its own, onTick :: OrderedField a => a → Model → Model)
+    // the type program gives it (on its own, onTick :: OrderedField a => a → Model → Model):
+    // the step the Program holds, with the dictionaries that use picked
     const stepType = tfun(tcon('Double'), tfun(tcon('Model'), tcon('Model')))
-    const law = checkFunctionLaw('action', { kind: 'closure', callee: 'onTick', args: [null, null] }, stepType, { ev, types: example.types })
+    const step = ev.run(nodes, 'main').args[3]
+    const law = checkFunctionLaw('action', step, stepType, { ev, types: example.types })
     assert.ok(law.ok, law.counterexample)
 
     const exact = createGame(ev, ev.run(nodes, 'main'), { exactTime: true })

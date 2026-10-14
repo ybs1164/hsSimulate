@@ -62,6 +62,14 @@ export const builtinSchemes = {
   toRational: scheme(['a'], [pred('OrderedRing', a)], tfun(a, Rational)),
   geq: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
   eq: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(a, Bool))),
+  // The rest of Eq and Ord (classMethods.js gives their defaults).
+  neq: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(a, Bool))),
+  compare: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, tcon('Ordering')))),
+  le: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
+  lt: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
+  gt: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
+  max: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, a))),
+  min: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, a))),
   select: scheme(['a'], [], tfun(Bool, tfun(a, tfun(a, a)))),
   // Bool = 1 + 1: (&&), (||) and not, each a copairing of Bool (`p && q = select p q False`).
   and: scheme([], [], tfun(Bool, tfun(Bool, Bool))),
@@ -134,6 +142,11 @@ export const builtinSchemes = {
   join: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
   meet: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
   scale: scheme(['a'], [pred('VectorSpace', a)], tfun(Double, tfun(a, a))),
+  // Applicative, Monad, Traversable (base), over `f :: * -> *`.
+  pure: scheme(['f', 'a'], [pred('Applicative', f)], tfun(a, ap(f, a))),
+  ap: scheme(['f', 'a', 'b'], [pred('Applicative', f)], tfun(ap(f, tfun(a, b)), tfun(ap(f, a), ap(f, b)))),
+  bind: scheme(['m', 'a', 'b'], [pred('Monad', m)], tfun(ap(m, a), tfun(tfun(a, ap(m, b)), ap(m, b)))),
+  traverse: scheme(['t', 'f', 'a', 'b'], [pred('Traversable', t), pred('Applicative', f)], tfun(tfun(a, ap(f, b)), tfun(ap(t, a), ap(f, ap(t, b))))),
 
   // A game, shaped like gloss's `play` (and Elm's Browser.element): the
   // initial model, a view, a message handler and a time step. The view is a

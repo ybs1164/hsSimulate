@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDice } from '../src/examples/dice.js'
-import { createEvaluator } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { createGame, pictureShapes } from '../src/runtime.js'
 import { derivedDefinitions } from '../src/typeDecls.js'
 

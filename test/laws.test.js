@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvaluator } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { checkClassLaws, checkFunctionLaw, lawfulClassesOf } from '../src/laws.js'
 import { setDynamicInstances } from '../src/prelude.js'
 import { declareTypes, derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
@@ -47,22 +47,24 @@ test('the checker finds counterexamples: a product is not totally ordered', () =
   // leq on Wallet is a partial order — so "x ≤ y or y ≤ x" fails, which is why Wallet gets no Ord.
   const a = { kind: 'data', type: 'Wallet', ctor: 'Wallet', ctorIndex: 0, args: [1, 5] }
   const b = { kind: 'data', type: 'Wallet', ctor: 'Wallet', ctorIndex: 0, args: [5, 1] }
-  assert.equal(ctx.ev.invokeBuiltin('leq', [a, b]), false)
-  assert.equal(ctx.ev.invokeBuiltin('leq', [b, a]), false)
+  const atWallet = [{ inst: 'PartialOrd@Wallet', sub: [] }]
+  assert.equal(ctx.ev.invoke('leq', [a, b], atWallet), false)
+  assert.equal(ctx.ev.invoke('leq', [b, a], atWallet), false)
 })
 
-const closure = (callee, args) => ({ kind: 'closure', callee, args })
+// A closure over a class method carries its dictionary (`key`), as one made in a graph does.
+const closure = (callee, args, key) => ({ kind: 'closure', callee, args, ...(key ? { dicts: [{ kind: 'dict', key, sub: [] }] } : {}) })
 
 test('homomorphism: scaling is one, adding a constant is not', () => {
   setDynamicInstances(derivedInstances(types))
   try {
     const DD = tfun(Double, Double)
-    assert.ok(checkFunctionLaw('homomorphism', closure('times', [3, null]), DD, ctx).ok)
-    const bad = checkFunctionLaw('homomorphism', closure('plus', [1, null]), DD, ctx)
+    assert.ok(checkFunctionLaw('homomorphism', closure('times', [3, null], 'MulSemigroup@Double'), DD, ctx).ok)
+    const bad = checkFunctionLaw('homomorphism', closure('plus', [1, null], 'AddSemigroup@Double'), DD, ctx)
     assert.equal(bad.ok, false)
     assert.match(bad.counterexample, /f 0 = 1/)
     // Wallet → Wallet scaling by a scalar is linear
-    assert.ok(checkFunctionLaw('homomorphism', closure('scale', [2, null]), tfun(tcon('Wallet'), tcon('Wallet')), { ...ctx, ev: createEvaluator({ nodes: { ...nodes, scale: { id: 'scale', builtin: 'scale' } }, functionBodies: {}, types }) }).ok)
+    assert.ok(checkFunctionLaw('homomorphism', closure('scale', [2, null], 'VectorSpace@Wallet'), tfun(tcon('Wallet'), tcon('Wallet')), { ...ctx, ev: createEvaluator({ nodes: { ...nodes, scale: { id: 'scale', builtin: 'scale' } }, functionBodies: {}, types }) }).ok)
   } finally {
     setDynamicInstances([])
   }
@@ -74,7 +76,7 @@ test('inflationary: joining in flags only ever adds achievements', () => {
     const ev = createEvaluator({ nodes: { ...nodes, join: { id: 'join', builtin: 'join' }, leq: { id: 'leq', builtin: 'leq' } }, functionBodies: {}, types })
     const unlockFirst = { kind: 'data', type: 'Flags', ctor: 'Flags', ctorIndex: 0, args: [true, false] }
     const FF = tfun(tcon('Flags'), tcon('Flags'))
-    assert.ok(checkFunctionLaw('inflationary', closure('join', [unlockFirst, null]), FF, { ev, types }).ok)
+    assert.ok(checkFunctionLaw('inflationary', closure('join', [unlockFirst, null], 'Lattice@Flags'), FF, { ev, types }).ok)
     const setFirstFalse = closure(Object.values(derived).find((d) => d.label === 'set first').id, [false, null])
     const r = checkFunctionLaw('inflationary', setFirstFalse, FF, { ev, types })
     assert.equal(r.ok, false, 'clearing an achievement is not inflationary')

@@ -24,9 +24,18 @@
 //     instances: [{ head: typeName, context: [{ cls, var }], methods: { name: fnId } }] }
 // Everything else — method types, instance heads, the class environment's
 // entries — is resolved from that by `resolveClasses`.
+//
+// An instance of a builtin class written by hand has exactly the same
+// shape, kept per class in the project's `instances` (`{ Show: [{ head:
+// 'Wallet', context: [], methods: { show: fnId } }] }`), and is resolved and
+// checked the same way (`resolveWritten`). Its methods' types are the
+// builtins' (builtinSchemes.js); a method it leaves out comes from the
+// class's defaults (classMethods.js' minimal complete definitions).
 import { DeclError, builtinTypeNames, derivedInstances, parseSignature, schemeProblem } from './typeDecls.js'
-import { classClosure, entails, evidence, isClass, isUserClass, withDynamicClasses, withDynamicInstances } from './prelude.js'
-import { applySubst, constructorArity, ftv, instantiate, pred, scheme, showType, tapp, tcon, tfun, tvar, unify } from './typeSystem.js'
+import { classArity, classClosure, entails, findInstance, isClass, isUserClass, withDynamicClasses, withDynamicInstances } from './prelude.js'
+import { constructorArity, ftv, pred, scheme, showType, tapp, tcon, tfun, tvar } from './typeSystem.js'
+import { BUILTIN_CLASSES, CLASS_METHODS, minimalProblem } from './classMethods.js'
+import { builtinMethodType, methodTypeAtHead, runtimeInstances } from './instanceTable.js'
 
 const isUpperName = (s) => /^[A-Z][A-Za-z0-9_']*$/.test(s || '')
 const isLowerName = (s) => /^[a-z_][A-Za-z0-9_']*$/.test(s || '')
@@ -89,47 +98,97 @@ export function resolveClasses(classes, types, functionLabels = []) {
   // Instances.
   for (const c of resolved) {
     const seen = new Set()
-    c.instances = c.instances.map((inst) => {
-      const where = `instance ${c.name} ${showHead(inst.head)}`
-      if (!HEAD_NAMES.includes(inst.head) && !types[inst.head]) throw new DeclError(`${where}: no type named ${inst.head}`)
-      if (seen.has(inst.head)) throw new DeclError(`${where} is written twice`)
-      seen.add(inst.head)
-      const n = arityOfType(inst.head, types) - c.arity
-      if (n < 0) throw new DeclError(`${where}: ${c.name} needs a type constructor taking ${c.arity} argument${c.arity > 1 ? 's' : ''}`)
-      const vars = HEAD_VARS.slice(0, n)
-      const context = (inst.context || []).map((q) => {
-        if (!vars.includes(q.var)) throw new DeclError(`${where}: the context mentions "${q.var}", which isn't one of ${vars.join(', ') || '(no variables)'}`)
-        if (!isClass(q.cls) && !byName.has(q.cls)) throw new DeclError(`${where}: no class named ${q.cls}`)
-        return pred(q.cls, tvar(q.var))
-      })
-      return { key: `${c.name}@${inst.head}`, cls: c.name, headName: inst.head, vars, head: vars.reduce((acc, v) => tapp(acc, tvar(v)), tcon(inst.head)), context, methods: { ...(inst.methods || {}) }, contextSource: inst.context || [] }
-    })
+    c.instances = c.instances.map((inst) => resolveInstance(c.name, c.arity, inst, types, seen, (q) => isClass(q) || byName.has(q)))
   }
   return resolved
 }
 
+// One instance, checked and resolved: `{ key, cls, headName, vars, head,
+// context, methods }` — its head the type constructor applied to as many
+// variables (a, b, …) as the class leaves it (`Maybe a`, or `Maybe` for a
+// constructor class).
+function resolveInstance(cls, arity, inst, types, seen, knownClass) {
+  const where = `instance ${cls} ${showHead(inst.head)}`
+  if (!HEAD_NAMES.includes(inst.head) && !types[inst.head]) throw new DeclError(`${where}: no type named ${inst.head}`)
+  if (seen.has(inst.head)) throw new DeclError(`${where} is written twice`)
+  seen.add(inst.head)
+  const n = arityOfType(inst.head, types) - arity
+  if (n < 0) throw new DeclError(`${where}: ${cls} needs a type constructor taking ${arity} argument${arity > 1 ? 's' : ''}`)
+  const vars = HEAD_VARS.slice(0, n)
+  const context = (inst.context || []).map((q) => {
+    if (!vars.includes(q.var)) throw new DeclError(`${where}: the context mentions "${q.var}", which isn't one of ${vars.join(', ') || '(no variables)'}`)
+    if (!knownClass(q.cls)) throw new DeclError(`${where}: no class named ${q.cls}`)
+    return pred(q.cls, tvar(q.var))
+  })
+  return { key: `${cls}@${inst.head}`, cls, headName: inst.head, vars, head: vars.reduce((acc, v) => tapp(acc, tvar(v)), tcon(inst.head)), context, methods: { ...(inst.methods || {}) }, contextSource: inst.context || [] }
+}
+
 /**
- * Check and resolve `classes` against `types` (see resolveClasses), with
- * every instance judged in the full environment. Leaves the class
- * environment as it was; install the result with `installClasses`.
+ * Check and resolve the hand-written instances of builtin classes,
+ * `instances` = `{ [cls]: [{ head, context, methods }] }` (the project's).
+ * `knownClass(name)` says whether a context may ask for a class.
  */
-export function declareClasses(classes, types, functionLabels = []) {
+export function resolveWritten(instances, types, knownClass = isClass) {
+  return Object.entries(instances).flatMap(([cls, list]) => {
+    if (!BUILTIN_CLASSES[cls]) throw new DeclError(`${cls} isn't a builtin class — a class you declare keeps its instances itself`)
+    const seen = new Set()
+    return (list || []).map((inst) => {
+      const r = resolveInstance(cls, classArity(cls), inst, types, seen, knownClass)
+      for (const m of Object.keys(r.methods)) if (r.methods[m] && !CLASS_METHODS[cls].includes(m)) throw new DeclError(`instance ${cls} ${showHead(r.headName)}: ${cls} has no method ${m}`)
+      return r
+    })
+  })
+}
+
+/** The class-environment entries of the hand-written builtin-class instances — what deriving may rely on (typeDecls.js' `assumed`). */
+export function writtenEnvironment(instances, types) {
+  try {
+    return classEnvironment([], resolveWritten(instances, types)).instances
+  } catch (e) {
+    if (e instanceof DeclError) return []
+    throw e
+  }
+}
+
+/**
+ * Check and resolve `classes` against `types` (see resolveClasses), and the
+ * hand-written builtin-class `instances` (see resolveWritten), with every
+ * instance judged in the full environment. Leaves the class environment as
+ * it was. The result is the resolved classes, with the resolved written
+ * instances as its `written` property (classEnvironment installs both).
+ */
+export function declareClasses(classes, types, functionLabels = [], instances = {}) {
   // While resolving, every declared class exists (methods may mention each other's classes).
   const provisional = Object.values(classes).map((c) => ({ name: c.name, supers: c.supers || [], arity: 0 }))
   return withDynamicClasses(provisional, () => {
     const resolved = resolveClasses(classes, types, functionLabels)
+    const written = resolveWritten(instances, types, (q) => isClass(q) || resolved.some((c) => c.name === q))
+    // A written instance may not overlap one that's derived or builtin.
+    withDynamicInstances(derivedInstances(types), () => {
+      for (const w of written) {
+        const other = findInstance(pred(w.cls, w.head))
+        if (other) throw new DeclError(`instance ${w.cls} ${showHead(w.headName)}: ${showHead(w.headName)} already has ${w.cls}${other.inst.how === 'prim' ? ' (builtin)' : ' (derived — drop it from the deriving clause first)'}`)
+      }
+    })
+    resolved.written = written
     const env = classEnvironment(resolved)
-    withDynamicClasses(env.classes, () => withDynamicInstances([...derivedInstances(types), ...env.instances], () => checkInstances(resolved)))
+    const byClass = Object.entries(Object.groupBy(written, (w) => w.cls)).map(([name, list]) => ({ name, instances: list }))
+    withDynamicClasses(env.classes, () => withDynamicInstances([...derivedInstances(types), ...env.instances], () => checkInstances([...resolved, ...byClass])))
     return resolved
   })
 }
 
-/** The class-environment entries for resolved classes: `{ classes, instances }` (instance heads use `$` pattern variables). */
-export function classEnvironment(resolved) {
+/**
+ * The class-environment entries for resolved classes and the written
+ * instances (`written`, by default the resolved classes' own): `{ classes,
+ * instances }` (instance heads use `$` pattern variables).
+ */
+export function classEnvironment(resolved, written = resolved.written || []) {
   const pattern = (t) => (t.kind === 'var' ? tvar(`$${t.id}`) : t.kind === 'app' ? tapp(pattern(t.fn), pattern(t.arg)) : t)
+  const entry = (i) => ({ cls: i.cls, head: pattern(i.head), context: i.context.map((q) => pred(q.cls, pattern(q.type))), key: i.key, how: 'written', methods: i.methods })
   return {
     classes: resolved.map((c) => ({ name: c.name, supers: c.supers, arity: c.arity })),
-    instances: resolved.flatMap((c) => c.instances.map((i) => ({ cls: c.name, head: pattern(i.head), context: i.context.map((q) => pred(q.cls, pattern(q.type))), key: i.key }))),
+    instances: [...resolved.flatMap((c) => c.instances.map(entry)), ...written.map(entry)],
   }
 }
 
@@ -161,8 +220,6 @@ export function classMethodDefinitions(resolved) {
   }))
 }
 
-// Rigid (skolem) versions of type variables, for checking against a required type.
-const rigid = (t) => (t.kind === 'var' ? tcon(`'${t.id.replace('m:', '')}`) : t.kind === 'fun' ? tfun(rigid(t.from), rigid(t.to)) : t.kind === 'app' ? tapp(rigid(t.fn), rigid(t.arg)) : t)
 
 /**
  * What an implementation of method `m` must be at instance `i`: the
@@ -183,54 +240,43 @@ export function instanceMethodProblem(have, c, m, i) {
 }
 
 /**
- * The runtime side of every instance, for the evaluator: per instance key,
- * the function implementing each method (the instance's own, else the
- * class default), the dictionaries that function needs — as evidence
- * relative to the instance (`{ self }`, `{ ctx: k }` its context's k-th
- * dictionary, `{ extra: j }` the call's j-th extra dictionary) — and how to
- * get each user superclass's dictionary. `schemeOf(fnId)` gives a custom
- * function's generalized scheme. Problems become `{ error }` entries,
- * reported when (and if) that method runs.
+ * What runtimeInstances (instanceTable.js) needs to know of hand-written
+ * instances — the resolved classes' and the builtin-class instances written
+ * for declared types (`types`): per instance key, its method functions and
+ * each method's type (`{ type, classVar, extras, default }`).
  */
-export function instanceEvidence(resolved, schemeOf) {
+export function writtenInstanceInfo(resolved) {
   const out = {}
   for (const c of resolved) {
     for (const i of c.instances) {
-      const userCtx = i.context.filter((p) => isUserClass(p.cls))
-      const ctxGiven = userCtx.map((p, k) => ({ pred: pred(p.cls, rigid(p.type)), expr: { ctx: k } }))
-      const entry = { cls: c.name, methods: {}, implDicts: {}, supers: {} }
-      for (const m of c.methods) {
-        const fnId = i.methods[m.name] || m.default
-        entry.methods[m.name] = fnId || null
-        if (!fnId) continue
-        const have = schemeOf(fnId)
-        if (!have) { entry.implDicts[m.name] = { error: `${m.name} for ${c.name} ${showHead(i.headName)}: its function is gone` }; continue }
-        const want = instanceMethodType(c, m, i)
-        const extrasUser = want.extras.filter((p) => isUserClass(p.cls))
-        const given = [{ pred: pred(c.name, rigid(i.head)), expr: { self: true } }, ...ctxGiven, ...extrasUser.map((p, j) => ({ pred: pred(p.cls, rigid(p.type)), expr: { extra: j } }))]
-        const inst = instantiate(have)
-        let s
-        try {
-          s = unify(inst.type, rigid(want.type))
-        } catch {
-          entry.implDicts[m.name] = { error: `${m.name} for ${c.name} ${showHead(i.headName)}: its function has the wrong type` }
-          continue
-        }
-        const dicts = []
-        for (const p of inst.preds.filter((q) => isUserClass(q.cls))) {
-          const e = evidence(given, pred(p.cls, applySubst(s, p.type)))
-          if (!e) { dicts.length = 0; entry.implDicts[m.name] = { error: `${m.name} for ${c.name} ${showHead(i.headName)} needs ${p.cls} ${showType(applySubst(s, p.type)).replaceAll("'", '')}, which nothing provides` }; break }
-          dicts.push(e)
-        }
-        if (!entry.implDicts[m.name]) entry.implDicts[m.name] = dicts
-      }
-      for (const sup of classClosure(c.name).filter((s) => s !== c.name && isUserClass(s))) {
-        entry.supers[sup] = evidence(ctxGiven, pred(sup, rigid(i.head))) || { error: `instance ${c.name} ${showHead(i.headName)} has no ${sup}` }
-      }
-      out[i.key] = entry
+      out[i.key] = { methods: i.methods, methodTypes: Object.fromEntries(c.methods.map((m) => [m.name, { type: m.type, classVar: c.param, extras: m.extras, default: m.default }])) }
     }
   }
+  for (const w of resolved.written || []) {
+    out[w.key] = { methods: w.methods, methodTypes: Object.fromEntries(CLASS_METHODS[w.cls].map((m) => [m, builtinMethodType(w.cls, m)])) }
+  }
   return out
+}
+
+/** Why function scheme `have` can't implement builtin method `m` of written instance `w` ('' if it can). */
+export function writtenMethodProblem(have, w, m) {
+  const want = methodTypeAtHead(builtinMethodType(w.cls, m), w.head)
+  return schemeProblem(have, want.type, [...w.context, ...want.extras], [pred(w.cls, w.head)]) // (the instance itself, for recursion)
+}
+
+/** Why written instance `w`'s methods aren't a complete definition of its class (classMethods.js' MINIMAL), or ''. */
+export function writtenMinimalProblem(w) {
+  return minimalProblem(w.cls, Object.keys(w.methods).filter((m) => w.methods[m]))
+}
+
+/**
+ * The runtime side of every instance in the class environment (call with
+ * it set), for the evaluator — see instanceTable.js. `schemeOf(fnId)` gives
+ * a custom function's generalized scheme. Problems become `{ error }`
+ * entries, reported when (and if) that method runs.
+ */
+export function instanceEvidence(resolved, schemeOf) {
+  return runtimeInstances({ written: writtenInstanceInfo(resolved), schemeOf })
 }
 
 /** `classes` with every mention of type `from` (method signatures, instance heads) renamed to `to`. */
@@ -241,6 +287,11 @@ export function renameTypeInClasses(classes, from, to) {
     methods: c.methods.map((m) => ({ ...m, sig: m.sig.replace(word, to) })),
     instances: (c.instances || []).map((i) => (i.head === from ? { ...i, head: to } : i)),
   }]))
+}
+
+/** The written builtin-class `instances` with every instance head `from` renamed to `to`. */
+export function renameTypeInInstances(instances, from, to) {
+  return Object.fromEntries(Object.entries(instances).map(([cls, list]) => [cls, list.map((i) => (i.head === from ? { ...i, head: to } : i))]))
 }
 
 /** Which classes mention type `name` (in a signature or as an instance head). */

@@ -2,18 +2,23 @@
 // owns the live `nodes`/`functionBodies` objects and decides when to call in.
 //
 // A snapshot is the JSON text of `{ version, nodes, functionBodies, types,
-// classes, entry, outputId }` (`types`: user type declarations, see
-// typeDecls.js — added in version 2; `classes`: user class declarations,
-// see classDecls.js — added in version 3; older files load with none). Comparing snapshots as strings is what lets the history skip
-// no-op checkpoints (pan/zoom live in main.js's view state, not here).
+// classes, instances, entry, outputId }` (`types`: user type declarations,
+// see typeDecls.js — added in version 2; `classes`: user class
+// declarations, see classDecls.js — added in version 3; `instances`: the
+// instances of builtin classes written by hand, per class, in the same
+// shape as a user class's `{ head, context, methods }` — added in version 4,
+// when they moved out of the type declarations; older files load with none).
+// Comparing snapshots as strings is what lets the history skip no-op
+// checkpoints (pan/zoom live in main.js's view state, not here).
+import { classArity } from './prelude.js'
 
 export const STORAGE_KEY = 'hs-simulate:project'
-const VERSION = 3
+const VERSION = 4
 
 export class ProjectError extends Error {}
 
-export function serializeProject({ nodes, functionBodies, types = {}, classes = {}, entry = null, outputId = 0 }) {
-  return JSON.stringify({ version: VERSION, nodes, functionBodies, types, classes, entry, outputId })
+export function serializeProject({ nodes, functionBodies, types = {}, classes = {}, instances = {}, entry = null, outputId = 0 }) {
+  return JSON.stringify({ version: VERSION, nodes, functionBodies, types, classes, instances, entry, outputId })
 }
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -26,7 +31,8 @@ export function parseProject(text) {
   } catch {
     throw new ProjectError('Not a valid JSON file')
   }
-  if (!isRecord(data) || ![1, 2, VERSION].includes(data.version)) throw new ProjectError('Not an hs/simulate project (or an unsupported version)')
+  if (!isRecord(data) || ![1, 2, 3, VERSION].includes(data.version)) throw new ProjectError('Not an hs/simulate project (or an unsupported version)')
+  if (data.instances !== undefined && !isRecord(data.instances)) throw new ProjectError('Project has malformed instances')
   if (data.types !== undefined && !isRecord(data.types)) throw new ProjectError('Project has malformed type declarations')
   if (data.classes !== undefined && !isRecord(data.classes)) throw new ProjectError('Project has malformed class declarations')
   if (!isRecord(data.nodes) || !isRecord(data.functionBodies)) throw new ProjectError('Project is missing its nodes or function bodies')
@@ -41,6 +47,7 @@ export function parseProject(text) {
     functionBodies: data.functionBodies,
     types: data.types || {},
     classes: data.classes || {},
+    instances: data.instances || {},
     entry: typeof data.entry === 'string' && data.nodes[data.entry] ? data.entry : null,
     outputId: Number.isInteger(data.outputId) ? data.outputId : 0,
   }
@@ -71,7 +78,31 @@ export function upgradeProject(project) {
     for (const node of Object.values(graph)) if (typeof node?.mountedTo === 'string' && node.mountedTo.endsWith(':source')) node.mountedTo = null
   }
   for (const body of Object.values(project.functionBodies)) if (isRecord(body.output)) body.output.id = 'output'
+  moveWrittenInstances(project)
   return project
+}
+
+// Hand-written instances of builtin classes were kept on the type they're
+// for (`types.Wallet.instances: [{ cls, methods }]`), with the context
+// deriving would infer (the class asked of each parameter the fields use).
+// They're instances like any other now, kept per class with their context
+// written out: `instances.Show: [{ head: 'Wallet', context, methods }]`.
+const HEAD_VARS = ['a', 'b', 'c', 'd']
+function moveWrittenInstances(project) {
+  project.instances ??= {}
+  for (const d of Object.values(project.types || {})) {
+    const written = d.instances || []
+    delete d.instances
+    if (!written.length) continue
+    const used = new Set()
+    const walk = (t) => { if (!t) return; if (t.kind === 'var') used.add(t.id); walk(t.from); walk(t.to); walk(t.fn); walk(t.arg) }
+    for (const c of d.constructors || []) for (const f of c.fields || []) walk(f.type)
+    const params = d.params || []
+    for (const w of written) {
+      const context = classArity(w.cls) ? [] : params.map((p, i) => (used.has(p) ? { cls: w.cls, var: HEAD_VARS[i] } : null)).filter(Boolean)
+      ;(project.instances[w.cls] ??= []).push({ head: d.name, context, methods: { ...(w.methods || {}) } })
+    }
+  }
 }
 
 // Fields of a builtin definition owned by the code, never by a saved file —

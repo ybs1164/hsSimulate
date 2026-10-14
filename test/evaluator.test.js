@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvaluator, EvalError } from '../src/evaluator.js'
+import { EvalError, createEvaluator as createPlainEvaluator } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator, elaborate } from '../src/typedEvaluator.js'
+import { pred, scheme, tfun, tvar } from '../src/typeSystem.js'
 
 const BUILTINS = ['succ', 'zero', 'identity', 'apply', 'compose', 'isZero', 'ifThenElse', 'plus', 'negate', 'minus', 'times', 'divide', 'sqrt', 'round', 'isNaN', 'geq', 'eq', 'select', 'addZero', 'mulOne']
 const registry = () => ({ nodes: Object.fromEntries(BUILTINS.map((b) => [b, { id: b, type: 'function', builtin: b, label: b, params: [], mounted: [] }])), functionBodies: {} })
@@ -35,8 +37,13 @@ test('open slots make a closure that can be stored and applied later', () => {
   const ev = createEvaluator(registry())
   const g = graphOf(call('p', 'plus', ['2', '']))
   const closure = ev.run(g, 'p')
-  assert.deepEqual(closure, { kind: 'closure', callee: 'plus', args: [2, null] })
-  const g2 = graphOf({ id: 'c', type: 'curried', label: 'plus · 1/2', closure: JSON.parse(JSON.stringify(closure)) }, call('ap', 'apply', [{ node: 'c' }, '3']))
+  // `(2 +) :: Semiring a => a -> a`: the closure waits for a's dictionary (and so does its literal).
+  assert.equal(closure.callee, 'plus')
+  assert.equal(closure.args[1], null)
+  assert.deepEqual(closure.dicts[0], { kind: 'dict', param: 0, path: ['AddCommutativeMonoid', 'AddMonoid', 'AddSemigroup'] })
+  const a = tvar('a')
+  const stored = { id: 'c', type: 'curried', label: 'plus · 1/2', closure: JSON.parse(JSON.stringify(closure)), resolvedScheme: scheme(['a'], [pred('Semiring', a)], tfun(a, a)) }
+  const g2 = graphOf(stored, call('ap', 'apply', [{ node: 'c' }, '3']))
   assert.equal(ev.run(g2, 'ap'), 5)
 })
 
@@ -89,7 +96,7 @@ test('runtime errors are EvalErrors with a readable message', () => {
   reg.nodes.empty = { id: 'empty', type: 'function', label: 'empty', params: [], mounted: [], custom: true }
   reg.functionBodies.empty = { output: { id: 'empty-output', type: 'output', label: 'Output' } }
   const ev = createEvaluator(reg)
-  assert.throws(() => ev.run(graphOf(num('five', '5'), call('ap', 'apply', [{ node: 'five' }, '1'])), 'ap'), /not a function/)
+  assert.throws(() => ev.run(graphOf(num('five', '5'), call('ap', 'apply', [{ node: 'five' }, '1'])), 'ap'), /No instance for Semiring/) // a number as a function: no Semiring (a → b)
   assert.throws(() => ev.run(graphOf(call('e', 'empty', [])), 'e'), /Output is not connected/)
   assert.throws(() => ev.run(graphOf({ id: 'p', type: 'parameter', label: 'x' }), 'p'), /only has a value inside a call/)
 })
@@ -118,6 +125,8 @@ test('a reference shares its target\'s thunk instead of re-evaluating it', () =>
   reg.nodes.tick = { id: 'tick', type: 'function', label: 'tick', params: [], mounted: [], custom: true }
   reg.functionBodies.tick = { output: { id: 'o', type: 'output', label: 'Output', source: 'v' }, v: { id: 'v', type: 'number', label: 'v', get value() { calls++; return '1' } } }
   const g = graphOf(call('t', 'tick', []), { id: 'r', type: 'ref', target: 't', label: '↪ t' }, call('sum', 'plus', [{ node: 't' }, { node: 'r' }]))
-  assert.equal(createEvaluator(reg).run(g, 'sum'), 2)
+  const elaboration = elaborate(reg, g) // (typing reads the value too: count only the run)
+  calls = 0
+  assert.equal(createPlainEvaluator({ ...reg, elaboration: () => elaboration }).run(g, 'sum'), 2)
   assert.equal(calls, 1)
 })

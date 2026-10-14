@@ -22,17 +22,16 @@
 //     get recursive fields already folded (CLAUDE.md: the type system
 //     follows inductive structure)
 //
-// and registers the instances its `deriving` clauses ask for, plus the ones
-// written by hand (`instance Show Wallet where show = showWallet`), whose
-// methods are custom functions (see classMethods.js).
+// and registers the instances its `deriving` clauses ask for. Instances
+// written by hand (`instance Show Wallet where show = showWallet`) are kept
+// with their class, like any instance (classDecls.js).
 //
 // A declaration may take type parameters (`data Pair a = …`), each of kind
 // `*`. Its derived functions are then polymorphic in them, and its instances
 // carry a context, as GHC infers for stock deriving: `deriving Eq` on
 // `Pair a` is `instance Eq a => Eq (Pair a)`.
-import { CLASS_METHODS } from './classMethods.js'
 import { classArity, classClosure, entails, isClass, productLiftable, withDynamicInstances } from './prelude.js'
-import { applySubst, constructorArity, instantiate, pred, scheme, showQual, showType, tapp, tcon, tfun, tlist, ttuple, tvar, unify } from './typeSystem.js'
+import { STAR, applySubst, constructorArity, constructorKind, instantiate, wellKinded, withUserKinds, karrow, kindOfArity, pred, scheme, showQual, showType, tapp, tcon, tfun, tlist, ttuple, tvar, unify } from './typeSystem.js'
 
 export class DeclError extends Error {}
 
@@ -218,7 +217,7 @@ export function parseSignature(text, types = {}) {
   const walk = (t) => { if (t.var) vars.add(t.var); (t.args || []).forEach(walk); if (t.list) walk(t.list); if (t.fun) t.fun.forEach(walk); if (t.tuple) t.tuple.forEach(walk) }
   walk(syntax)
   const known = new Map([...builtinTypeNames.map((n) => [n, constructorArity[n] || 0]), ...Object.values(types).map((d) => [d.name, (d.params || []).length])])
-  const type = resolveType(syntax, known, [...vars], { applyVars: true })
+  const type = wholeType(resolveType(syntax, known, [...vars], { applyVars: true }), typeText)
   const preds = parseContext(ctxText).map((c) => {
     if (!vars.has(c.var)) throw new DeclError(`The constraint ${c.cls} ${c.var} is about a type variable the type doesn't mention`)
     if (!isClass(c.cls)) throw new DeclError(`No class named ${c.cls}`)
@@ -237,7 +236,13 @@ export function parseTypeText(text, known) {
   const vars = new Set()
   const walk = (t) => { if (t.var) vars.add(t.var); if (t.varApp) vars.add(t.varApp); (t.args || []).forEach(walk); if (t.list) walk(t.list); if (t.fun) t.fun.forEach(walk); if (t.tuple) t.tuple.forEach(walk) }
   walk(syntax)
-  return resolveType(syntax, known, [...vars], { applyVars: true })
+  return wholeType(resolveType(syntax, known, [...vars], { applyVars: true }), text)
+}
+
+// `type`, checked to be a type of values (kind `*`): `Maybe` alone isn't one.
+function wholeType(type, text) {
+  if (!wellKinded(type)) throw new DeclError(`"${text.trim()}" isn't a type of values — some type constructor in it has the wrong number of type arguments`)
+  return type
 }
 
 /** Parse a context `C a, D b` (parentheses optional): `[{ cls, var }]`. */
@@ -255,14 +260,15 @@ export function parseDecls(text) {
 // ---- Resolution and checking -------------------------------------------------
 
 /** Built-in type names a field may mention (beyond the declared ones). */
-export const builtinTypeNames = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational', 'Bool', 'Char', 'String', 'StdGen', 'Picture', 'Color', ...Object.keys(constructorArity)]
+export const builtinTypeNames = ['Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational', 'Bool', 'Ordering', 'Char', 'String', 'StdGen', 'Picture', 'Color', ...Object.keys(constructorArity)]
 
 // `known`: type name -> how many arguments it takes; `params`: the type
 // parameters in scope (the declaration's own).
 function resolveType(t, known, params = [], opts = {}) {
   const go = (u) => resolveType(u, known, params, opts)
   if (t.varApp) {
-    if (!opts.applyVars) throw new DeclError(`A type parameter can't be applied to arguments ("${t.varApp} …") — parameters stand for plain types`)
+    // `f a`: a parameter standing for a type constructor (its kind is inferred: inferKinds).
+    if (!opts.applyVars && !params.includes(t.varApp)) throw new DeclError(`Type variable "${t.varApp}" isn't a parameter of this type — declare it after the type name (data T ${t.varApp} = …)`)
     return t.args.reduce((acc, arg) => tapp(acc, go(arg)), tvar(t.varApp))
   }
   if (t.var) {
@@ -277,8 +283,66 @@ function resolveType(t, known, params = [], opts = {}) {
   if (!known.has(t.con)) throw new DeclError(`Unknown type "${t.con}"`)
   const resolved = t.args.reduce((acc, arg) => tapp(acc, go(arg)), tcon(t.con))
   const arity = known.get(t.con)
-  if (t.args.length !== arity) throw new DeclError(`"${showType(resolved, (id) => id)}" has the wrong number of type arguments (${t.con} takes ${arity})`)
+  // Fewer arguments is a type constructor (`Fix Maybe`): whether it fits is the kinds' business.
+  if (t.args.length > arity) throw new DeclError(`"${showType(resolved, (id) => id)}" has too many type arguments (${t.con} takes ${arity})`)
   return resolved
+}
+
+/**
+ * The kinds of the declared types, inferred from their fields as GHC does
+ * (Haskell Report §4.6): each parameter starts with an unknown kind, every
+ * field must be a type of values (`*`), and an application `f x` needs `f`
+ * to take `x`'s kind — `data Fix f = Fix (f (Fix f))` gives `f :: * -> *`,
+ * so `Fix :: (* -> *) -> *`. A kind nothing pins down defaults to `*`.
+ * Returns `{ [type]: { kind, params: [kind…] } }`; throws DeclError on a
+ * kind mismatch.
+ */
+export function inferKinds(types) {
+  let next = 0
+  const bound = new Map()
+  const fresh = () => ({ kv: next++ })
+  const isVar = (k) => k !== STAR && k.kv !== undefined
+  const resolve = (k) => { while (isVar(k) && bound.has(k.kv)) k = bound.get(k.kv); return k }
+  const occurs = (v, k) => { k = resolve(k); return isVar(k) ? k.kv === v : k !== STAR && (occurs(v, k.from) || occurs(v, k.to)) }
+  const unifyK = (a, b) => {
+    a = resolve(a)
+    b = resolve(b)
+    if (isVar(a) && isVar(b) && a.kv === b.kv) return true
+    if (isVar(a)) return !occurs(a.kv, b) && !!bound.set(a.kv, b)
+    if (isVar(b)) return unifyK(b, a)
+    if (a === STAR || b === STAR) return a === b
+    return unifyK(a.from, b.from) && unifyK(a.to, b.to)
+  }
+  const params = Object.fromEntries(Object.values(types).map((d) => [d.name, (d.params || []).map(fresh)]))
+  const conKind = (name) => (params[name] ? params[name].reduceRight((acc, k) => karrow(k, acc), STAR) : kindOfArity(constructorArity[name] || 0))
+  for (const d of Object.values(types)) {
+    const infer = (t) => {
+      if (t.kind === 'var') return params[d.name][(d.params || []).indexOf(t.id)] ?? fresh()
+      if (t.kind === 'con') return conKind(t.name)
+      if (t.kind === 'fun') return [t.from, t.to].every((s) => unifyK(infer(s), STAR)) ? STAR : null
+      const r = fresh()
+      const fnK = infer(t.fn)
+      const argK = infer(t.arg)
+      return fnK && argK && unifyK(fnK, karrow(argK, r)) ? r : null
+    }
+    for (const c of d.constructors) {
+      for (const fl of c.fields) {
+        const k = infer(fl.type)
+        if (!k || !unifyK(k, STAR)) throw new DeclError(`${d.name}: the field ${fl.name ? `"${fl.name}" ` : ''}of type ${showType(fl.type, (id) => id)} doesn't fit together — some part of it is applied to the wrong number or kind of arguments`)
+      }
+    }
+  }
+  const zonk = (k) => { k = resolve(k); return isVar(k) ? STAR : k === STAR ? STAR : karrow(zonk(k.from), zonk(k.to)) }
+  return Object.fromEntries(Object.values(types).map((d) => [d.name, { kind: zonk(conKind(d.name)), params: params[d.name].map(zonk) }]))
+}
+
+/** Each declared type's kind (see inferKinds); `*`-kinded parameters for declarations that don't check. */
+export function typeKinds(types) {
+  try {
+    return Object.fromEntries(Object.entries(inferKinds(types)).map(([name, k]) => [name, k.kind]))
+  } catch {
+    return Object.fromEntries(Object.values(types).map((d) => [d.name, kindOfArity((d.params || []).length)]))
+  }
 }
 
 /** How many type arguments each declared type takes. */
@@ -303,7 +367,7 @@ const lowerFirst = (s) => s[0].toLowerCase() + s.slice(1)
  * types, duplicate names, clashes with existing function names, and
  * underivable `deriving` clauses.
  */
-export function declareTypes(types, text, { replacing = null, functionLabels = [], instances = null, builtin = false } = {}) {
+export function declareTypes(types, text, { replacing = null, functionLabels = [], assumed = () => [], builtin = false } = {}) {
   const parsed = parseDecls(text)
   const next = { ...types }
   if (replacing) delete next[replacing]
@@ -311,10 +375,7 @@ export function declareTypes(types, text, { replacing = null, functionLabels = [
     if (next[d.name]) throw new DeclError(`Type "${d.name}" is already declared`)
     if (!builtin && (builtinTypeNames.includes(d.name) || d.name === '()')) throw new DeclError(`"${d.name}" is a built-in type`) // (the Prelude declares its own: library.js)
     if (d.params.includes('r')) throw new DeclError(`Type parameter "r" is kept for the result of case${d.name} — use another letter`)
-    // Hand-written instances aren't part of the `data` syntax: they come
-    // from the editor's draft, or stay with the declaration being replaced.
-    const written = instances ?? (replacing && parsed.length === 1 ? types[replacing]?.instances : null) ?? []
-    next[d.name] = { name: d.name, keyword: d.keyword, params: d.params, constructors: d.constructors, deriving: d.deriving, instances: structuredClone(written), source: parsed.length === 1 ? text.trim() : null }
+    next[d.name] = { name: d.name, keyword: d.keyword, params: d.params, constructors: d.constructors, deriving: d.deriving, source: parsed.length === 1 ? text.trim() : null }
   }
   // Resolve field types against every declared name (so declarations may refer to each other).
   const known = new Map([...builtinTypeNames.map((n) => [n, constructorArity[n] || 0]), ...Object.values(next).map((d) => [d.name, (d.params || []).length])])
@@ -325,7 +386,7 @@ export function declareTypes(types, text, { replacing = null, functionLabels = [
       constructors: d.constructors.map((c) => ({ name: c.name, record: c.record, fields: c.fields.map((f) => ({ name: f.name ?? null, type: resolveType(f.type, known, d.params) })) })),
     }
   }
-  checkTypes(next, functionLabels)
+  checkTypes(next, functionLabels, assumed)
   return next
 }
 
@@ -380,11 +441,6 @@ function requestedInstances(types) {
   return Object.values(types).flatMap((d) => d.deriving.flatMap((c) => c.classes.map((cls) => ({ cls, type: d.name, strategy: c.strategy, via: c.via }))))
 }
 
-/** The `{ cls, type, methods }` instances written by hand (unchecked). */
-function writtenInstances(types) {
-  return Object.values(types).flatMap((d) => (d.instances || []).map((i) => ({ cls: i.cls, type: d.name, methods: i.methods || {}, written: true })))
-}
-
 /** Parameters of `d` that some field mentions (a phantom parameter needs nothing). */
 function usedParams(d) {
   const used = new Set()
@@ -407,7 +463,16 @@ function instanceShape(d, cls, prefix = '') {
   const params = d.params || []
   const k = classArity(cls)
   if (k) return { head: params.slice(0, params.length - k).reduce((acc, p) => tapp(acc, tvar(prefix + p)), tcon(d.name)), context: [] }
-  return { head: declType(d, prefix), context: usedParams(d).map((p) => pred(cls, tvar(prefix + p))) }
+  // Only a parameter that is a plain type can be asked for the class (`Show a`, never `Show f` of an `f :: * -> *`).
+  const plain = new Set(params.filter((_, i) => paramKind(d, i) === STAR))
+  return { head: declType(d, prefix), context: usedParams(d).filter((p) => plain.has(p)).map((p) => pred(cls, tvar(prefix + p))) }
+}
+
+/** The kind of declaration `d`'s i-th parameter, from its constructor's kind (see inferKinds). */
+export function paramKind(d, i) {
+  let k = constructorKind(d.name)
+  for (let j = 0; j < i && k !== STAR; j++) k = k.to
+  return k === STAR ? STAR : k.from
 }
 
 function checkStrategy(r, d) {
@@ -433,9 +498,15 @@ function checkStrategy(r, d) {
  * Check a whole set of declarations. Instances are judged together (a
  * recursive type's `Eq` may rely on its own `Eq`), Haskell-style: an
  * instance needs every superclass instance, and every field must have the
- * class too.
+ * class too. `assumed(types)` gives the instances written by hand (class
+ * environment entries), which deriving may rely on.
  */
-export function checkTypes(types, functionLabels = []) {
+export function checkTypes(types, functionLabels = [], assumed = () => []) {
+  const kinds = Object.fromEntries(Object.entries(inferKinds(types)).map(([name, k]) => [name, k.kind])) // throws on a kind mismatch
+  return withUserKinds(kinds, () => checkKinded(types, functionLabels, assumed))
+}
+
+function checkKinded(types, functionLabels, assumed) {
   for (const d of Object.values(types)) {
     for (const p of d.params || []) if (d.constructors.some((c) => c.name === p)) throw new DeclError(`${d.name}: "${p}" is both a parameter and a constructor`)
   }
@@ -460,27 +531,22 @@ export function checkTypes(types, functionLabels = []) {
     if (!isClass(r.cls)) throw new DeclError(`deriving ${r.cls} for ${r.type}: no such class`)
     checkStrategy(r, types[r.type])
   }
-  const written = writtenInstances(types)
+  const written = assumed(types)
   const seen = new Set(requested.map((r) => `${r.cls} ${r.type}`))
   for (const w of written) {
-    const where = `instance ${w.cls} ${w.type}`
-    if (!isClass(w.cls)) throw new DeclError(`${where}: no such class`)
-    if (!CLASS_METHODS[w.cls]) throw new DeclError(`${where}: ${w.cls} can't be written by hand here (a class you declare gets its instances in the class editor)`)
-    if ((types[w.type].params || []).length < classArity(w.cls)) throw new DeclError(`${where}: ${w.cls} is for type constructors — give ${w.type} a type parameter (data ${w.type} a = …)`)
-    if (seen.has(`${w.cls} ${w.type}`)) throw new DeclError(`${where}: ${w.type} already has ${w.cls} (derived, or written twice)`)
-    seen.add(`${w.cls} ${w.type}`)
+    const type = w.head.kind === 'con' ? w.head.name : headOf(w.head)
+    if (seen.has(`${w.cls} ${type}`)) throw new DeclError(`deriving ${w.cls} for ${type}: ${type} already has a hand-written ${w.cls} instance`)
   }
   // Judge with every instance in scope (allows recursion), assuming the
   // instance's own context (`Eq a` while judging `Eq (Pair a)`).
-  const instances = derivedInstances(types)
-  for (const r of [...requested, ...written]) {
+  const instances = [...derivedInstances(types), ...written]
+  for (const r of requested) {
     const d = types[r.type]
     const { head, context } = instanceShape(d, r.cls)
-    const what = r.written ? `instance ${r.cls} ${r.type}` : `deriving ${r.cls} for ${r.type}`
+    const what = `deriving ${r.cls} for ${r.type}`
     for (const sup of classClosure(r.cls).filter((c) => c !== r.cls)) {
-      if (!entailsWith(instances, context, pred(sup, head))) throw new DeclError(`${what} needs an ${sup} instance — ${r.written ? `derive or write ${sup} too` : `add ${sup} to its deriving clause`}`)
+      if (!entailsWith(instances, context, pred(sup, head))) throw new DeclError(`${what} needs an ${sup} instance — add ${sup} to its deriving clause (or write it by hand)`)
     }
-    if (r.written) continue // a hand-written instance answers for itself (its methods are checked against their types)
     for (const c of d.constructors) {
       for (const fl of c.fields) {
         if (!entailsWith(instances, context, pred(r.cls, fl.type))) throw new DeclError(`deriving ${r.cls} for ${r.type}: field ${fl.name ? `"${fl.name}"` : `of ${c.name}`} has type ${showType(fl.type, (id) => id)}, which has no ${r.cls} instance`)
@@ -494,42 +560,19 @@ function entailsWith(instances, given, p) {
   return withDynamicInstances(instances, () => entails(given, p))
 }
 
-/** The instances a (checked) set of declarations contributes to the class environment, derived and written. */
+/** The instances a (checked) set of declarations derives, as class environment entries. */
 export function derivedInstances(types) {
-  return [...requestedInstances(types), ...writtenInstances(types)].map((r) => ({ cls: r.cls, ...instanceShape(types[r.type], r.cls, '$') }))
+  return requestedInstances(types).map((r) => ({ cls: r.cls, ...instanceShape(types[r.type], r.cls, '$'), ...instanceImpl(types[r.type], r) }))
 }
 
-/**
- * What a hand-written method must be: the method's type at this instance —
- * `show :: Show a ⇒ a → String` at `Pair b` is `Pair b → String`, given
- * `Show b`. Returns `{ type, given }`; the type's variables (the
- * declaration's parameters and the method's own others) are to be held
- * rigid when an implementation is checked against it.
- */
-export function methodTypeAt(d, cls, methodScheme) {
-  const { head, context } = instanceShape(d, cls, '')
-  const classVar = methodScheme.preds.find((p) => p.cls === cls)?.type.id
-  const rename = (t) => {
-    if (t.kind === 'var') return t.id === classVar ? head : tvar(`m:${t.id}`)
-    if (t.kind === 'fun') return tfun(rename(t.from), rename(t.to))
-    if (t.kind === 'app') return tapp(rename(t.fn), rename(t.arg))
-    return t
-  }
-  const others = methodScheme.preds.filter((p) => p.cls !== cls).map((p) => pred(p.cls, rename(p.type)))
-  return { type: rename(methodScheme.type), given: [...context, ...others] }
-}
+const headOf = (t) => (t.kind === 'app' ? headOf(t.fn) : t.name)
 
-/**
- * Why a function of type `have` (a scheme) can't implement a method (of
- * scheme `methodScheme`) of `instance cls d`, or '' if it can: it must be at
- * least as general as the method's type at the instance (`showMoney ::
- * Money → String`; `a → String` would do too), whose variables are held
- * rigid, and any constraint it leaves must follow from the instance's
- * context. Call with the instance in scope (it may be used recursively).
- */
-export function methodTypeProblem(have, d, cls, methodScheme) {
-  const { type: want, given } = methodTypeAt(d, cls, methodScheme)
-  return schemeProblem(have, want, given)
+const HOW = { stock: 'stock', anyclass: 'pointwise', via: 'pointwise', newtype: 'newtype' }
+/** How an instance's dictionary runs (see instanceTable.js): its strategy and the declaration's shape, variables `$`-prefixed like the head's. */
+function instanceImpl(d, r) {
+  const prefix = (t) => (t.kind === 'var' ? tvar(`$${t.id}`) : t.kind === 'fun' ? tfun(prefix(t.from), prefix(t.to)) : t.kind === 'app' ? tapp(prefix(t.fn), prefix(t.arg)) : t)
+  const shape = d.constructors.map((c) => ({ name: c.name, record: !!c.record, fieldNames: c.fields.map((f) => f.name || null), fields: c.fields.map((f) => prefix(f.type)) }))
+  return { how: HOW[r.strategy] || 'stock', type: d.name, shape }
 }
 
 /**
@@ -538,7 +581,7 @@ export function methodTypeProblem(have, d, cls, methodScheme) {
  * if it can: `have` must be at least as general, and every constraint it
  * leaves must follow from `given`. (Variable ids `m:x` print as `x`.)
  */
-export function schemeProblem(have, want, given) {
+export function schemeProblem(have, want, given, unshown = []) {
   const bare = (id) => id.replace('m:', '')
   const rigid = (t) => (t.kind === 'var' ? tcon(`'${bare(t.id)}`) : t.kind === 'fun' ? tfun(rigid(t.from), rigid(t.to)) : t.kind === 'app' ? tapp(rigid(t.fn), rigid(t.arg)) : t)
   const shown = showQual(given, want, bare)
@@ -549,7 +592,7 @@ export function schemeProblem(have, want, given) {
   } catch {
     return `has type ${showQual(have.preds, have.type)}, needs ${shown}`
   }
-  const assumed = given.map((p) => pred(p.cls, rigid(p.type)))
+  const assumed = [...given, ...unshown].map((p) => pred(p.cls, rigid(p.type)))
   const missing = inst.preds.map((p) => pred(p.cls, applySubst(s, p.type))).find((p) => !entails(assumed, p))
   return missing ? `needs ${missing.cls} ${showType(missing.type).replaceAll("'", '')}, which ${shown} doesn't give` : ''
 }
@@ -622,7 +665,7 @@ const asHaskell = (type) => showType(type, (id) => id).replaceAll('→', '->')
 
 /** An editable draft of declaration `d` (or of a new, empty type). */
 export function declToDraft(d) {
-  if (!d) return { name: 'NewType', keyword: 'data', params: [], constructors: [{ name: 'NewType', fields: [] }], deriving: { stock: [], anyclass: [], via: [], newtype: [] }, instances: [] }
+  if (!d) return { name: 'NewType', keyword: 'data', params: [], constructors: [{ name: 'NewType', fields: [] }], deriving: { stock: [], anyclass: [], via: [], newtype: [] } }
   const deriving = { stock: [], anyclass: [], via: [], newtype: [] }
   for (const c of d.deriving) deriving[c.strategy]?.push(...c.classes)
   return {
@@ -631,7 +674,6 @@ export function declToDraft(d) {
     params: [...(d.params || [])],
     constructors: d.constructors.map((c) => ({ name: c.name, fields: c.fields.map((f) => ({ name: f.name || '', type: asHaskell(f.type) })) })),
     deriving,
-    instances: structuredClone(d.instances || []),
   }
 }
 

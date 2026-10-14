@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
 import { BundleError, bundleModules, buildPlayerHtml, PLAYER_MODULES } from '../src/exportHtml.js'
 import { derivedDefinitions } from '../src/typeDecls.js'
+import { elaborate } from '../src/typedEvaluator.js'
 
 const sources = Object.fromEntries(PLAYER_MODULES.map((name) => [name, readFileSync(new URL(`../src/${name}.js`, import.meta.url), 'utf8')]))
 const loadBundle = (code) => new Function(`${code}\nreturn __m`)()
@@ -22,7 +23,9 @@ const data = { title: 'Click Counter', definitions, functionBodies: example.func
 test('the bundled player modules run the exported game exactly like the editor does', () => {
   const m = loadBundle(bundleModules(sources))
   assert.deepEqual(Object.keys(m), PLAYER_MODULES)
-  const ev = m.evaluator.createEvaluator({ nodes: definitions, functionBodies: example.functionBodies, types: example.types })
+  // The export carries the editor's elaboration: which dictionary every call gets.
+  const elaboration = elaborate({ nodes: definitions, functionBodies: example.functionBodies, types: example.types }, definitions)
+  const ev = m.evaluator.createEvaluator({ nodes: definitions, functionBodies: example.functionBodies, types: example.types, elaboration: () => elaboration })
   const game = m.runtime.createGame(ev, ev.run(definitions, 'main'), { exactTime: true })
   const click = game.view().children[3].msg
   for (let i = 0; i < 5; i++) game.dispatch(click)

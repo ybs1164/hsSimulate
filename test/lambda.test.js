@@ -2,7 +2,8 @@
 // Capturing an outer value = plugging it into one of the λ's slots.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { printDefinition } from '../src/haskellPrint.js'
 import { inferGraph } from '../src/inferGraph.js'
 import { showQual, tfun } from '../src/typeSystem.js'

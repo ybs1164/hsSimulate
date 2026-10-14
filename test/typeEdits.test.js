@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
-import { createEvaluator } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
 import { createGame } from '../src/runtime.js'

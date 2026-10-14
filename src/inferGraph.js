@@ -17,13 +17,20 @@
 //   (output.source chains, nested call nodes), then generalize()'d — this is
 //   the actual "let-polymorphism" step: infer the body once, close over
 //   whatever's left free, then let each call site instantiate it fresh.
-// - Elaboration (dictionary passing for user classes, see classDecls.js):
-//   every function node records the constraints its instance of the callee's
-//   scheme carries. Once a custom function is generalized, the user-class
-//   constraints it keeps (`Pretty a`) become its dictionary parameters, and
-//   each call in its body gets *evidence* for its user-class constraints —
-//   built from instances and those parameters. The top-level graph's calls
-//   are elaborated the same way, with no parameters.
+// - Elaboration (dictionary passing, as GHC compiles classes — every class,
+//   builtin or declared): every function node records the constraints its
+//   instance of the callee's scheme carries, and so does every numeric
+//   literal (`3 :: Semiring a => a` is `fromInteger` at a's dictionary) and
+//   every stored Play result. Once a custom function is generalized, the
+//   constraints it keeps (`Ring a`, `Pretty a`) become its dictionary
+//   parameters, and each call in its body gets *evidence* — built from
+//   instances and those parameters. A constraint left on a variable the
+//   function's type doesn't mention is defaulted first (`show 3` shows an
+//   Integer). The top-level graph's calls are elaborated per expression:
+//   a value is evaluated at a monotype, as GHCi does (its constrained
+//   variables default), while a partial application keeps its constraints
+//   as dictionary parameters of its own (`rootParams`), supplied when the
+//   stored closure is used again.
 // - Ambiguity (GHC's ambiguity check, Haskell Report §4.3.4): a constraint
 //   `C t` whose `t` doesn't occur in the type of the binding it arises in —
 //   a custom function's body, or a top-level expression on the canvas —
@@ -44,29 +51,13 @@
 //   must satisfy it) even where the body doesn't need it. Constraints the
 //   body needs beyond those are still inferred (an extra-constraints
 //   wildcard, `(Ord a, _) =>`).
-// - Conversions into the numeric tower (`fromInteger`, `fromIntegral`,
-//   `round` …, `fromRational`, `realToFrac`) are elaborated with their result
-//   type when it is a user type: the evaluator then builds the value by that
-//   type's fromInteger (the unique ring map from ℤ) or fromRational. At a
-//   type variable nothing is passed — the number stands for itself in
-//   whatever ring it later meets, like a literal.
-import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, unify, scheme } from './typeSystem.js'
+import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, tvar, unify, scheme } from './typeSystem.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
-import { classArity, evidence, isClass, isUserClass, literalClass, numericTypes, pickDefault, reduce } from './prelude.js'
+import { classArity, evidence, isClass, isUserClass, literalClass, pickDefault, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
 import { annotationType, typeFromText, typeText } from './typeExpr.js'
 
-const Int = tcon('Int')
 const Bool = tcon('Bool')
-
-/** Builtins whose result is `fromInteger` of an integer (or `fromRational` of a rational), at a type the caller picks. */
-const CONVERSIONS = { fromInteger: 'fromInteger', fromIntegral: 'fromInteger', truncate: 'fromInteger', floor: 'fromInteger', ceiling: 'fromInteger', round: 'fromInteger', fromRational: 'fromRational', realToFrac: 'fromRational' }
-
-/** The user type a conversion's (resolved) result type names, or null for a number type or a variable. */
-function fromIntegerTarget(t) {
-  while (t.kind === 'app') t = t.fn
-  return t.kind === 'con' && !numericTypes.includes(t.name) ? t.name : null
-}
 
 /**
  * Turn an entry into the single Type of that node *as a value*. A function
@@ -104,7 +95,7 @@ function satisfiable(preds, subst) {
  * own fit is judged, so one broken edge doesn't flag every literal.
  */
 function settleLiterals(ctx, start) {
-  for (const { graph, id, index, paramType, lit } of ctx.pendingLiterals.splice(start)) {
+  for (const { graph, id, index, paramType, lit, litId } of ctx.pendingLiterals.splice(start)) {
     const litType = lit.kind === 'number' ? freshVar() : lit.kind === 'string' ? tlist(tcon('Char')) : lit.kind === 'char' ? tcon('Char') : Bool
     const litPreds = lit.kind === 'number' ? [pred(literalClass(lit.text), litType)] : []
     let next
@@ -121,7 +112,11 @@ function settleLiterals(ctx, start) {
     }
     ctx.subst = next
     ctx.preds.push(...litPreds)
-    if (litPreds.length) ctx.origins.push({ id, preds: litPreds, label: lit.text })
+    if (litPreds.length) {
+      ctx.origins.push({ id, preds: litPreds, label: lit.text })
+      // The literal's dictionary: keyed by the literal node, or by its host's slot (`call-1:0`) when typed inline.
+      ctx.calls.push({ id: litId || `${id}:${index}`, node: id, preds: litPreds })
+    }
   }
 }
 
@@ -231,7 +226,19 @@ function customSchemeOf(id, ctx) {
   if (ctx.customCache.has(id)) return ctx.customCache.get(id)
   const def = ctx.nodesRegistry[id]
   if (!def) return scheme([], [], freshVar())
-  if (def.scheme) return def.scheme
+  if (def.scheme) {
+    // A definition with a declared type (a definition view's graph): its
+    // body is still elaborated, given the dictionaries of that type, in its
+    // order — what every caller passes. A recursive call uses the type as is.
+    const body = ctx.functionBodiesRegistry[id]
+    if (body && !ctx.visiting.has(id)) {
+      ctx.visiting.add(id)
+      inferCustomFunctionScheme(body, ctx, id, def.scheme)
+      ctx.visiting.delete(id)
+      ctx.customCache.set(id, def.scheme)
+    }
+    return def.scheme
+  }
   if (def.builtin) return builtinSchemes[def.builtin]
   if (ctx.visiting.has(id)) return scheme([], [], freshVar()) // recursive custom function: monomorphic fallback, not cached
   ctx.visiting.add(id)
@@ -242,8 +249,13 @@ function customSchemeOf(id, ctx) {
   return sch
 }
 
-/** Infer a custom function's own principal type from its body wiring, then generalize (and elaborate its calls). */
-function inferCustomFunctionScheme(body, ctx, fnId) {
+/**
+ * Infer a custom function's own principal type from its body wiring, then
+ * generalize (and elaborate its calls). With a `declared` scheme, the body
+ * is checked against it instead and elaborated with its constraints as the
+ * dictionary parameters; the declared scheme is the result.
+ */
+function inferCustomFunctionScheme(body, ctx, fnId, declared = null) {
   const callsStart = ctx.calls.length
   const originsStart = ctx.origins.length
   const memo = new Map()
@@ -260,6 +272,15 @@ function inferCustomFunctionScheme(body, ctx, fnId) {
   // Resolve against everything unified so far *before* generalizing — a
   // param that got pinned to Int by usage (e.g. wired into isZero) must show
   // up concrete here, not still-free, or it would be wrongly quantified.
+  let wanted = null
+  if (declared) {
+    wanted = instantiate(declared)
+    try {
+      ctx.subst = unify(paramVars.reduceRight((acc, t) => tfun(t, acc), resultType), wanted.type, ctx.subst)
+    } catch {
+      // A body that doesn't fit its declared type: typed as written, elaborated as best it can be.
+    }
+  }
   const resolvedParams = paramVars.map((v) => applySubst(ctx.subst, v))
   const resolvedResult = applySubst(ctx.subst, resultType)
   const curried = resolvedParams.reduceRight((acc, t) => tfun(t, acc), resolvedResult)
@@ -282,11 +303,35 @@ function inferCustomFunctionScheme(body, ctx, fnId) {
   const origins = ctx.origins.splice(originsStart).map((o) => ({ ...o, preds: o.preds.map((p) => pred(p.cls, applySubst(ctx.subst, p.type))) }))
   const ambiguous = ambiguitiesIn(retained, visible, origins)
   if (ambiguous.length) ctx.ambiguities[fnId] = ambiguous
+  // The variables only its body sees default (Integer, Double) — for its calls' dictionaries only.
+  const defaulted = withDefaults(retained, visible, ctx.subst)
   retained = retained.filter((p) => [...ftv(p.type)].every((v) => visible.has(v)))
-  // Its user-class constraints are its dictionary parameters, in order.
-  const given = retained.filter((p) => isUserClass(p.cls)).map((p, i) => ({ pred: p, expr: { param: i } }))
-  ctx.elab.set(fnId, { params: given.length, nodes: elaborateCalls(ctx.calls.splice(callsStart), given, ctx, fnId) })
+  // Its constraints are its dictionary parameters, in order (a declared type's, when it has one).
+  const given = (wanted ? wanted.preds.map((p) => pred(p.cls, applySubst(ctx.subst, p.type))) : retained).map((p, i) => ({ pred: p, expr: { param: i } }))
+  ctx.elab.set(fnId, { params: given.length, nodes: elaborateCalls(ctx.calls.splice(callsStart), given, ctx, fnId, defaulted) })
   return generalize(retained, curried)
+}
+
+/**
+ * `subst` extended with the defaults (Haskell Report §4.3.4, pickDefault) of
+ * the constrained variables of `preds` (resolved) not in `keep` — those that
+ * occur only in simple constraints `C v`, one of them numeric. The rest are
+ * left alone (an ambiguity, reported elsewhere).
+ */
+function withDefaults(preds, keep, subst) {
+  let reduced
+  try {
+    reduced = reduce(preds.map((p) => pred(p.cls, applySubst(subst, p.type))))
+  } catch {
+    return subst
+  }
+  let s = subst
+  for (const v of new Set(reduced.flatMap((p) => [...ftv(p.type)]))) {
+    if (keep.has(v) || !reduced.every((p) => !ftv(p.type).has(v) || (p.type.kind === 'var' && p.type.id === v))) continue
+    const t = pickDefault(reduced, v)
+    if (t) s = unify(tvar(v), tcon(t), s)
+  }
+  return s
 }
 
 /**
@@ -349,23 +394,24 @@ export function subtreeOf(graph, rootId) {
 }
 
 /**
- * Evidence for each call's user-class constraints (`{ nodeId: [evidence…] }`),
- * from the dictionaries in hand (`given`). A direct recursive call passes the
- * function's own dictionaries on (it is typed monomorphically). Missing
- * evidence becomes `{ error }`, reported only if that dictionary is used.
+ * Evidence for each call's constraints (`{ nodeId: [evidence…] }`), from the
+ * dictionaries in hand (`given`), against `subst` (the pass's, plus any
+ * defaults). A direct recursive call passes the function's own dictionaries
+ * on (it is typed monomorphically). Missing evidence becomes `{ error }`,
+ * reported only if that dictionary is used.
  */
-function elaborateCalls(calls, given, ctx, selfId = null) {
+function elaborateCalls(calls, given, ctx, selfId = null, subst = ctx.subst) {
   const out = {}
   for (const call of calls) {
     if (call.recursive) {
       if (call.recursive === selfId) out[call.id] = given.map((g) => g.expr)
       continue
     }
-    const wanted = call.preds.filter((p) => isUserClass(p.cls)).map((p) => pred(p.cls, applySubst(ctx.subst, p.type)))
-    const into = call.target && fromIntegerTarget(applySubst(ctx.subst, call.target))
-    if (!wanted.length && !into) continue
-    out[call.id] = wanted.map((p) => evidence(given, p) || { error: `No instance for ${p.cls} ${showType(p.type)}${ftv(p.type).size ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` })
-    if (into) out[call.id].push({ [call.conversion]: into })
+    if (!call.preds.length) continue
+    out[call.id] = call.preds.map((q) => {
+      const p = pred(q.cls, applySubst(subst, q.type))
+      return evidence(given, p) || { error: `No instance for ${p.cls} ${showType(p.type)}${p.type.kind === 'var' ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` }
+    })
   }
   return out
 }
@@ -396,12 +442,14 @@ function resolveNodeType(id, graph, ctx, memo) {
     // for a decimal (see literalClass).
     if (node.annotation) {
       const entry = { kind: 'value', valueType: tcon(node.annotation) }
+      ctx.calls.push({ id, preds: [pred(literalClass(node.value ?? ''), entry.valueType)] })
       memo.set(id, entry)
       return entry
     }
     const v = freshVar()
     ctx.preds.push(pred(literalClass(node.value ?? ''), v))
     ctx.origins.push({ id, preds: [pred(literalClass(node.value ?? ''), v)], label: String(node.value ?? '') })
+    ctx.calls.push({ id, preds: [pred(literalClass(node.value ?? ''), v)] })
     const entry = { kind: 'value', valueType: v }
     memo.set(id, entry)
     return entry
@@ -420,6 +468,7 @@ function resolveNodeType(id, graph, ctx, memo) {
     if (lit?.kind === 'number') {
       ctx.preds.push(pred(literalClass(lit.text), valueType))
       ctx.origins.push({ id, preds: [pred(literalClass(lit.text), valueType)], label: lit.text })
+      ctx.calls.push({ id, preds: [pred(literalClass(lit.text), valueType)] })
     }
     const entry = { kind: 'value', valueType }
     memo.set(id, entry)
@@ -443,6 +492,9 @@ function resolveNodeType(id, graph, ctx, memo) {
     if (node.resolvedScheme) {
       const inst = instantiate(node.resolvedScheme)
       ctx.preds.push(...inst.preds)
+      // Its closure's dictionary parameters, in the scheme's order (see rootParams).
+      ctx.calls.push({ id, preds: inst.preds })
+      if (inst.preds.length) ctx.origins.push({ id, preds: inst.preds, label: node.label || 'result' })
       valueType = inst.type
     }
     const entry = { kind: 'value', valueType }
@@ -479,8 +531,6 @@ function resolveNodeType(id, graph, ctx, memo) {
         paramTypes.push(freshVar()) // defensive: node has more ports than its scheme declares
       }
     }
-    const conversion = CONVERSIONS[node.builtin || ctx.nodesRegistry[calleeId]?.builtin]
-    if (conversion) Object.assign(call, { target: rest, conversion })
     const applied = paramTypes.map(() => false)
     const entry = { kind: 'function', paramTypes, resultType: rest, applied }
     memo.set(id, entry) // set before recursing so a stray self-mount can't loop
@@ -493,7 +543,7 @@ function resolveNodeType(id, graph, ctx, memo) {
         applied[i] = true
         memo.set(mountedId, { kind: 'value', valueType: paramType })
         const lit = parseLiteral(graph[mountedId].value)
-        if (lit) ctx.pendingLiterals.push({ graph, id, index: i, paramType, lit })
+        if (lit) ctx.pendingLiterals.push({ graph, id, index: i, paramType, lit, litId: mountedId })
         else markInvalid(ctx, graph, id, i)
         return
       }
@@ -546,15 +596,36 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
   const topOrigins = ctx.origins.splice(0).map((o) => ({ ...o, preds: o.preds.map(resolveP) }))
   const paramVars = new Set(Object.values(activeGraph).filter((n) => n.type === 'parameter').flatMap((n) => [...ftv(applySubst(ctx.subst, valueTypeOfEntry(memo.get(n.id))))]))
   const topAmbiguities = []
+  // Each expression's elaboration: a value defaults its constrained
+  // variables (it's evaluated at a monotype, as GHCi does); a function value
+  // keeps those of its own type as dictionary parameters (rootParams).
+  const rootParams = {}
+  const rootOf = new Map()
+  const perRoot = new Map()
   for (const rootId of rootsOf(activeGraph)) {
     const inside = subtreeOf(activeGraph, rootId)
+    inside.forEach((id) => { if (!rootOf.has(id)) rootOf.set(id, rootId) })
     const origins = topOrigins.filter((o) => inside.has(o.id))
     if (!origins.length) continue
-    const visible = new Set([...ftv(applySubst(ctx.subst, valueTypeOfEntry(memo.get(rootId)))), ...paramVars])
-    topAmbiguities.push(...ambiguitiesIn(origins.flatMap((o) => o.preds), visible, origins))
+    const rootType = applySubst(ctx.subst, valueTypeOfEntry(memo.get(rootId)))
+    const visible = new Set([...ftv(rootType), ...paramVars])
+    const preds = origins.flatMap((o) => o.preds)
+    topAmbiguities.push(...ambiguitiesIn(preds, visible, origins))
+    let own = []
+    try {
+      own = rootType.kind === 'fun' ? reduce(preds).filter((p) => [...ftv(p.type)].every((v) => ftv(rootType).has(v))) : []
+    } catch {}
+    if (own.length) rootParams[rootId] = own
+    perRoot.set(rootId, { given: own.map((p, i) => ({ pred: p, expr: { param: i } })), subst: withDefaults(preds, rootType.kind === 'fun' ? visible : new Set(paramVars), ctx.subst) })
   }
   // What's left in ctx.calls is the active graph's own calls.
-  const elaboration = { main: elaborateCalls(ctx.calls.splice(0), [], ctx), functions: Object.fromEntries(ctx.elab) }
+  const main = {}
+  const byRoot = Object.groupBy(ctx.calls.splice(0), (call) => rootOf.get(call.node ?? call.id) ?? '')
+  for (const [rootId, calls] of Object.entries(byRoot)) {
+    const r = perRoot.get(rootId)
+    Object.assign(main, elaborateCalls(calls, r?.given || [], ctx, null, r?.subst))
+  }
+  const elaboration = { main, functions: Object.fromEntries(ctx.elab) }
   // Read every type back only now, against the final substitution, so an
   // edge resolved late still refines a node resolved early.
   entries.forEach(([id, entry]) => {
@@ -596,5 +667,5 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
     // constructor class), so "mentions one of this node's variables" is the test.
     entry.preds = reducedPreds.filter((p) => [...ftv(p.type)].some((v) => ownVars.has(v)))
   })
-  return { perNode, subst: ctx.subst, preds: resolvedPreds, elaboration, schemes: ctx.customCache, ambiguities: { main: topAmbiguities, functions: ctx.ambiguities }, annotations: { here: annotationsHere, functions: ctx.annotationProblems }, brokenEdges: ctx.broken.filter((b) => b.graph === activeGraph).map(({ nodeId, index }) => ({ nodeId, index })) }
+  return { perNode, subst: ctx.subst, preds: resolvedPreds, elaboration, rootParams, schemes: ctx.customCache, ambiguities: { main: topAmbiguities, functions: ctx.ambiguities }, annotations: { here: annotationsHere, functions: ctx.annotationProblems }, brokenEdges: ctx.broken.filter((b) => b.graph === activeGraph).map(({ nodeId, index }) => ({ nodeId, index })) }
 }

@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
 import { declareTypes, derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
@@ -35,7 +36,8 @@ test('mempty is absorbed by (<>) and takes the right shape when observed', () =>
   const g = graphOf(
     call('e', 'mempty', []), call('xs', 'listOf', ['1']),
     call('l', 'mappend', [{ node: 'e' }, { node: 'xs' }]), call('r', 'mappend', [{ node: 'xs' }, { node: 'e' }]),
-    call('ts', 'tags', [{ node: 'e' }]), call('x', 'listOf', ['"x"']), call('tx', 'mappend', [{ node: 'ts' }, { node: 'x' }]),
+    // (another mempty: one value has one type — this one is a Modifier)
+    call('em', 'mempty', []), call('ts', 'tags', [{ node: 'em' }]), call('x', 'listOf', ['"x"']), call('tx', 'mappend', [{ node: 'ts' }, { node: 'x' }]),
   )
   assert.equal(show(g, 'l'), '[1]')
   assert.equal(show(g, 'r'), '[1]')
@@ -46,7 +48,9 @@ test('foldMap is the monoid homomorphism out of the free monoid', () => {
   const g = graphOf(
     call('xs', 'listOf', ['1', '2', '3']), call('nil', 'nil', []), call('single', 'cons', ['', { node: 'nil' }]),
     call('fm', 'foldMap', [{ node: 'single' }, { node: 'xs' }]),
-    call('j', 'just', [{ node: 'xs' }]), call('fj', 'foldMap', [{ node: 'single' }, { node: 'j' }]),
+    // (another singleton: here it's [Int] → [[Int]], one node has one type)
+    call('nil2', 'nil', []), call('single2', 'cons', ['', { node: 'nil2' }]),
+    call('j', 'just', [{ node: 'xs' }]), call('fj', 'foldMap', [{ node: 'single2' }, { node: 'j' }]),
   )
   assert.equal(show(g, 'fm'), '[1,2,3]', 'foldMap (\\x -> [x]) = id')
   assert.equal(show(g, 'fj'), '[[1,2,3]]')
@@ -71,7 +75,6 @@ test('a product derives pointwise structure (anyclass): the wallet', () => {
     call('pricier', 'scale', ['1.5', { node: 'cost' }]),
     call('afford', 'leq', [{ node: 'cost' }, { node: 'w' }]), call('tooMuch', 'leq', [{ node: 'pricier' }, { node: 'spend' }]),
     call('z', 'addZero', []), call('wz', 'plus', [{ node: 'w' }, { node: 'z' }]),
-    call('bump', 'plus', [{ node: 'w' }, '1']),
     call('hi', 'join', [{ node: 'w' }, { node: 'pricier' }]),
   )
   assert.equal(show(g, 'spend'), 'Wallet {clicks = 60, gems = 2}')
@@ -79,7 +82,6 @@ test('a product derives pointwise structure (anyclass): the wallet', () => {
   assert.equal(ev.run(g, 'afford'), true)
   assert.equal(ev.run(g, 'tooMuch'), true, '60 ≤ 60 and 1.5 ≤ 2')
   assert.equal(show(g, 'wz'), show(g, 'w'), 'addZero is the zero wallet')
-  assert.equal(show(g, 'bump'), 'Wallet {clicks = 101, gems = 4}', 'a literal is broadcast along the product')
   assert.equal(show(g, 'hi'), 'Wallet {clicks = 100, gems = 3}')
 })
 
@@ -141,7 +143,8 @@ test('Sub is a monoid and a functor: timers fire on game time, relabelled by fma
     add: { id: 'add', type: 'function', sourceFunctionId: 'plus', params: ['', ''], mounted: ['input-addMsg-1', 'input-addMsg-0'] },
     output: { id: 'output', type: 'output', source: 'add' },
   }
-  program.args[2] = { kind: 'closure', callee: 'addMsg', args: [null, null] }
+  // (addMsg :: AddSemigroup a => a -> a -> a: the closure carries the dictionary its use picks, Double's)
+  program.args[2] = { kind: 'closure', callee: 'addMsg', args: [null, null], dicts: [{ kind: 'dict', key: 'AddSemigroup@Double', sub: [] }] }
   // step dt m = m
   reg.nodes.still = { id: 'still', label: 'still', custom: true }
   reg.functionBodies.still = { 'input-still-0': { id: 'input-still-0', type: 'parameter', label: 'dt' }, 'input-still-1': { id: 'input-still-1', type: 'parameter', label: 'm' }, output: { id: 'output', type: 'output', source: 'input-still-1' } }

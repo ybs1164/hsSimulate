@@ -10,11 +10,13 @@ export const PRELUDE = [
   ['Numeric', [['toInteger', 'toInteger', ['x']], ['fromInteger', 'fromInteger', ['n']], ['fromRational', 'fromRational', ['r']], ['properFraction', 'properFraction', ['x']], ['div', 'div', ['x', 'y']], ['mod', 'mod', ['x', 'y']], ['abs', 'abs', ['x']], ['fromIntegral', 'fromIntegral', ['x']], ['realToFrac', 'realToFrac', ['x']], ['truncate', 'truncate', ['x']], ['floor', 'floor', ['x']], ['ceiling', 'ceiling', ['x']], ['round', 'round', ['x']]]],
   ['Lists', [['listOf', '[ , , ]', []], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']]]],
   ['Bool', [['and', '(&&)', ['p', 'q']], ['or', '(||)', ['p', 'q']], ['not', 'not', ['p']]]],
+  ['Eq · Ord', [['neq', '(/=)', ['x', 'y']], ['compare', 'compare', ['x', 'y']], ['le', '(<=)', ['x', 'y']], ['lt', '(<)', ['x', 'y']], ['gt', '(>)', ['x', 'y']], ['max', 'max', ['x', 'y']], ['min', 'min', ['x', 'y']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
   ['Text', [['show', 'show', ['x']], ['showsPrec', 'showsPrec', ['d', 'x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
   ['Pairs · Random', [['pair', '(,)', ['a', 'b']], ['fst', 'fst', ['p']], ['snd', 'snd', ['p']], ['mkStdGen', 'mkStdGen', ['seed']], ['randomR', 'randomR', ['range', 'gen']], ['randomRInt', 'randomRInt', ['range', 'gen']]]],
   ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []]]],
-  ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
+  ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']], ['traverse', 'traverse', ['f', 'xs']]]],
+  ['Applicative · Monad', [['pure', 'pure', ['x']], ['ap', '(<*>)', ['fs', 'xs']], ['bind', '(>>=)', ['m', 'k']]]],
   ['Lattice', [['leq', 'leq', ['x', 'y']], ['join', '(\\/)', ['x', 'y']], ['meet', '(/\\)', ['x', 'y']]]],
   ['VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
   ['Game', [['program', 'program', ['initial', 'view', 'handle', 'step']], ['setStepsPerSecond', 'set stepsPerSecond', ['n', 'program']], ['setMaxOffline', 'set maxOffline', ['seconds', 'program']], ['setSubscriptions', 'set subscriptions', ['subscriptions', 'program']], ['every', 'every', ['seconds', 'msg']], ['onKey', 'onKey', ['handler']], ['wText', 'text', ['s']], ['wButton', 'button', ['label', 'msg']], ['wColumn', 'column', ['widgets']], ['wRow', 'row', ['widgets']], ['wProgress', 'progress', ['fraction']], ['wHeading', 'heading', ['s']], ['wSpacer', 'spacer', ['px']], ['wColor', 'withColor', ['color', 'widget']], ['wDrawing', 'drawing', ['width', 'height', 'picture']]]],
@@ -29,12 +31,16 @@ export const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).
 // definitions with ids `type:<T>:<name>`; the Prelude functions on these
 // types are written with them as graphs (definitionViews.js), so `text`,
 // `program`, `set stepsPerSecond`, `maybe`, … are editable.
-// Their instances stay those of dataTypes.js and categoryClasses.js.
+// Their instances stay those of dataTypes.js and categoryClasses.js
+// (`caseEither` is Haskell's `either`, `caseOrdering` a three-way branch on
+// what `compare` gives).
 //
 // `Sub e` is abstract: `fmap` relabels a subscription with a hidden `Map`
 // constructor that changes the message type (an existential, which a
 // declaration can't say), so Sub has no eliminator.
 export const PRELUDE_TYPES_SOURCE = `data Maybe a = Nothing | Just a
+data Either a b = Left a | Right b
+data Ordering = LT | EQ | GT
 data Color = RGB Double Double Double
 data Picture = Blank | Circle Double | CircleSolid Double | RectangleSolid Double Double | Translate Double Double Picture | Color Color Picture | Pictures Picture Picture
 data Widget e = Text String | Button String e | Column [Widget e] | Row [Widget e] | Progress Double | Heading String | Spacer Double | Tinted Color (Widget e) | Drawing Double Double Picture

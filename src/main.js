@@ -5,10 +5,10 @@ import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { classArity, reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicClasses, setDynamicInstances } from './prelude.js'
 import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
-import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, showHead } from './classDecls.js'
-import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, renameTypeReferences, typeArities } from './typeDecls.js'
+import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, renameTypeInInstances, showHead, writtenEnvironment, writtenMethodProblem, writtenMinimalProblem } from './classDecls.js'
+import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, renameTypeReferences, typeArities, typeKinds } from './typeDecls.js'
 import { customizeDerived, isPristineOverride, migrateTypeEdit, primLabel, primitiveDefinitions, resetDerived } from './typeEdits.js'
-import { METHOD_PARAMS } from './classMethods.js'
+import { BUILTIN_CLASSES, METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
 import { asciiType, printDefinitionTokens } from './haskellPrint.js'
@@ -155,6 +155,10 @@ const derivedDefs = {}
 // against the types; their methods are definitions too (`class:C:m`).
 let classes = {}
 let resolvedClasses = []
+// Instances of builtin classes written by hand — the same shape as a user
+// class's instances, kept per class: `{ Show: [{ head, context, methods }] }`
+// (classDecls.js' resolveWritten). Resolved with the classes (`resolvedClasses.written`).
+let instances = {}
 const classDefs = {}
 // Read-only definition views (definitionViews.js): a builtin, Prelude or
 // derived function shown as a graph. `viewDefs`/`viewBodies` hold each
@@ -214,16 +218,17 @@ function restoreLibraryDefinition(id) {
   renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); fitToView()
   showToast(`${label} is the Prelude's definition again`)
 }
-function applyTypes(next, nextClasses = classes) {
+function applyTypes(next, nextClasses = classes, nextInstances = instances) {
   types = next
   clearViews()
   Object.keys(derivedDefs).forEach((id) => delete derivedDefs[id])
   const derived = derivedDefinitions(types)
   ;[...derived, ...primitiveDefinitions(derived)].forEach((def) => { derivedDefs[def.id] = def })
-  setUserTypeArities(typeArities(types))
+  setUserTypeArities(typeArities(types), typeKinds(types))
   classes = nextClasses
+  instances = nextInstances
   try {
-    resolvedClasses = declareClasses(classes, types, classLabelsTaken())
+    resolvedClasses = declareClasses(classes, types, classLabelsTaken(), instances)
   } catch (e) {
     if (!(e instanceof DeclError)) throw e
     resolvedClasses = []
@@ -253,7 +258,6 @@ function projectPass() {
   return (projectPassCache ??= inferGraph(definitions, functionBodies, nodes))
 }
 function elaborationData() {
-  if (!resolvedClasses.length && !Object.keys(types).length) return null
   if (!elaborationCache) {
     const pass = projectPass()
     elaborationCache = { ...pass.elaboration, instances: instanceEvidence(resolvedClasses, (fnId) => pass.schemes.get(fnId)) }
@@ -291,7 +295,8 @@ function reachableFunctions(graph, ids) {
       if (n?.type !== 'function') continue
       const callee = n.sourceFunctionId || n.id
       const def = definitions[callee]
-      const next = def?.method ? Object.values(classes[def.method.cls]?.instances || []).flatMap((i) => Object.values(i.methods || {})).concat((classes[def.method.cls]?.methods || []).map((m) => m.default)).filter(Boolean) : nodes[callee]?.custom ? [callee] : []
+      const builtinCls = METHOD_CLASS[def?.builtin]
+      const next = def?.method ? Object.values(classes[def.method.cls]?.instances || []).flatMap((i) => Object.values(i.methods || {})).concat((classes[def.method.cls]?.methods || []).map((m) => m.default)).filter(Boolean) : builtinCls ? (instances[builtinCls] || []).flatMap((i) => Object.values(i.methods || {})).filter(Boolean) : nodes[callee]?.custom ? [callee] : []
       for (const fn of next) {
         if (found.has(fn) || !functionBodies[fn]) continue
         found.add(fn)
@@ -558,7 +563,7 @@ const AUTO_STOCK = ['Eq', 'Ord', 'Show']
 function applyTypeDraft() {
   const d = keyed(typeEditor.draft)
   // Comparing and showing are just there when the fields allow them (dropped quietly when they don't).
-  const auto = AUTO_STOCK.filter((cls) => !d.deriving.stock.includes(cls) && !(d.instances || []).some((i) => i.cls === cls))
+  const auto = AUTO_STOCK.filter((cls) => !d.deriving.stock.includes(cls) && !(instances[cls] || []).some((i) => i.head === (typeEditor.original || d.name)))
   d.deriving.stock.push(...auto)
   let checked
   try {
@@ -574,10 +579,10 @@ function applyTypeDraft() {
     const noticed = dropped.filter((cls) => !auto.includes(cls) && !AUTO_STOCK.includes(cls))
     if (noticed.length) showToast(`${d.name} no longer has ${noticed.join(', ')} (it isn't possible after this edit)`)
   }
-  const { before, next, nextClasses } = checked
+  const { before, next, nextClasses, nextInstances } = checked
   const changed = before && typeEditor.appliedDraft ? migrateTypeEdit({ nodes, functionBodies }, before, next[d.name], draftKeyMap(typeEditor.appliedDraft, d)) : 0
   if (before && d.name !== before.name) renameTypeInAnnotations(before.name, d.name)
-  applyTypes(next, nextClasses)
+  applyTypes(next, nextClasses, nextInstances)
   typeEditor.original = d.name
   typeEditor.appliedDraft = structuredClone(d)
   if (changed) showToast(`Updated ${changed} call${changed > 1 ? 's' : ''} to match`)
@@ -590,31 +595,30 @@ function checkTypeDraft(d) {
   const before = typeEditor.original ? types[typeEditor.original] : null
   // Renaming a type renames it in the declarations that mention it.
   const base = before && d.name !== before.name ? renameTypeReferences(types, before.name, d.name) : types
-  const next = declareTypes(base, draftToSource(d), { replacing: typeEditor.original, functionLabels: [...labels, ...Object.values(classDefs).map((c) => c.label)], instances: d.instances })
-  // Classes mention types too (method signatures, instance heads): they follow a rename, and must still make sense.
-  const nextClasses = before && d.name !== before.name ? renameTypeInClasses(classes, before.name, d.name) : classes
-  declareClasses(nextClasses, next, classLabelsTaken())
-  return { before, next, nextClasses }
+  // Classes and instances mention types too (method signatures, instance heads): they follow a rename, and must still make sense.
+  const renamed = before && d.name !== before.name
+  const nextClasses = renamed ? renameTypeInClasses(classes, before.name, d.name) : classes
+  const nextInstances = renamed ? renameTypeInInstances(instances, before.name, d.name) : instances
+  const next = declareTypes(base, draftToSource(d), { replacing: typeEditor.original, functionLabels: [...labels, ...Object.values(classDefs).map((c) => c.label)], assumed: (ts) => writtenEnvironment(nextInstances, ts) })
+  declareClasses(nextClasses, next, classLabelsTaken(), nextInstances)
+  return { before, next, nextClasses, nextInstances }
 }
-// Keep only the derived classes and instances of `d` that still declare;
-// returns the dropped classes' names, or null if `d` fails even without any.
+// Keep only the derived classes of `d` that still declare; returns the
+// dropped classes' names, or null if `d` fails even without any.
 function dropImpossibleInstances(d) {
-  const kept = { deriving: structuredClone(d.deriving), instances: d.instances || [] }
+  const kept = { deriving: structuredClone(d.deriving) }
   const ok = () => { try { checkTypeDraft(d); return true } catch (e) { if (e instanceof DeclError) return false; throw e } }
   d.deriving = Object.fromEntries(Object.keys(kept.deriving).map((g) => [g, []]))
-  d.instances = []
-  if (!kept.instances.length && Object.values(kept.deriving).every((cs) => !cs.length)) return null
+  if (Object.values(kept.deriving).every((cs) => !cs.length)) return null
   if (!ok()) { Object.assign(d, kept); return null }
   // Add them back while they still fit — repeatedly, as one may need another (AddMonoid needs AddSemigroup).
-  let pending = [...Object.entries(kept.deriving).flatMap(([g, cs]) => cs.map((cls) => ({ g, cls }))), ...kept.instances.map((inst) => ({ inst, cls: inst.cls }))]
+  let pending = Object.entries(kept.deriving).flatMap(([g, cs]) => cs.map((cls) => ({ g, cls })))
   for (let progress = true; progress && pending.length; ) {
     progress = false
     pending = pending.filter((x) => {
-      if (x.inst) d.instances.push(x.inst)
-      else d.deriving[x.g].push(x.cls)
+      d.deriving[x.g].push(x.cls)
       if (ok()) { progress = true; return false }
-      if (x.inst) d.instances.pop()
-      else d.deriving[x.g].pop()
+      d.deriving[x.g].pop()
       return true
     })
   }
@@ -815,7 +819,7 @@ function renderTypeEditor(error = '') {
     const own = Object.values(nodes).filter((n) => n.override === name).map((n) => n.id)
     const graphsOutside = [nodes, ...Object.entries(functionBodies).filter(([id]) => !own.includes(id)).map(([, g]) => g)]
     const calls = graphsOutside.flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(prefix) || n.sourceFunctionId?.startsWith(`prim:${prefix}`)).length
-    const usedIn = [...Object.values(types).filter((t) => t.name !== name && JSON.stringify(t.constructors).includes(`"name":"${name}"`)).map((t) => t.name), ...classesUsingType(classes, name).map((c) => `class ${c}`), ...Object.entries(functionBodies).filter(([id, g]) => !own.includes(id) && Object.values(g).some((n) => n.type !== 'number' && new RegExp(`\\b${name}\\b`).test(n.annotation || ''))).map(([id]) => `the signature of ${nodes[id]?.label ?? id}`)]
+    const usedIn = [...Object.values(types).filter((t) => t.name !== name && JSON.stringify(t.constructors).includes(`"name":"${name}"`)).map((t) => t.name), ...classesUsingType(classes, name).map((c) => `class ${c}`), ...Object.entries(instances).flatMap(([cls, list]) => list.filter((i) => i.head === name).map(() => `instance ${cls} ${name}`)), ...Object.entries(functionBodies).filter(([id, g]) => !own.includes(id) && Object.values(g).some((n) => n.type !== 'number' && new RegExp(`\\b${name}\\b`).test(n.annotation || ''))).map(([id]) => `the signature of ${nodes[id]?.label ?? id}`)]
     if (calls || usedIn.length) return renderTypeEditor(`${name} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${usedIn.length ? ` in ${usedIn.join(', ')}` : ''}`)
     own.forEach((id) => { delete nodes[id]; delete functionBodies[id] })
     const next = { ...types }
@@ -874,7 +878,7 @@ function applyClassDraft() {
     if (next[d.name]) throw new DeclError(`There is already a class named ${d.name}`)
     next[d.name] = structuredClone(d)
     next[d.name].methods.forEach((m) => { delete m.key })
-    declareClasses(next, types, classLabelsTaken())
+    declareClasses(next, types, classLabelsTaken(), instances)
     if (old && classEditor.appliedDraft) renameMethodCalls(classEditor.appliedDraft, d)
     // Signatures' pinned constraints follow a rename too.
     if (old && old !== d.name) for (const body of Object.values(functionBodies)) for (const n of Object.values(body)) if (n.context) n.context = n.context.map((q) => (q.cls === old ? { ...q, cls: d.name } : q))
@@ -1654,12 +1658,13 @@ function drawSignatureBar() {
 // `_` dropped on a part un-pins it. An annotation inference refuses is
 // rolled back, with why.
 const TYPE_VARIABLES = ['a', 'b', 'c', 'd']
+const CONSTRUCTOR_VARIABLES = ['f', 'g']
 function typePaletteHtml() {
   const namer = createNamer()
   const chip = (attr, t, title) => `<span class="type-chip" ${attr} title="${escapeAttr(title)}">${typeNodeHtml(t, namer, { named: true })}</span>`
   return [
     ...typePalette().map((g) => `<div class="tchip-group"><small>${g.group}</small>${g.items.map((it) => chip(`data-con="${escapeAttr(it.name)}"`, constructorWithHoles(it.name), `${it.name === '->' ? '(▸)' : it.name === 'List' ? '[ ]' : it.name} :: ${it.kind}`)).join('')}</div>`),
-    `<div class="tchip-group"><small>Variables</small>${TYPE_VARIABLES.map((v) => chip(`data-var="${v}"`, tvar(v), 'A type variable: any type — the body must work for every one (the same name is the same type across the signature)')).join('')}${chip('data-hole', hole(), 'A hole: left to inference (drop it to un-pin)')}</div>`,
+    `<div class="tchip-group"><small>Variables</small>${TYPE_VARIABLES.map((v) => chip(`data-var="${v}"`, tvar(v), 'A type variable: any type — the body must work for every one (the same name is the same type across the signature)')).join('')}${CONSTRUCTOR_VARIABLES.map((v) => chip(`data-varapp="${v}"`, tapp(tvar(v), hole()), `A type variable applied to a type: ${v} stands for a type constructor (its kind is * ▸ * or more — Maybe, [ ], …), as in data Fix f = Fix (f (Fix f))`)).join('')}${chip('data-hole', hole(), 'A hole: left to inference (drop it to un-pin)')}</div>`,
   ].join('')
 }
 let typeDrag = null // { sub, ghost, start, moved, over }
@@ -1676,7 +1681,7 @@ function startTypeDrag(chip, event) {
   if (readonlyBlocked()) return
   event.preventDefault()
   const cls = chip.dataset.cls
-  const sub = cls ? null : chip.dataset.con ? constructorWithHoles(chip.dataset.con) : chip.dataset.var ? tvar(chip.dataset.var) : hole()
+  const sub = cls ? null : chip.dataset.con ? constructorWithHoles(chip.dataset.con) : chip.dataset.var ? tvar(chip.dataset.var) : chip.dataset.varapp ? tapp(tvar(chip.dataset.varapp), hole()) : hole()
   const ghost = chip.cloneNode(true)
   ghost.classList.add('type-ghost')
   document.body.append(ghost)
@@ -2758,7 +2763,8 @@ function executeFunction(fn) {
   if (!isFunction(fn)) return
   if (viewingReadonly()) return showToast('This is a read-only definition — play the function where it is used')
   const graph = activeNodes()
-  const entry = typePass(graph).perNode.get(fn.id)
+  const pass = typePass(graph)
+  const entry = pass.perNode.get(fn.id)
   const bad = entry?.invalidSlots?.[0]
   if (bad !== undefined) return showToast(`"${fn.params[bad]}" doesn't fit ${paramDisplayName(fn, bad)} :: ${expectedParamType(fn, bad, graph)}`)
   const ambiguous = runBlocker(graph, fn.id)
@@ -2777,8 +2783,11 @@ function executeFunction(fn) {
   if (isClosure(result)) {
     const appliedCount = entry?.applied?.filter(Boolean).length ?? 0
     // Keep the residual's class constraints with it (`Semiring a ⇒ a → a`,
-    // not a bare `a → a`), generalized so each later pass instantiates it fresh.
-    const resolvedScheme = valueType ? generalize((entry.preds || []).filter((p) => [...ftv(p.type)].some((v) => ftv(valueType).has(v))), valueType) : undefined
+    // not a bare `a → a`), generalized so each later pass instantiates it
+    // fresh — in the order of the closure's stand-in dictionaries, which
+    // each use fills in (inferGraph's rootParams).
+    const own = pass.rootParams?.[fn.id] || []
+    const resolvedScheme = valueType ? generalize(own, valueType) : undefined
     graph[id] = { id, type: 'curried', typeName: valueType ? showQual(resolvedScheme.preds, valueType) : functionSignature(fn), resolvedScheme, closure: result, ...position, label: `${fn.label} · ${appliedCount}/${fn.params.length}`, value: 'ƒ', remaining: result.args.filter((a) => a === null).length, color: '#a96ef0' }
   } else if (isData(result) || typeof result === 'string') {
     // A data value (a declared type, a list, a Maybe — e.g. `Model {clicks = 1, perClick = 2}`) or a Char.
@@ -3320,7 +3329,7 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200)
 }
 // --- Project snapshots, autosave, undo/redo ---------------------------------
-function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, entry: entryId, outputId }) }
+function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, instances, entry: entryId, outputId }) }
 // Replaces the live project with `project` (already parsed + merged) in place
 // — `nodes`/`functionBodies` are shared with the evaluator, so they're
 // refilled rather than reassigned.
@@ -3331,7 +3340,7 @@ function loadProject(project) {
   Object.assign(functionBodies, project.functionBodies)
   ;[nodes, ...Object.values(functionBodies)].forEach(materializeLiterals)
   state.editingLiteral = null
-  applyTypes(project.types || {}, project.classes || {})
+  applyTypes(project.types || {}, project.classes || {}, project.instances || {})
   if (typeEditor) { if (types[typeEditor.original]) { typeEditor = editorFor(typeEditor.original); renderTypeEditor() } else closeTypeEditor() }
   if (classEditor) { if (classes[classEditor.original]) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }
   entryId = project.entry

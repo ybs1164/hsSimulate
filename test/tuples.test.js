@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce } from '../src/prelude.js'
 import { declareTypes } from '../src/typeDecls.js'
@@ -38,7 +39,7 @@ test('random numbers are pure: the same seed gives the same numbers, and the gen
   // many rolls cover the whole range
   let gen = { kind: 'data', type: 'StdGen', ctor: 'StdGen', ctorIndex: 0, args: [7] }
   const seen = new Set()
-  for (let i = 0; i < 200; i++) { const r = ev.invokeBuiltin('randomRInt', [{ kind: 'data', type: '(,)', ctor: '(,)', ctorIndex: 0, args: [1, 6] }, gen]); seen.add(r.args[0]); gen = r.args[1] }
+  for (let i = 0; i < 200; i++) { const r = ev.invoke('randomRInt', [{ kind: 'data', type: '(,)', ctor: '(,)', ctorIndex: 0, args: [1, 6] }, gen]); seen.add(r.args[0]); gen = r.args[1] }
   assert.deepEqual([...seen].sort(), [1, 2, 3, 4, 5, 6])
 })
 

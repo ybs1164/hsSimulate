@@ -5,7 +5,8 @@
 // type-checked. This is the end-to-end scenario of plan Phase 1c-3.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { checkFunctionLaw } from '../src/laws.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'

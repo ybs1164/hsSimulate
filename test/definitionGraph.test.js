@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { printDefinition, printDefinitionTokens, tokensText } from '../src/haskellPrint.js'
 import { moveParameter } from '../src/signature.js'
-import { createEvaluator } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 
 // f x y = select y 1 x  — plus a shared value and a λ hole.
 function fixture() {

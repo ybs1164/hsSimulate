@@ -3,19 +3,22 @@
 // exactly like the derived instance they replace.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { builtinSchemes } from '../src/builtinSchemes.js'
+import { classEnvironment, declareClasses, writtenEnvironment, writtenMethodProblem } from '../src/classDecls.js'
 import { graphableDerivings, instanceGraphs } from '../src/deriveGraphs.js'
-import { createEvaluator, showValue } from '../src/evaluator.js'
+import { showValue } from '../src/evaluator.js'
+import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph } from '../src/inferGraph.js'
 import { setDynamicInstances } from '../src/prelude.js'
-import { declareTypes, declToDraft, derivedDefinitions, derivedInstances, draftToSource, methodTypeProblem, typeArities } from '../src/typeDecls.js'
+import { declareTypes, declToDraft, derivedDefinitions, derivedInstances, draftToSource, typeArities } from '../src/typeDecls.js'
 import { generalize, setUserTypeArities, tapp, tcon, tfun } from '../src/typeSystem.js'
 import { parseValue } from '../src/valueParser.js'
 
 const MAIN = ['eq', 'geq', 'plus', 'negate', 'times', 'addZero', 'mulOne', 'divide', 'select']
 const PRELUDE = ['and', 'show', 'showsPrec', 'append', 'mappend', 'mempty', 'leq', 'join', 'meet', 'scale']
 
-// `cls` of `typeName` (declared in `source`), derived and written out as graphs.
+// `cls` of `typeName` (declared in `source`), derived and written out as
+// graphs: a hand-written instance with the context deriving had (the class
+// asked of each parameter), kept with its class.
 function convert(source, typeName, cls) {
   const derived = declareTypes({}, source)
   const d = derived[typeName]
@@ -23,23 +26,24 @@ function convert(source, typeName, cls) {
   const g = instanceGraphs(d, cls, { newId: (hint) => `${hint}-${++k}`, label: (m) => `${m}${typeName}` })
   const draft = declToDraft(d)
   for (const list of Object.values(draft.deriving)) if (list.includes(cls)) list.splice(list.indexOf(cls), 1)
-  const written = declareTypes(derived, draftToSource(draft), { replacing: typeName, instances: [...d.instances, { cls, methods: g.methods }] })
+  const instances = { [cls]: [{ head: typeName, context: (d.params || []).map((_, i) => ({ cls, var: 'abcd'[i] })), methods: g.methods }] }
+  const written = declareTypes(derived, draftToSource(draft), { replacing: typeName, assumed: (ts) => writtenEnvironment(instances, ts) })
   const nodes = {}
   for (const id of MAIN) nodes[id] = { id, type: 'function', builtin: id, label: id, params: [], mounted: [] }
   for (const b of PRELUDE) nodes[`prelude:${b}`] = { id: `prelude:${b}`, type: 'function', builtin: b, label: b, params: [], mounted: [] }
   derivedDefinitions(derived).forEach((def) => { nodes[def.id] = def })
   const functionBodies = {}
   for (const f of g.functions) { nodes[f.node.id] = f.node; functionBodies[f.node.id] = f.body }
-  return { derived, written, g, nodes, functionBodies, d: written[typeName] }
+  return { derived, written, instances, g, nodes, functionBodies, d: written[typeName] }
 }
 
-// Run builtin `method` on values (Haskell text at `type`) under `types`.
-function runMethod(p, types, method, type, args) {
-  const ev = createEvaluator({ nodes: p.nodes, functionBodies: p.functionBodies, types })
+// Run builtin `method` on values (Haskell text at `type`) under `types` and the hand-written `instances`.
+function runMethod(p, types, instances, method, type, args) {
+  const ev = createEvaluator({ nodes: p.nodes, functionBodies: p.functionBodies, types, instances })
   const graph = {}
   const slots = args.map((a, i) => {
     if (typeof a === 'number') return String(a)
-    graph[`v${i}`] = { id: `v${i}`, type: 'value', data: parseValue(a, type, p.derived) }
+    graph[`v${i}`] = { id: `v${i}`, type: 'value', data: parseValue(a, type, p.derived), resolvedType: type }
     return ''
   })
   const callee = MAIN.includes(method) ? method : `prelude:${method}`
@@ -50,20 +54,21 @@ function runMethod(p, types, method, type, args) {
 
 // The written-out instance gives the same answers as the derived one.
 function sameAsDerived(p, method, type, argLists) {
-  for (const args of argLists) assert.equal(runMethod(p, p.written, method, type, args), runMethod(p, p.derived, method, type, args), `${method} ${args.join(' ')}`)
+  for (const args of argLists) assert.equal(runMethod(p, p.written, p.instances, method, type, args), runMethod(p, p.derived, {}, method, type, args), `${method} ${args.join(' ')}`)
 }
 
 // Each generated method type-checks as the method at the instance.
 function typeChecks(p, cls) {
-  setDynamicInstances(derivedInstances(p.written))
   setUserTypeArities(typeArities(p.written))
+  const [w] = declareClasses({}, p.written, [], p.instances).written
+  setDynamicInstances([...derivedInstances(p.written), ...classEnvironment([], [w]).instances])
   try {
     for (const [m, fnId] of Object.entries(p.g.methods)) {
       const pass = inferGraph(p.nodes, p.functionBodies, { [fnId]: p.nodes[fnId] })
       const e = pass.perNode.get(fnId)
       assert.ok(e?.paramTypes, `${m}: no type`)
       const have = generalize(e.preds || [], e.paramTypes.reduceRight((acc, t) => tfun(t, acc), e.resultType))
-      assert.equal(methodTypeProblem(have, p.d, cls, builtinSchemes[m]), '', `${m}`)
+      assert.equal(writtenMethodProblem(have, w, m), '', `${m}`)
     }
   } finally {
     setDynamicInstances([])

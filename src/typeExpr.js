@@ -25,7 +25,7 @@
 // its variables is still inferred.
 import { DeclError, builtinTypeNames, parseTypeText } from './typeDecls.js'
 import { classArity, classNames, isUserClass, superclassesOf } from './prelude.js'
-import { constructorArity, createNamer, freshVar, tapp, tcon, tfun, userTypeArities } from './typeSystem.js'
+import { constructorArity, constructorKind, createNamer, freshVar, showKind, tapp, tcon, tfun, userTypeArities } from './typeSystem.js'
 
 /** Whether a variable id is one inference made up (`t42`), rather than a name written in an annotation. */
 export const isInferredVar = (id) => /^t\d+$/.test(id)
@@ -187,11 +187,11 @@ export function headLabel(head) {
 export function typePalette() {
   const kind = (n) => ['*', ...Array(n).fill('*')].join(' ▸ ')
   const entry = (name, arity, label = name) => ({ name, arity, label, kind: kind(arity) })
-  const user = Object.entries(userTypeArities()).map(([n, a]) => entry(n, a))
+  const user = Object.entries(userTypeArities()).map(([n, a]) => ({ ...entry(n, a), kind: showKind(constructorKind(n), '▸') }))
   return [
     { group: 'Numbers', items: ['Int', 'Integer', 'Double', 'Float', 'Rational', 'Natural', 'Word'].map((n) => entry(n, 0)) },
-    { group: 'Basics', items: [entry('Bool', 0), entry('Char', 0), entry('String', 0), entry('()', 0)] },
-    { group: 'Structure', items: [entry('->', 2, '_ ▸ _'), entry('List', 1, '[ _ ]'), entry('(,)', 2, '( _ , _ )'), entry('Maybe', 1, 'Maybe _')] },
+    { group: 'Basics', items: [entry('Bool', 0), entry('Char', 0), entry('String', 0), entry('()', 0), entry('Ordering', 0)] },
+    { group: 'Structure', items: [entry('->', 2, '_ ▸ _'), entry('List', 1, '[ _ ]'), entry('(,)', 2, '( _ , _ )'), entry('Maybe', 1, 'Maybe _'), entry('Either', 2, 'Either _ _')] },
     { group: 'Game', items: [entry('Picture', 0), entry('Color', 0), entry('StdGen', 0), entry('Widget', 1, 'Widget _'), entry('Sub', 1, 'Sub _'), entry('Program', 2, 'Program _ _')] },
     ...(user.length ? [{ group: 'Yours', items: user.map((e) => ({ ...e, label: [e.name, ...Array(e.arity).fill('_')].join(' ') })) }] : []),
   ]
@@ -271,7 +271,7 @@ export function classPalette() {
     ['Comparing', ['Eq', 'Ord', 'Show', 'PartialOrd', 'Lattice']],
     ['Numbers', ['Semiring', 'Ring', 'Field', 'OrderedRing', 'EuclideanRing', 'OrderedField', 'Transcendental', 'IEEEFloat']],
     ['Algebra', ['Semigroup', 'Monoid', 'AddSemigroup', 'AddMonoid', 'AddCommutativeMonoid', 'AddGroup', 'AddAbelianGroup', 'MulSemigroup', 'MulMonoid', 'VectorSpace']],
-    ['Containers', ['Functor', 'Foldable']],
+    ['Containers', ['Functor', 'Foldable', 'Traversable', 'Applicative', 'Monad']],
   ]
   const all = classNames()
   const listed = new Set(groups.flatMap(([, names]) => names))

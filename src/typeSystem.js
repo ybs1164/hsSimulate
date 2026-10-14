@@ -20,10 +20,12 @@
 // `Scheme` is `{ vars: string[], type: Type }`, i.e. `forall vars. type`.
 // `Subst` is a `Map<varId, Type>`.
 //
-// Kinds are kept to what this app needs: every constructor has a fixed arity
-// (`List`, `Maybe`, … :: * -> *, everything else :: *), checked by
-// `wellKinded`; type variables are assumed to be used at a consistent kind
-// rather than kind-inferred.
+// Kinds are the types of types: `*` (a type of values) and `k₁ -> k₂` (a
+// type constructor). A builtin constructor takes plain types (`Maybe :: * ->
+// *`); a declared one's kind is inferred from its constructors' fields
+// (inferKinds), as GHC does — `data Fix f = Fix (f (Fix f))` gives
+// `Fix :: (* -> *) -> *`. `kindOf` checks a type against them; a type
+// variable's kind is whatever its uses need.
 
 let nextVarId = 0
 
@@ -49,13 +51,26 @@ export function tlist(elem) {
 }
 
 /** How many type arguments each constructor takes (its kind is `*` with that many `* ->` in front). */
-export const constructorArity = { List: 1, Maybe: 1, Widget: 1, Program: 2, Sub: 1, '(,)': 2 }
+export const constructorArity = { List: 1, Maybe: 1, Either: 2, Widget: 1, Program: 2, Sub: 1, '(,)': 2 }
 
 // Arities of user-declared type constructors (`data Pair a = …` takes one),
-// replaced wholesale whenever the declarations change (see typeDecls.js).
+// and their kinds, replaced wholesale whenever the declarations change (see
+// typeDecls.js and main.js).
 let userArity = {}
-export function setUserTypeArities(arities) {
+let userKinds = {}
+export function setUserTypeArities(arities, kinds = {}) {
   userArity = { ...arities }
+  userKinds = { ...kinds }
+}
+/** Run `fn` with `kinds` (name -> kind) as the declared types' kinds, then restore them — for checking declarations not yet applied. */
+export function withUserKinds(kinds, fn) {
+  const before = userKinds
+  userKinds = { ...userKinds, ...kinds }
+  try {
+    return fn()
+  } finally {
+    userKinds = before
+  }
 }
 const arityOf = (name) => constructorArity[name] ?? userArity[name] ?? 0
 /** The declared type constructors' arities (name -> how many type arguments). */
@@ -68,27 +83,58 @@ export function ttuple(a, b) {
   return tapp(tapp(tcon('(,)'), a), b)
 }
 
+// ---- Kinds ------------------------------------------------------------------
+// A kind is '*' or `{ from, to }` (an arrow), plain data so a declaration's
+// kinds can be stored and compared.
+
+export const STAR = '*'
+export const karrow = (from, to) => ({ from, to })
+/** The kind of a constructor taking `n` plain types: `* -> … -> *`. */
+export const kindOfArity = (n) => Array.from({ length: n }).reduce((k) => karrow(STAR, k), STAR)
+export const sameKind = (a, b) => (a === STAR || b === STAR ? a === b : sameKind(a.from, b.from) && sameKind(a.to, b.to))
+/** `(* -> *) -> *`, Haskell's notation (`arrow` for another arrow sign). */
+export function showKind(k, arrow = '->') {
+  if (k === STAR) return '*'
+  const from = k.from === STAR ? '*' : `(${showKind(k.from, arrow)})`
+  return `${from} ${arrow} ${showKind(k.to, arrow)}`
+}
+/** How many arguments a kind takes before it is `*`. */
+export const kindArgs = (k) => (k === STAR ? 0 : 1 + kindArgs(k.to))
+
+/** A constructor's kind: a builtin's from its arity, a declared one's as inferred (see inferKinds). */
+export function constructorKind(name) {
+  return userKinds[name] ?? kindOfArity(arityOf(name))
+}
+
 /**
- * How many more arguments `type` still needs before it is a proper type of
- * kind `*`, or null if that depends on a variable's kind. Throws if a
- * constructor is over-applied or a function/argument isn't of kind `*`.
+ * The kind of `type`, or null where it hinges on a variable's kind (a
+ * variable may be used at any kind). Throws if it's ill-kinded: a
+ * constructor applied to too many arguments, or to one of the wrong kind,
+ * or a function between things that aren't types of values.
  */
-export function kindArity(type) {
+export function kindOf(type) {
+  const ill = () => new Error(`Ill-kinded: ${showType(type)}`)
   if (type.kind === 'var') return null
-  if (type.kind === 'con') return arityOf(type.name)
+  if (type.kind === 'con') return constructorKind(type.name)
   if (type.kind === 'fun') {
-    if (![0, null].includes(kindArity(type.from)) || ![0, null].includes(kindArity(type.to))) throw new Error(`Ill-kinded: ${showType(type)}`)
-    return 0
+    for (const side of [type.from, type.to]) {
+      const k = kindOf(side)
+      if (k !== null && k !== STAR) throw ill()
+    }
+    return STAR
   }
-  const head = kindArity(type.fn)
-  if (head === 0 || ![0, null].includes(kindArity(type.arg))) throw new Error(`Ill-kinded: ${showType(type)}`)
-  return head === null ? null : head - 1
+  const head = kindOf(type.fn)
+  const arg = kindOf(type.arg)
+  if (head === null) return null
+  if (head === STAR || (arg !== null && !sameKind(arg, head.from))) throw ill()
+  return head.to
 }
 
 /** Is `type` a proper type of kind `*` (or possibly so, when that hinges on a variable)? */
 export function wellKinded(type) {
   try {
-    return [0, null].includes(kindArity(type))
+    const k = kindOf(type)
+    return k === null || k === STAR
   } catch {
     return false
   }
