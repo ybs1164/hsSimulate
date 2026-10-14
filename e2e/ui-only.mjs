@@ -102,9 +102,9 @@ async function clickNode(nodeId, extra = {}) {
 
 // ---- UI actions ----
 const setField = (sel, value, event = 'change') => js(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event(${JSON.stringify(event)})) })()`)
-// Drag a type node from the workspace's TYPES (the chip with attribute `chipAttr`) onto element `toExpr`, with the real mouse.
+// Drag a type node from the workspace's TYPES — or a class from its CLASSES — (the chip with attribute `chipAttr`) onto element `toExpr`, with the real mouse.
 async function dragType(chipAttr, toExpr) {
-  const from = `document.querySelector('#type-palette .type-chip[${chipAttr}]')`
+  const from = `document.querySelector('#type-palette .type-chip[${chipAttr}], #class-palette .type-chip[${chipAttr}]')`
   await js(`[${from}, ${toExpr}].forEach((el) => el.scrollIntoView({ block: 'nearest', behavior: 'instant' }))`)
   const at = async (expr) => { const r = JSON.parse(await js(`JSON.stringify(${expr}.getBoundingClientRect())`)); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } }
   const p = await at(from), q = await at(toExpr)
@@ -515,6 +515,37 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(listed === 'parameter:[_]' && filled === 'parameter:[a]' && listChain === '[a] → [a]', `${listed} / ${filled} / ${listChain}`)
     expect(cleared === 'a → a' && none === '', `${cleared} / ${none}`)
     return `pinMe :: ${pinned}; result :: Maybe _ refused; x :: [a]`
+  })
+  await check('a class constraint is pinned by dragging a class node from the workspace onto a type variable', async () => {
+    await createFunction('constrainMe', ['x'])
+    const { graph } = await activeGraph()
+    const fnId = Object.values(graph).find((n) => n.label === 'constrainMe' && n.custom).id
+    await clickNode(fnId)
+    const chain = () => js(`document.querySelector('#inspector-content .type-chain').title`)
+    const signature = async () => { const body = (await project()).functionBodies[fnId]; return [...Object.values(body).filter((n) => n.annotation).map((n) => `${n.type}:${n.annotation}`).sort(), ...Object.values(body).flatMap((n) => (n.context || []).map((q) => `${q.cls} ${q.var}`))].join(' ') }
+    const segment = (i) => `document.querySelectorAll('#inspector-content .type-chain > .tc-seg.editable')[${i}]`
+    const pinnedChip = `document.querySelector('#inspector-content .tc-ctx .cc.pinned')`
+    const toast = () => js(`document.querySelector('#toast')?.textContent ?? ''`)
+    // Ord onto the inferred a of x: a is named in the signature, then constrained
+    await dragType('data-cls="Ord"', segment(0))
+    const ord = await chain()
+    const ordSig = await signature()
+    // Show onto the pinned Ord a chip replaces it
+    await dragType('data-cls="Show"', pinnedChip)
+    const show = await chain()
+    // Functor is a class of type constructors: refused on a
+    await dragType('data-cls="Functor"', segment(1))
+    const refused = await toast()
+    const afterRefusal = await signature()
+    // × un-pins the constraint; the named variable stays
+    await js(`${pinnedChip}.querySelector('.cc-x').click()`); await sleep(200)
+    const unpinned = await chain()
+    const unpinnedSig = await signature()
+    expect(ord === 'Ord a ⇒ a → a' && ordSig === 'parameter:a Ord a', `${ord} / ${ordSig}`)
+    expect(show === 'Show a ⇒ a → a', show)
+    expect(/type constructors/.test(refused) && afterRefusal === 'parameter:a Show a', `${refused} / ${afterRefusal}`)
+    expect(unpinned === 'a → a' && unpinnedSig === 'parameter:a', `${unpinned} / ${unpinnedSig}`)
+    return `constrainMe :: ${ord}, then ${show}; Functor a refused`
   })
 
   console.log(errors.length ? `Page errors:\n  ${errors.join('\n  ')}` : 'No page errors.')

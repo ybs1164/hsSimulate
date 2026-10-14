@@ -368,6 +368,22 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .type-chip .tn-hole{min-width:.95em;min-height:1em;padding:0 .1em;font-size:9px}
 .type-chip .tn-fun{border:0}
 .type-chip .tc-seg{padding-top:.1em;padding-bottom:.1em}
+/* Classes are nodes one level up — predicates on types, `Ord ▸ Constraint`: same cells, a different shape. */
+#class-palette{padding:2px 4px 4px;font:10px 'DM Mono',monospace}
+.cchip-group{grid-template-columns:repeat(2,minmax(0,1fr))}
+.class-chip{border-radius:5px;border-style:dashed;border-color:#b9a7e8;background:#faf8ff}
+.class-chip .tn-class{color:#5b46b5;text-overflow:ellipsis;overflow:hidden}
+.class-chip .tn-class b{font-weight:600}
+.class-chip.type-ghost{width:auto;padding:0 8px}
+/* A class context: one chip per constraint — pinned ones solid, with × to un-pin. */
+.tc-ctx .cc{display:inline-flex;align-items:center;gap:.2em;padding:.05em .4em;border:1px dashed #b9a7e8;border-radius:4px;color:#5b46b5;background:#faf8ff}
+.tc-ctx .cc.inferred{cursor:pointer}
+.tc-ctx .cc.inferred:hover{background:var(--accent-soft)}
+.tc-ctx .cc.pinned{border-style:solid;background:#e6dfff}
+.tc-ctx .cc.bad{border-color:#e0607a;background:#fde7ec;color:#b2324e}
+.tc-ctx .cc-x{border:0;background:transparent;color:inherit;padding:0;margin-left:.1em;font:inherit;line-height:1;cursor:pointer;opacity:.6}
+.tc-ctx .cc-x:hover{opacity:1}
+.tc-ctx i{font-style:normal;margin:0 .1em}
 .type-ghost{position:fixed;z-index:80;pointer-events:none;cursor:grabbing;width:66px;font:10px 'DM Mono',monospace;box-shadow:0 6px 18px #211d3433}
 body.type-dragging,body.type-dragging *{cursor:grabbing!important;user-select:none}
 body.type-dragging .drop-zone{box-shadow:inset 0 0 0 1.5px var(--accent)}

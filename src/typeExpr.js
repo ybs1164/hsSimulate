@@ -15,8 +15,16 @@
 // signature with an extra-constraints wildcard (`f :: _ => a ▸ Int`): what's
 // written is checked against the inferred type by unification (inferGraph.js),
 // named variables are rigid (they must stay distinct, unconstrained types),
-// `_` is left to inference, and class constraints are always inferred.
+// `_` is left to inference.
+//
+// Classes are nodes too, one level further up: a class is a predicate on
+// types (`Ord :: * ▸ Constraint`, `Functor :: (* ▸ *) ▸ Constraint`).
+// Dropped onto a variable of a signature it pins a constraint, `Ord a =>`,
+// kept on the body's Output node as `context: [{ cls, var }]`. The context
+// stays open, like GHC's `(Ord a, _) =>`: whatever else the body needs of
+// its variables is still inferred.
 import { DeclError, builtinTypeNames, parseTypeText } from './typeDecls.js'
+import { classArity, classNames, isUserClass, superclassesOf } from './prelude.js'
 import { constructorArity, createNamer, freshVar, tapp, tcon, tfun, userTypeArities } from './typeSystem.js'
 
 /** Whether a variable id is one inference made up (`t42`), rather than a name written in an annotation. */
@@ -212,4 +220,67 @@ export function pinAt(annotation, shown, path, sub) {
   if (slots[i] === undefined || below === undefined) return null
   const inner = pinAt(slots[i], below, rest, sub)
   return inner && fromTypeNode(head, slots.map((s, j) => (j === i ? inner : s)))
+}
+
+/** The variable names written in a type (holes aside). */
+export function namedVariables(type, out = new Set()) {
+  if (!type || isHole(type)) return out
+  if (type.kind === 'var') out.add(type.id)
+  else if (type.kind === 'fun') [type.from, type.to].forEach((t) => namedVariables(t, out))
+  else if (type.kind === 'app') [type.fn, type.arg].forEach((t) => namedVariables(t, out))
+  return out
+}
+
+/**
+ * The names an annotation gives the variables of an inferred type, where it
+ * has a named variable in the same place: `t3 ▸ [t4]` against `a ▸ _` gives
+ * `t3 → a`. Adds to (and returns) `out`.
+ */
+export function variableNames(shown, annotation, out = new Map()) {
+  if (!shown || !annotation || isHole(annotation)) return out
+  if (annotation.kind === 'var') {
+    if (shown.kind === 'var') out.set(shown.id, annotation.id)
+    return out
+  }
+  const a = typeNode(annotation)
+  const s = typeNode(shown)
+  if (a.head.kind === 'var' && s.head.kind === 'var' && a.slots.length === s.slots.length) out.set(s.head.id, a.head.id)
+  a.slots.forEach((t, i) => variableNames(s.slots[i], t, out))
+  return out
+}
+
+/**
+ * Where variable `id` occurs in `type` with `arity` type arguments — as a
+ * whole part (`a`, arity 0) or as the head of one (`f _`, arity 1): the path
+ * of that part, or null.
+ */
+export function occurrenceOf(type, id, arity, path = []) {
+  if (!type || isHole(type)) return null
+  const { head, slots } = typeNode(type)
+  if (head.kind === 'var' && head.id === id && slots.length === arity) return path
+  for (let i = 0; i < slots.length; i++) {
+    const found = occurrenceOf(slots[i], id, arity, [...path, i])
+    if (found) return found
+  }
+  return null
+}
+
+/** The classes a constraint can be built from, grouped for a palette — each with its kind (`* ▸ Constraint`). */
+export function classPalette() {
+  const groups = [
+    ['Comparing', ['Eq', 'Ord', 'Show', 'PartialOrd', 'Lattice']],
+    ['Numbers', ['Semiring', 'Ring', 'Field', 'OrderedRing', 'EuclideanRing', 'OrderedField', 'Transcendental', 'IEEEFloat']],
+    ['Algebra', ['Semigroup', 'Monoid', 'AddSemigroup', 'AddMonoid', 'AddCommutativeMonoid', 'AddGroup', 'AddAbelianGroup', 'MulSemigroup', 'MulMonoid', 'VectorSpace']],
+    ['Containers', ['Functor', 'Foldable']],
+  ]
+  const all = classNames()
+  const listed = new Set(groups.flatMap(([, names]) => names))
+  const entry = (name) => ({ name, arity: classArity(name), supers: superclassesOf(name), kind: `${classArity(name) ? '(* ▸ *)' : '*'} ▸ Constraint` })
+  const user = all.filter((n) => isUserClass(n))
+  const other = all.filter((n) => !listed.has(n) && !isUserClass(n))
+  return [
+    ...groups.map(([group, names]) => ({ group, items: names.filter((n) => all.includes(n)).map(entry) })),
+    ...(other.length ? [{ group: 'Other', items: other.map(entry) }] : []),
+    ...(user.length ? [{ group: 'Yours', items: user.map(entry) }] : []),
+  ].filter((g) => g.items.length)
 }

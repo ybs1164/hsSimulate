@@ -1,9 +1,9 @@
 import './style.css'
 import { applySubst, constructorArity, ftv, generalize, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
-import { annotationProblem, isInferredVar, chainOf, constructorWithHoles, headLabel, hole, isHole, pinAt, typeFromText, typeNode, typePalette, typeText } from './typeExpr.js'
+import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
-import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicClasses, setDynamicInstances } from './prelude.js'
+import { classArity, reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicClasses, setDynamicInstances } from './prelude.js'
 import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, showHead } from './classDecls.js'
 import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, renameTypeReferences, typeArities } from './typeDecls.js'
@@ -48,6 +48,7 @@ app.innerHTML = `
           <div id="type-palette"></div>
           <div id="type-library"></div>
           <div class="library-title types-title"><span>CLASSES</span><button class="add-class" aria-label="Declare a class" title="Declare a class — methods each instance implements">+</button></div>
+          <div id="class-palette"></div>
           <div id="class-library"></div>
           <div class="library-title types-title"><span>PRELUDE</span></div>
           <div id="prelude-library"></div>
@@ -876,6 +877,8 @@ function applyClassDraft() {
     next[d.name].methods.forEach((m) => { delete m.key })
     declareClasses(next, types, classLabelsTaken())
     if (old && classEditor.appliedDraft) renameMethodCalls(classEditor.appliedDraft, d)
+    // Signatures' pinned constraints follow a rename too.
+    if (old && old !== d.name) for (const body of Object.values(functionBodies)) for (const n of Object.values(body)) if (n.context) n.context = n.context.map((q) => (q.cls === old ? { ...q, cls: d.name } : q))
     applyTypes(types, next)
     classEditor.original = d.name
     classEditor.appliedDraft = structuredClone(d)
@@ -1023,6 +1026,7 @@ function renderClassEditor(error = '') {
     if (!name) return closeTypeEditor()
     const calls = [nodes, ...Object.values(functionBodies)].flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(`class:${name}:`)).length
     const users = Object.values(classes).filter((c) => c.name !== name && (c.supers.includes(name) || c.methods.some((m) => new RegExp(`\\b${name}\\b`).test(m.sig)) || c.instances.some((i) => (i.context || []).some((q) => q.cls === name)))).map((c) => c.name)
+    users.push(...Object.entries(functionBodies).filter(([, g]) => Object.values(g).some((n) => (n.context || []).some((q) => q.cls === name))).map(([id]) => `the signature of ${nodes[id]?.label ?? id}`))
     if (calls || users.length) return renderClassEditor(`${name} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${users.length ? ` by ${users.join(', ')}` : ''}`)
     const next = { ...classes }
     delete next[name]
@@ -1034,7 +1038,13 @@ function renderClassEditor(error = '') {
 }
 
 const classLibrary = document.querySelector('#class-library')
+// Classes in the workspace, as nodes: drag one onto a type variable of a
+// signature to constrain it (`Ord a ⇒`) — see constrainVariable.
+function classPaletteHtml() {
+  return classPalette().map((g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.join(', ')} ⇒ ` : ''}${it.name} :: ${it.kind} — drag onto a type variable of a signature to constrain it`)}"><span class="tn tn-class"><b>${escapeAttr(it.name)}</b></span></span>`).join('')}</div>`).join('')
+}
 function renderClassLibrary() {
+  document.querySelector('#class-palette').innerHTML = classPaletteHtml()
   const byClass = Object.groupBy(Object.values(classDefs), (def) => def.method.cls)
   classLibrary.innerHTML = Object.values(classes).map((c) => `
     <div class="type-entry">
@@ -1382,13 +1392,32 @@ function typeNodeHtml(t, namer, opts = {}, path = []) {
 // `bad` (why its annotation was refused), `applied` (a filled slot),
 // `editable`, `widths` (min widths, to line up under slots).
 function chainHtml(segments, namer, opts = {}) {
-  const context = opts.preds?.length ? `<span class="tc-ctx">${escapeAttr(showQual(opts.preds, tcon('_'), namer).split(' ⇒ ')[0])} ⇒</span>` : ''
+  const context = contextHtml(opts, namer)
   const whole = segments.slice(0, -1).reduceRight((acc, t) => tfun(t, acc), segments[segments.length - 1])
   return `<span class="type-chain${opts.big ? ' big' : ''}" title="${escapeAttr(showQual(opts.preds || [], whole, namer))}">${context}${segments.map((t, i) => {
     const cls = ['tc-seg', i === segments.length - 1 && 'tc-result', opts.pinned?.[i] && 'pinned', opts.bad?.[i] && 'bad', opts.applied?.[i] && 'applied', opts.editable?.[i] && 'editable'].filter(Boolean).join(' ')
     const title = opts.bad?.[i] || (opts.editable?.[i] ? (opts.pinned?.[i] ? `Pinned :: ${opts.pinned[i]} — drop a type here to change it, _ to un-pin` : 'Inferred — drop a type here (from TYPES) to pin it') : '')
     return `<span class="${cls}" data-seg="${i}"${title ? ` title="${escapeAttr(title)}"` : ''} style="--sc:${colorForType(t, namer)}${opts.widths?.[i] ? `;min-width:${opts.widths[i]}` : ''}">${opts.labels ? `<small class="tc-label">${escapeAttr(opts.labels[i] ?? '')}</small>` : ''}${typeNodeHtml(t, namer, { paths: opts.editable?.[i] })}</span>`
   }).join('')}</span>`
+}
+// A chain's class context, `(Ord a, Show b) ⇒`, one chip per constraint.
+// On a signature (`opts.context`, its pinned constraints) the pinned ones
+// come first, solid, each with × to un-pin; the rest are what the body
+// needs besides — inferred, and pinned with a click.
+function contextParts(opts) {
+  const pinned = opts.context || []
+  const isPinned = (p) => pinned.some((q) => q.varId && q.cls === p.cls && p.type.kind === 'var' && p.type.id === q.varId)
+  return { pinned, inferred: (opts.preds || []).filter((p) => !isPinned(p)) }
+}
+function contextHtml(opts, namer) {
+  const { pinned, inferred } = contextParts(opts)
+  const text = (p) => showQual([p], tcon('_'), namer).split(' ⇒ ')[0]
+  const chips = [
+    ...pinned.map((q, k) => `<span class="cc pinned${opts.contextBad ? ' bad' : ''}" data-ci="${k}" title="${escapeAttr(opts.contextBad || `Pinned: ${q.cls} ${q.var} — drop another class here to change it, _ to un-pin`)}">${escapeAttr(q.varId ? text(pred(q.cls, tvar(q.varId))) : `${q.cls} ${q.var}`)}<button class="cc-x" data-ci="${k}" title="Un-pin ${escapeAttr(`${q.cls} ${q.var}`)}">×</button></span>`),
+    ...inferred.map((p, k) => `<span class="cc${opts.context ? ' inferred' : ''}" data-pi="${k}"${opts.context ? ` title="Inferred — what the body needs. Click to pin it in the signature"` : ''}>${escapeAttr(text(p))}</span>`),
+  ]
+  if (!chips.length) return ''
+  return `<span class="tc-ctx">${chips.length > 1 ? '<i>(</i>' : ''}${chips.join('<i>,</i> ')}${chips.length > 1 ? '<i>)</i>' : ''} ⇒</span>`
 }
 /** A whole (qualified) type as a chain, for lists and labels. */
 function qualChainHtml(preds, type, namer = createNamer()) {
@@ -1406,18 +1435,42 @@ function chainInfo(node, pass) {
     const fnId = nodes[node.sourceFunctionId]?.lambda ? node.sourceFunctionId : node.id
     const owners = editable ? [...bodyParams(fnId), functionBodies[fnId]?.output] : []
     const problems = pass.annotations?.functions?.[fnId] || {}
+    const segments = [...entry.paramTypes, entry.resultType]
+    const names = signatureNames(segments, owners)
+    const byName = new Map([...names].map(([id, name]) => [name, id]))
     return {
-      segments: [...entry.paramTypes, entry.resultType],
+      fnId,
+      segments,
+      names,
       targets: owners.map((o) => (o ? { fnId, nodeId: o.id } : null)),
-      opts: { preds: entry.preds, pinned: owners.map((o) => o?.annotation), bad: owners.map((o) => o && problems[o.id]), applied: entry.applied, editable: owners.map(Boolean) },
+      opts: { preds: entry.preds, pinned: owners.map((o) => o?.annotation), bad: owners.map((o) => o && problems[o.id]), applied: entry.applied, editable: owners.map(Boolean), context: editable ? signatureContext(fnId).map((q) => ({ ...q, varId: byName.get(q.var) })) : null, contextBad: editable && problems.context },
     }
   }
   const pinnable = !!state.activeFunction && !viewingReadonly() && !nodes[state.activeFunction]?.library && (node.type === 'parameter' || node.type === 'output')
+  // Inside the body every parameter and Output is typed in one pass, so their annotations name its variables.
+  const owners = pinnable ? signatureOwners(state.activeFunction) : []
   return {
+    fnId: pinnable && state.activeFunction,
     segments: [valueTypeOfEntry(entry)],
+    names: signatureNames(owners.map((o) => pass.perNode.get(o.id) && valueTypeOfEntry(pass.perNode.get(o.id))), owners),
     targets: [pinnable ? { fnId: state.activeFunction, nodeId: node.id } : null],
     opts: { preds: entry.preds, pinned: [pinnable && node.annotation], bad: [pinnable && pass.annotations?.here?.[node.id]], editable: [pinnable] },
   }
+}
+// The body nodes that carry a function's signature: its parameters, then Output.
+function signatureOwners(fnId) {
+  return Object.values(functionBodies[fnId] || {}).filter((n) => n.type === 'parameter' || n.type === 'output').sort((a, b) => (a.type === 'output') - (b.type === 'output'))
+}
+function signatureOutput(fnId) { return Object.values(functionBodies[fnId] || {}).find((n) => n.type === 'output') }
+// The class constraints pinned in a function's signature: `[{ cls, var }]`, kept on its Output.
+function signatureContext(fnId) { return signatureOutput(fnId)?.context || [] }
+function parsedAnnotation(node) { try { return node?.annotation ? typeFromText(node.annotation) : hole() } catch { return hole() } }
+// The names a signature's annotations give the variables of the types its
+// owners are shown with: shown variable id → name (see typeExpr.js' variableNames).
+function signatureNames(shown, owners) {
+  const names = new Map()
+  shown.forEach((t, i) => { if (t && owners[i]?.annotation) variableNames(t, parsedAnnotation(owners[i]), names) })
+  return names
 }
 // Where a type node dragged from the workspace can land (see the type drag
 // below): an element, the type it shows, the type written there so far
@@ -1437,10 +1490,72 @@ function wireChain(el, info) {
       shown: info.segments[i],
       current: () => { try { const a = functionBodies[target.fnId]?.[target.nodeId]?.annotation; return a ? typeFromText(a) : hole() } catch { return hole() } },
       commit: (type) => { const problem = commitAnnotation(target.fnId, target.nodeId, typeText(type)); if (problem) showToast(problem) },
+      constrain: (path, cls) => constrainAt(info, i, path, cls),
     })
     seg.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
-    seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('Drag a type from TYPES in the workspace onto this chevron (or onto a part of it) — _ leaves it to inference') })
+    seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('Drag a type from TYPES in the workspace onto this chevron (or onto a part of it) — _ leaves it to inference. A class from CLASSES dropped on a type variable constrains it') })
   })
+  if (!info.opts.context) return
+  const { pinned, inferred } = contextParts(info.opts)
+  const stop = (chip) => chip.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
+  el.querySelectorAll('.tc-ctx .cc.pinned').forEach((chip) => {
+    const q = pinned[Number(chip.dataset.ci)]
+    const same = (c) => c.cls === q.cls && c.var === q.var
+    const unpin = () => editContext(info.fnId, (ctx) => ctx.filter((c) => !same(c)), `${q.cls} ${q.var} is un-pinned`)
+    stop(chip)
+    dropZone(chip, {
+      take: (sub) => (isHole(sub) ? unpin() : showToast('Drop a class here to change this constraint, or _ to un-pin it')),
+      constrain: (_, cls) => {
+        if (classArity(cls) !== classArity(q.cls)) return showToast(`${cls} and ${q.cls} constrain different kinds of type — drop ${cls} on a type variable instead`)
+        editContext(info.fnId, (ctx) => ctx.filter((c) => !(c.cls === cls && c.var === q.var)).map((c) => (same(c) ? { cls, var: q.var } : c)), `${q.cls} ${q.var} is now ${cls} ${q.var}`)
+      },
+    })
+    chip.querySelector('.cc-x').addEventListener('click', (event) => { event.stopPropagation(); unpin() })
+  })
+  el.querySelectorAll('.tc-ctx .cc.inferred').forEach((chip) => {
+    const p = inferred[Number(chip.dataset.pi)]
+    stop(chip)
+    const { head, slots } = typeNode(p.type)
+    if (head.kind !== 'var' || slots.length) return chip.classList.remove('inferred')
+    chip.addEventListener('click', (event) => { event.stopPropagation(); constrainVariable(info, head.id, p.cls) })
+  })
+}
+// Drop class `cls` onto the part at `path` of segment `i`: constrain the type variable there.
+function constrainAt(info, i, path, cls) {
+  const part = typeAt(info.segments[i], path)
+  const { head, slots } = typeNode(part)
+  const arity = classArity(cls)
+  if (head?.kind !== 'var' || isHole(part)) return showToast(`${typeText(part, labelNamer)} is a concrete type — it is ${cls} or not by its instances. Drop ${cls} on a type variable`)
+  if (slots.length !== arity) return showToast(arity ? `${cls} is a class of type constructors (* ▸ *), like Maybe — drop it on the f of an f a` : `${cls} is a class of types — drop it on the whole ${typeText(part, labelNamer)}`)
+  constrainVariable(info, head.id, cls)
+}
+// Pin `cls v` for the variable shown as `varId`. A variable the signature
+// doesn't name yet gets a name first — pinned where it's shown, just like
+// dropping that type variable there.
+function constrainVariable(info, varId, cls) {
+  const fnId = info.fnId
+  const arity = classArity(cls)
+  let name = info.names.get(varId)
+  const edits = {}
+  if (!name) {
+    const at = info.segments.findIndex((t, i) => info.targets[i] && occurrenceOf(t, varId, arity))
+    if (at < 0) return showToast(`${cls} can't constrain that variable here`)
+    const path = occurrenceOf(info.segments[at], varId, arity)
+    const owner = functionBodies[fnId]?.[info.targets[at].nodeId]
+    const taken = new Set(signatureOwners(fnId).flatMap((o) => [...namedVariables(parsedAnnotation(o))]))
+    name = [...(arity ? 'fghkmn' : 'abcdepqrsuvwxyz')].find((c) => !taken.has(c))
+    const next = name && owner && pinAt(parsedAnnotation(owner), info.segments[at], path, fromTypeNode(tvar(name), Array.from({ length: arity }, hole)))
+    if (!next) return showToast(`${cls} can't constrain that variable here — pin the type around it first`)
+    edits[owner.id] = typeText(next)
+  }
+  if (signatureContext(fnId).some((q) => q.cls === cls && q.var === name)) return showToast(`${cls} ${name} is already in the signature`)
+  editContext(fnId, (ctx) => [...ctx, { cls, var: name }], `Pinned ${cls} ${name} ⇒ in the signature of ${nodes[fnId]?.lambda ? 'λ' : nodes[fnId]?.label ?? 'it'}`, edits)
+}
+// Change a function's pinned class context (and, with `edits`, annotations
+// along with it) — kept only if inference accepts it.
+function editContext(fnId, change, message, edits = {}) {
+  const problem = commitSignature(fnId, edits, change(signatureContext(fnId)), { done: () => message, broken: `A call to ${nodes[fnId]?.label ?? 'it'} passes a type that doesn't fit — change that call first` })
+  if (problem) showToast(problem)
 }
 // The chains on the canvas: under each function block (lined up with its
 // slots) and each value chip. Hidden zoomed far out, like slot tags.
@@ -1482,7 +1597,7 @@ function drawSignatureBar() {
   signatureBar.hidden = !info
   if (!info) return
   const names = [...bodyParams(fnId).map((p) => p.label), 'result']
-  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'drag a type from TYPES onto a block'}</span>`
+  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'drag a type from TYPES onto a block, a class from CLASSES onto a type variable'}</span>`
   wireChain(signatureBar, info)
 }
 
@@ -1515,11 +1630,12 @@ function typeDropTarget(x, y) {
 function startTypeDrag(chip, event) {
   if (readonlyBlocked()) return
   event.preventDefault()
-  const sub = chip.dataset.con ? constructorWithHoles(chip.dataset.con) : chip.dataset.var ? tvar(chip.dataset.var) : hole()
+  const cls = chip.dataset.cls
+  const sub = cls ? null : chip.dataset.con ? constructorWithHoles(chip.dataset.con) : chip.dataset.var ? tvar(chip.dataset.var) : hole()
   const ghost = chip.cloneNode(true)
   ghost.classList.add('type-ghost')
   document.body.append(ghost)
-  typeDrag = { sub, ghost, start: { x: event.clientX, y: event.clientY }, moved: false, over: null }
+  typeDrag = { sub, cls, ghost, start: { x: event.clientX, y: event.clientY }, moved: false, over: null }
   document.body.classList.add('type-dragging')
   moveTypeDrag(event)
 }
@@ -1535,14 +1651,15 @@ function moveTypeDrag(event) {
   typeDrag.over = drop
 }
 function endTypeDrag(event) {
-  const { sub, ghost, moved } = typeDrag
+  const { sub, cls, ghost, moved } = typeDrag
   const drop = event && typeDropTarget(event.clientX, event.clientY)
   typeDrag.over?.el.classList.remove('drop-over')
   ghost.remove()
   typeDrag = null
   document.body.classList.remove('type-dragging')
-  if (drop) dropType(drop.zone, drop.path, sub)
-  else if (event && !moved) showToast('Drag a type onto a chevron of a signature to pin it')
+  if (drop && cls) drop.zone.constrain ? drop.zone.constrain(drop.path, cls) : showToast(`A class constrains a type variable of a signature — drop ${cls} on one`)
+  else if (drop) dropType(drop.zone, drop.path, sub)
+  else if (event && !moved) showToast(cls ? `Drag ${cls} onto a type variable of a signature to constrain it` : 'Drag a type onto a chevron of a signature to pin it')
 }
 document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
 window.addEventListener('pointermove', (event) => { if (typeDrag) moveTypeDrag(event) })
@@ -1550,14 +1667,18 @@ window.addEventListener('pointerup', (event) => { if (typeDrag) endTypeDrag(even
 window.addEventListener('pointercancel', () => { if (typeDrag) endTypeDrag(null) })
 // Put `sub` at `path` of what a drop zone holds (see typeExpr.js' pinAt).
 function dropType(zone, path, sub) {
+  if (zone.take) return zone.take(sub)
   const next = pinAt(zone.current(), zone.shown, path, sub)
   if (!next) return showToast('That part can only be set with the whole type — drop it on the whole slot')
   zone.commit(next)
 }
-// How many edges, in `fnId`'s body and the graphs that call it, don't type-check.
-function brokenEdgesAround(fnId) {
+// How many type errors there are in `fnId`'s body and the graphs that call
+// it: edges that don't unify, and constraints no instance meets (a call
+// passing Bool where the signature pins Semiring a).
+function typeErrorsAround(fnId) {
+  const unmet = (p) => { try { reduce([p]); return false } catch { return true } }
   const graphs = [nodes, ...Object.values(functionBodies)].filter((g) => g === functionBodies[fnId] || Object.values(g).some((n) => n.type === 'function' && n.sourceFunctionId === fnId))
-  return graphs.reduce((sum, g) => sum + inferGraph(definitions, functionBodies, g).brokenEdges.length, 0)
+  return graphs.reduce((sum, g) => { const pass = inferGraph(definitions, functionBodies, g); return sum + pass.brokenEdges.length + pass.preds.filter(unmet).length }, 0)
 }
 // Pin `text` as the annotation of body node `nodeId` (`_` removes it) — kept
 // only if inference accepts it and no call to the function stops
@@ -1565,21 +1686,42 @@ function brokenEdgesAround(fnId) {
 function commitAnnotation(fnId, nodeId, text) {
   const target = functionBodies[fnId]?.[nodeId]
   if (!target) return ''
-  const before = target.annotation
-  const brokenBefore = brokenEdgesAround(fnId)
-  if (!text || text === '_') delete target.annotation
-  else target.annotation = text
-  let problem = target.annotation ? annotationProblem(target.annotation) || inferGraph(definitions, functionBodies, functionBodies[fnId]).annotations.here[nodeId] || '' : ''
-  if (!problem && brokenEdgesAround(fnId) > brokenBefore) problem = `Something plugged into a call to ${nodes[fnId]?.label ?? 'it'} doesn't fit ${text} — change that call first`
+  const label = target.type === 'output' ? 'the result' : target.label
+  return commitSignature(fnId, { [nodeId]: text }, null, {
+    done: () => (target.annotation ? `Pinned ${label} :: ${target.annotation}` : `${label[0].toUpperCase()}${label.slice(1)} is inferred again`),
+    broken: `Something plugged into a call to ${nodes[fnId]?.label ?? 'it'} doesn't fit ${text} — change that call first`,
+  })
+}
+// Change a function's signature: `edits` are annotation texts by body node
+// id (`_` removes one), `context` its pinned class context (null: as it is).
+// A constraint on a variable no annotation names any more goes too. Kept
+// only if inference accepts it and no call to the function stops
+// type-checking; else rolled back. Returns why not, or ''.
+function commitSignature(fnId, edits, context, messages) {
+  const body = functionBodies[fnId]
+  const output = signatureOutput(fnId)
+  if (!body || !output) return ''
+  const before = Object.fromEntries(Object.keys(edits).map((id) => [id, body[id]?.annotation]))
+  const contextBefore = output.context
+  const hereBefore = inferGraph(definitions, functionBodies, body).annotations.here
+  const errorsBefore = typeErrorsAround(fnId)
+  const set = (node, key, value) => { if (value === undefined || value === null || value === '' || value === '_' || (Array.isArray(value) && !value.length)) delete node[key]; else node[key] = value }
+  for (const [id, text] of Object.entries(edits)) if (body[id]) set(body[id], 'annotation', text)
+  const named = new Set(signatureOwners(fnId).flatMap((o) => [...namedVariables(parsedAnnotation(o))]))
+  const wanted = context ?? output.context ?? []
+  const gone = wanted.filter((q) => !named.has(q.var))
+  set(output, 'context', wanted.filter((q) => named.has(q.var)))
+  const here = inferGraph(definitions, functionBodies, body).annotations.here
+  let problem = Object.keys(edits).map((id) => (body[id]?.annotation ? annotationProblem(body[id].annotation) || here[id] || '' : '')).find(Boolean) || (here.context !== hereBefore.context && here.context) || ''
+  if (!problem && typeErrorsAround(fnId) > errorsBefore) problem = messages.broken
   if (problem) {
-    if (before === undefined) delete target.annotation
-    else target.annotation = before
+    for (const [id, text] of Object.entries(before)) if (body[id]) set(body[id], 'annotation', text)
+    set(output, 'context', contextBefore)
     return problem
   }
-  if (target.annotation === before) return ''
-  const label = target.type === 'output' ? 'the result' : target.label
+  if (Object.entries(before).every(([id, text]) => body[id]?.annotation === text) && JSON.stringify(output.context) === JSON.stringify(contextBefore)) return ''
   renderFunctionLibrary(); updateInspector(); draw()
-  showToast(target.annotation ? `Pinned ${label} :: ${target.annotation}` : `${label[0].toUpperCase()}${label.slice(1)} is inferred again`)
+  showToast(`${messages.done()}${gone.length ? ` (${gone.map((q) => `${q.cls} ${q.var}`).join(', ')} went with it)` : ''}`)
   return ''
 }
 function canConnect(source, target, index) {

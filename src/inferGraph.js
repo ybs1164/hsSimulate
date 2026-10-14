@@ -37,7 +37,13 @@
 //   segment. After the body is inferred, each is unified with what the body
 //   made of that node; a mismatch, a class the pinned type lacks, or a named
 //   variable that the body specializes (signature variables are rigid) is
-//   reported on that node, and that annotation is left out.
+//   reported on that node, and that annotation is left out. The Output node
+//   may also carry the signature's pinned class context (`context: [{ cls,
+//   var }]`, `Ord a =>`): each becomes one of the body's own constraints on
+//   that signature variable, so it stays in the function's type (callers
+//   must satisfy it) even where the body doesn't need it. Constraints the
+//   body needs beyond those are still inferred (an extra-constraints
+//   wildcard, `(Ord a, _) =>`).
 // - Conversions into the numeric tower (`fromInteger`, `fromIntegral`,
 //   `round` …, `fromRational`, `realToFrac`) are elaborated with their result
 //   type when it is a user type: the evaluator then builds the value by that
@@ -46,9 +52,9 @@
 //   whatever ring it later meets, like a literal.
 import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, unify, scheme } from './typeSystem.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
-import { evidence, isUserClass, literalClass, numericTypes, pickDefault, reduce } from './prelude.js'
+import { classArity, evidence, isClass, isUserClass, literalClass, numericTypes, pickDefault, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
-import { annotationType, typeText } from './typeExpr.js'
+import { annotationType, typeFromText, typeText } from './typeExpr.js'
 
 const Int = tcon('Int')
 const Bool = tcon('Bool')
@@ -163,6 +169,16 @@ function annotate(ctx, graph, memo, predsStart) {
       pinnedBy.set(name, n.id)
     }
   }
+  // The pinned class context: constraints the function's type carries.
+  const output = Object.values(graph).find((n) => n.type === 'output')
+  for (const q of output?.context || []) {
+    const v = names.get(q.var)
+    if (!isClass(q.cls)) problems.context ??= `There is no class ${q.cls}`
+    else if (!v) problems.context ??= `${q.cls} ${q.var}: ${q.var} isn't a variable of the signature`
+    else if (!usedAtKind(graph, q.var, classArity(q.cls))) problems.context ??= `${q.cls} ${q.var}: ${q.cls} is a class of ${classArity(q.cls) ? 'type constructors (like Maybe)' : 'types'}, but the signature uses ${q.var} as ${classArity(q.cls) ? 'a type' : 'a type constructor'}`
+    else if (satisfiable([...ctx.preds.slice(predsStart), pred(q.cls, v)], ctx.subst)) ctx.preds.push(pred(q.cls, v))
+    else problems.context ??= `${q.cls} ${q.var} can't hold: the body makes ${q.var} ${show(applySubst(ctx.subst, v))}`
+  }
   // Signature variables are rigid: each must still be a variable of its own.
   const seen = new Map()
   for (const [name, v] of names) {
@@ -173,6 +189,26 @@ function annotate(ctx, graph, memo, predsStart) {
     else seen.set(t.id, name)
   }
   return problems
+}
+
+/** Whether the annotations of `graph` use variable `name` with `arity` type arguments (`f a` for 1, a bare `a` for 0) somewhere. */
+function usedAtKind(graph, name, arity) {
+  return Object.values(graph).some((n) => (n.type === 'parameter' || n.type === 'output') && n.annotation && annotationUses(n.annotation, name, arity))
+}
+
+/** Whether type text `text` uses variable `name` with `arity` arguments. */
+function annotationUses(text, name, arity) {
+  const go = (t, args) => {
+    if (t.kind === 'var') return t.id === name && args === arity
+    if (t.kind === 'fun') return go(t.from, 0) || go(t.to, 0)
+    if (t.kind === 'app') return go(t.fn, args + 1) || go(t.arg, 0)
+    return false
+  }
+  try {
+    return go(typeFromText(text), 0)
+  } catch {
+    return false
+  }
 }
 
 /** Record that `graph[id]`'s slot `index` holds an inline literal that doesn't fit the slot. */

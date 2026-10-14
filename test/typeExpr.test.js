@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { annotationProblem, annotationType, chainOf, constructorWithHoles, firstHole, hole, pinAt, replaceAt, typeAt, typeFromText, typeNode, typeText } from '../src/typeExpr.js'
+import { annotationProblem, annotationType, chainOf, constructorWithHoles, firstHole, hole, namedVariables, occurrenceOf, pinAt, variableNames, replaceAt, typeAt, typeFromText, typeNode, typeText } from '../src/typeExpr.js'
 import { inferGraph } from '../src/inferGraph.js'
+import { entails } from '../src/prelude.js'
 import { setUserTypeArities, showQual, showType, tcon, tfun, tlist, tvar } from '../src/typeSystem.js'
 
 test('a function type is its curried chain of segments', () => {
@@ -135,4 +136,52 @@ test('dropping a type node onto a part pins only what leads to it', () => {
   assert.equal(typeText(pinAt(typeFromText('Maybe _'), shown, [0], hole())), 'Maybe _')
   assert.equal(typeText(pinAt(hole(), typeFromText('a -> [b]'), [1, 0], tvar('a'))), '_ -> [a]')
   assert.equal(pinAt(hole(), shown, [0, 2], tcon('Int')), null)
+})
+
+test('a pinned class constraint stays in the type even where the body needs less', () => {
+  // f :: Ord a => a -> a; f x = x
+  const body = { x: param('x', 'x', 'a'), output: { id: 'output', type: 'output', source: 'x', context: [{ cls: 'Ord', var: 'a' }] } }
+  const { pass, text } = schemeOf(project(body))
+  assert.equal(text, 'Ord a ⇒ a → a')
+  assert.deepEqual(pass.annotations.functions.f ?? {}, {})
+})
+
+test('the context stays open: what the body needs besides is still inferred, and reduced against it', () => {
+  // f x = x + x, pinned x :: a with Ring a — Ring already gives AddSemigroup
+  const body = { x: param('x', 'x', 'a'), x2: { id: 'x2', type: 'ref', target: 'x' }, plus: call('plus', 'plus', ['x', 'x2']), output: { id: 'output', type: 'output', source: 'plus', context: [{ cls: 'Ring', var: 'a' }] } }
+  assert.equal(schemeOf(project(body)).text, 'Ring a ⇒ a → a')
+  body.output.context = [{ cls: 'Show', var: 'a' }]
+  assert.match(schemeOf(project(body)).text, /^\((AddSemigroup a, Show a|Show a, AddSemigroup a)\) ⇒ a → a$/)
+})
+
+test('a constraint must name a variable of the signature, at the right kind', () => {
+  const body = { x: param('x', 'x', 'a'), output: { id: 'output', type: 'output', source: 'x', context: [{ cls: 'Eq', var: 'b' }] } }
+  assert.match(schemeOf(project(body)).pass.annotations.functions.f.context, /b isn't a variable of the signature/)
+  body.output.context = [{ cls: 'Functor', var: 'a' }]
+  assert.match(schemeOf(project(body)).pass.annotations.functions.f.context, /class of type constructors/)
+  body.x.annotation = 'f Int'
+  body.output.context = [{ cls: 'Functor', var: 'f' }]
+  const { pass, text } = schemeOf(project(body))
+  assert.equal(text, 'Functor a ⇒ a Int → a Int')
+  assert.deepEqual(pass.annotations.functions.f ?? {}, {})
+})
+
+test('a call must satisfy the pinned context', () => {
+  const body = { x: param('x', 'x', 'a'), output: { id: 'output', type: 'output', source: 'x', context: [{ cls: 'Semiring', var: 'a' }] } }
+  const p = project(body)
+  p.nodes.t = { id: 't', type: 'boolean', value: 'True', label: 'True', mountedTo: 'c:0' }
+  p.nodes.c = { id: 'c', type: 'function', label: 'f', sourceFunctionId: 'f', params: [''], mounted: ['t'] }
+  const unmet = () => inferGraph(p.nodes, p.bodies, p.nodes).preds.filter((q) => !entails([], q) && q.type.kind !== 'var').map((q) => `${q.cls} ${showType(q.type)}`)
+  assert.deepEqual(unmet(), ['Semiring Bool'])
+  delete body.output.context
+  assert.deepEqual(unmet(), [])
+})
+
+test('variables of an inferred type are matched to the names an annotation gives them', () => {
+  const names = variableNames(typeFromText('t3 -> [t4] -> f5 t3'), typeFromText('a -> _ -> g _'))
+  assert.deepEqual([...names], [['t3', 'a'], ['f5', 'g']])
+  assert.deepEqual(occurrenceOf(typeFromText('Int -> Maybe (f a)'), 'f', 1), [1, 0])
+  assert.deepEqual(occurrenceOf(typeFromText('Int -> Maybe (f a)'), 'a', 0), [1, 0, 0])
+  assert.equal(occurrenceOf(typeFromText('Int -> Maybe (f a)'), 'f', 0), null)
+  assert.deepEqual([...namedVariables(typeFromText('a -> _ -> Maybe b'))], ['a', 'b'])
 })
