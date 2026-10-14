@@ -102,6 +102,16 @@ async function clickNode(nodeId, extra = {}) {
 
 // ---- UI actions ----
 const setField = (sel, value, event = 'change') => js(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event(${JSON.stringify(event)})) })()`)
+// Drag a type node from the workspace's TYPES (the chip with attribute `chipAttr`) onto element `toExpr`, with the real mouse.
+async function dragType(chipAttr, toExpr) {
+  const from = `document.querySelector('#type-palette .type-chip[${chipAttr}]')`
+  await js(`[${from}, ${toExpr}].forEach((el) => el.scrollIntoView({ block: 'nearest', behavior: 'instant' }))`)
+  const at = async (expr) => { const r = JSON.parse(await js(`JSON.stringify(${expr}.getBoundingClientRect())`)); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } }
+  const p = await at(from), q = await at(toExpr)
+  await mouse('mousePressed', p.x, p.y)
+  for (let k = 1; k <= 6; k++) { await mouse('mouseMoved', p.x + ((q.x - p.x) * k) / 6, p.y + ((q.y - p.y) * k) / 6); await sleep(20) }
+  await mouse('mouseReleased', q.x, q.y); await sleep(350)
+}
 const editorStatus = () => js(`document.querySelector('.te-status').textContent`)
 async function declareRecordType(name, fields) {
   await js(`document.querySelector('.add-type').click()`); await sleep(250)
@@ -109,7 +119,7 @@ async function declareRecordType(name, fields) {
   for (const [i, [fname, ftype]] of fields.entries()) {
     await js(`document.querySelector('[data-te="add-field"]').click()`); await sleep(120)
     await setField(`.te-fname[data-fi="${i}"]`, fname); await sleep(100)
-    await setField(`.te-ftype[data-fi="${i}"]`, ftype); await sleep(100)
+    if (ftype !== 'Double') await dragType(`data-con="${ftype}"`, `document.querySelector('.te-ftype[data-fi="${i}"]')`) // a new field starts as Double
   }
   const status = await editorStatus()
   await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
@@ -309,6 +319,23 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(p.nodes[stepId].label === 'tick' && callLabels.length && callLabels.every((l) => l === 'tick'), `${p.nodes[stepId].label} / ${callLabels}`)
     return `step → tick (${callLabels.length} call)`
   })
+  await check('the type editor reads as a data declaration; field types are dragged in', async () => {
+    await js(`document.querySelector('.add-type').click()`); await sleep(250)
+    await setField('.te-name', 'Shape'); await sleep(150)
+    await js(`document.querySelector('[data-te="add-field"]').click()`); await sleep(150)
+    await dragType('data-con="Maybe"', `document.querySelector('.te-ftype[data-fi="0"]')`)
+    const waiting = await editorStatus()
+    await dragType('data-con="Int"', `document.querySelector('.te-ftype[data-fi="0"] .tn-hole')`)
+    await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(200)
+    const source = await js(`[...document.querySelectorAll('.hs-decl .hs-line')].map((l) => [...l.querySelectorAll('select, input, .hs-op, .hs-punct, .te-ftype')].map((e) => e.value ?? e.textContent).join(' ')).join(' / ')`)
+    const p = await project()
+    const status = await editorStatus()
+    await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
+    expect(status.includes('applied'), status)
+    expect(/Fill each _/.test(waiting), waiting)
+    expect(/= Shape MaybeInt/.test(source) && /^data Shape/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && !p.types.Shape.constructors[0].fields[0].name, source)
+    return source.split(' / ').slice(0, 2).join(' ')
+  })
   await check('a type with a parameter', async () => {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
     await setField('.te-name', 'Box'); await sleep(150)
@@ -455,21 +482,9 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const chain = () => js(`document.querySelector('#inspector-content .type-chain').title`)
     const annotations = async () => Object.values((await project()).functionBodies[fnId]).filter((n) => n.annotation).map((n) => `${n.type}:${n.annotation}`).sort().join(' ')
     const inferred = await chain()
-    const center = async (expr) => {
-      const r = JSON.parse(await js(`JSON.stringify(${expr}.getBoundingClientRect())`))
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
-    }
-    const chip = (attr) => `document.querySelector('#type-palette .type-chip[${attr}]')`
+    const chip = (attr) => attr
     const segment = (i, part = '') => `document.querySelectorAll('#inspector-content .type-chain > .tc-seg.editable')[${i}]${part ? `.querySelector('${part}')` : ''}`
-    // a drag with the real mouse: press on the chip in the sidebar, move, release over the chevron (or a part of it)
-    const drag = async (from, to) => {
-      await js(`[${from}, ${to}].forEach((el) => el.scrollIntoView({ block: 'nearest', behavior: 'instant' }))`)
-      const p = await center(from)
-      const q = await center(to)
-      await mouse('mousePressed', p.x, p.y)
-      for (let k = 1; k <= 6; k++) { await mouse('mouseMoved', p.x + ((q.x - p.x) * k) / 6, p.y + ((q.y - p.y) * k) / 6); await sleep(20) }
-      await mouse('mouseReleased', q.x, q.y); await sleep(350)
-    }
+    const drag = dragType
     const toast = () => js(`document.querySelector('#toast')?.textContent ?? ''`)
     // x :: Double — one drop on the parameter's chevron
     await drag(chip('data-con="Double"'), segment(0))

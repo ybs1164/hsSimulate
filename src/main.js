@@ -488,10 +488,12 @@ function resetDerivedFunction(id) {
   renderFunctionLibrary(); updateInspector(); draw()
 }
 // --- Type editor -------------------------------------------------------------
-// A type is shown and edited as what defines it: its constructor functions.
-// Each constructor is drawn like a function block whose fields are written
-// inside it (`clicks :: Double`), with the resulting signature underneath
-// (`Model :: Double → Model`). Every edit is turned back into a Haskell
+// A type is shown and edited as its Haskell declaration, an algebraic data
+// type: `data Shape a = Circle { r :: Double } | Poly [a] deriving (…)` —
+// a line per constructor (`|`: a value is one of them, a sum), each with its
+// fields (a product), named (record syntax) or not. A field's type is a slot
+// for the same type nodes as a signature, dragged from TYPES; a constructor's
+// comment is its type as a function (`-- Circle :: Double ▸ Shape a`). Every edit is turned back into a Haskell
 // declaration (typeDecls.js' draftToSource) and checked by declareTypes; a
 // valid edit applies at once (undoable), an invalid one shows why and waits.
 //
@@ -654,34 +656,51 @@ function renderTypeEditor(error = '') {
     return def ? qualChainHtml(def.scheme.preds, def.scheme.type) : ''
   }
   const derived = applied ? Object.values(derivedDefs).filter((def) => def.derived.type === typeEditor.original && !def.primitive && def.derived.op !== 'construct') : []
+  const namer = createNamer()
+  // A field's type, as type nodes (a slot of the same type drag as signatures); text that doesn't parse yet is shown as is.
+  const fieldType = (f) => { try { return typeFromText(f.type || '_') } catch { return null } }
+  const derivingText = applied ? applied.deriving.filter((c) => c.classes.length).map((c) => `deriving${c.strategy === 'stock' ? '' : ` ${c.strategy}`} (${c.classes.join(', ')})`).join(' ') : ''
+  const field = (c, f, fi, record) => {
+    const t = fieldType(f)
+    return `<span class="te-field">${record ? `<input class="te-fname" data-fi="${fi}" value="${escapeAttr(f.name)}" placeholder="name" spellcheck="false" /><i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`
+  }
   typePanel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
-      <select class="te-keyword" title="data: any constructors · newtype: exactly one constructor with one field"><option ${d.keyword === 'data' ? 'selected' : ''}>data</option><option ${d.keyword === 'newtype' ? 'selected' : ''}>newtype</option></select>
-      <input class="te-name" value="${escapeAttr(d.name)}" title="Type name" spellcheck="false" />
-      <input class="te-params" value="${escapeAttr((d.params || []).join(' '))}" placeholder="a b …" title="Type parameters, space-separated: data Pair a = Pair a a" spellcheck="false" />
       <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
       <button class="tool-button" data-te="delete">Delete type</button>
       <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
     </div>
     <div class="type-body">
-      <p class="te-hint">A type is its constructors — each one a function into the type.</p>
-      ${d.constructors.map((c, ci) => `
-        <div class="te-ctor" data-ci="${ci}">
-          <span class="te-head">ƒ</span>
-          <input class="te-cname" value="${escapeAttr(c.name)}" title="Constructor name" spellcheck="false" />
-          ${c.fields.map((f, fi) => `<span class="te-field"><input class="te-fname" data-fi="${fi}" value="${escapeAttr(f.name)}" placeholder="name" spellcheck="false" /><i>::</i><input class="te-ftype" data-fi="${fi}" value="${escapeAttr(f.type)}" placeholder="Type" spellcheck="false" /><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`).join('')}
-          <button class="te-add" data-te="add-field" title="Add a field">+</button>
-          ${d.constructors.length > 1 ? '<button class="te-x te-drop-ctor" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
-          <div class="te-sig">${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</div>
-        </div>`).join('')}
-      <button class="use-again te-add-ctor" data-te="add-ctor">+ constructor (one of these, or another)</button>
+      <div class="hs-decl">
+        <div class="hs-line hs-head">
+          <select class="te-keyword" title="data: any constructors · newtype: exactly one constructor with one field"><option ${d.keyword === 'data' ? 'selected' : ''}>data</option><option ${d.keyword === 'newtype' ? 'selected' : ''}>newtype</option></select>
+          <input class="te-name" value="${escapeAttr(d.name)}" title="Type name" spellcheck="false" />
+          <input class="te-params" value="${escapeAttr((d.params || []).join(' '))}" placeholder="a b …" title="Type parameters, space-separated: data Pair a = Pair a a" spellcheck="false" />
+        </div>
+        ${d.constructors.map((c, ci) => {
+          const record = c.fields.some((f) => f.name)
+          return `
+        <div class="hs-line te-ctor" data-ci="${ci}">
+          <span class="hs-op">${ci ? '|' : '='}</span>
+          <input class="te-cname" value="${escapeAttr(c.name)}" title="Constructor name — a value of ${escapeAttr(d.name)} is made by exactly one of its constructors" spellcheck="false" />
+          ${record ? '<span class="hs-punct">{</span>' : ''}${c.fields.map((f, fi) => field(c, f, fi, record)).join(record ? '<span class="hs-punct">,</span>' : '')}<button class="te-add" data-te="add-field" title="Add a field">+</button>${record ? '<span class="hs-punct">}</span>' : ''}
+          ${c.fields.length ? `<button class="te-mode${record ? ' on' : ''}" data-te="toggle-record" title="${record ? 'Record syntax: Con { name :: A } — click for unnamed fields, Con A' : 'Unnamed fields: Con A — click for record syntax, Con { name :: A }'}">{ record }</button>` : ''}
+          ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
+          <span class="hs-comment te-sig">-- ${escapeAttr(c.name)} ::&nbsp;${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</span>
+        </div>`
+        }).join('')}
+        <div class="hs-line"><span class="hs-op">|</span><button class="te-add-ctor" data-te="add-ctor" title="Another constructor: a value is one of them">+ constructor</button></div>
+        ${derivingText ? `<div class="hs-line hs-deriving" title="Derived by itself whenever the fields allow">${escapeAttr(derivingText)}</div>` : ''}
+      </div>
+      <p class="te-hint">Like a Haskell <code>data</code> declaration: a value of ${escapeAttr(d.name)} is made by one of its constructors (<code>|</code> — a sum), each holding its fields (a product). A constructor is also the function that builds the value, shown in its comment. Drag types from TYPES onto the fields.</p>
       ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => {
         const custom = nodes[def.id]?.override
         const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
         return `<div class="te-derived"><b>${escapeAttr(def.label)}</b> ${chainOfDef(def.id)} ${custom ? `<i class="customized">✎ custom${changed ? '' : ' (unchanged)'}</i> <button class="law-check" data-edit="${def.id}">Edit body →</button> <button class="law-check" data-reset="${def.id}" title="Back to the derived definition">Reset</button>` : `<button class="law-check" data-edit="${def.id}" title="Redefine it with a body of your own (starting from ${escapeAttr(primLabel(def.label))})">Customize ✎</button>`}</div>`
       }).join('')}</div>` : ''}
     </div>`
-  const update = (mutate) => { mutate(d); renderTypeEditor(applyTypeDraft()) }
+  // Every _ must be filled before the declaration can apply.
+  const update = (mutate) => { mutate(d); renderTypeEditor(d.constructors.some((c) => c.fields.some((f) => /(^|[^\w'])_(?![\w'])/.test(f.type))) ? 'Fill each _ in a field — drag a type into it' : applyTypeDraft()) }
   const $ = (sel) => typePanel.querySelector(sel)
   $('.te-keyword').onchange = (e) => update(() => { d.keyword = e.target.value; if (d.keyword !== 'newtype') d.deriving.newtype = [] })
   $('.te-name').onchange = (e) => update(() => {
@@ -700,7 +719,22 @@ function renderTypeEditor(error = '') {
     const c = d.constructors[Number(row.dataset.ci)]
     row.querySelector('.te-cname').onchange = (e) => update(() => { c.name = e.target.value.trim() })
     row.querySelectorAll('.te-fname').forEach((input) => { input.onchange = () => update(() => { c.fields[Number(input.dataset.fi)].name = input.value.trim() }) })
-    row.querySelectorAll('.te-ftype').forEach((input) => { input.onchange = () => update(() => { c.fields[Number(input.dataset.fi)].type = input.value.trim() }) })
+    row.querySelectorAll('.te-ftype').forEach((slot) => {
+      const fl = c.fields[Number(slot.dataset.fi)]
+      let shown = hole()
+      try { shown = typeFromText(fl.type || '_') } catch {}
+      dropZone(slot, { shown, current: () => shown, commit: (type) => update(() => { fl.type = typeText(type) }) })
+    })
+    row.querySelector('[data-te="toggle-record"]')?.addEventListener('click', () => update(() => {
+      const record = c.fields.some((f) => f.name)
+      const taken = new Set(d.constructors.flatMap((o) => o.fields.map((f) => f.name)).filter(Boolean))
+      c.fields.forEach((f) => {
+        if (record) return void (f.name = '')
+        let k = 1
+        while (taken.has(`field${k}`)) k++
+        taken.add(f.name = `field${k}`)
+      })
+    }))
     row.querySelectorAll('[data-te="drop-field"]').forEach((b) => { b.onclick = () => update(() => { c.fields.splice(Number(b.dataset.fi), 1) }) })
     row.querySelector('[data-te="add-field"]').onclick = () => update(() => {
       const record = c.fields.some((f) => f.name)
@@ -1328,15 +1362,25 @@ function chainInfo(node, pass) {
     opts: { preds: entry.preds, pinned: [pinnable && node.annotation], bad: [pinnable && pass.annotations?.here?.[node.id]], editable: [pinnable] },
   }
 }
-// Mark the editable segments of a rendered chain (inside `el`) as drop
-// targets for type nodes dragged from the workspace (see the type drag below).
-const segmentTargets = new WeakMap() // segment element → { fnId, nodeId, shown }
+// Where a type node dragged from the workspace can land (see the type drag
+// below): an element, the type it shows, the type written there so far
+// (holes where nothing is), and what to do with the new one.
+const dropZones = new WeakMap() // element → { shown, current(), commit(type) }
+function dropZone(el, zone) {
+  dropZones.set(el, zone)
+  el.classList.add('drop-zone')
+}
+// The editable segments of a rendered chain (inside `el`) pin its annotation.
 function wireChain(el, info) {
   el.querySelectorAll('.type-chain > .tc-seg.editable').forEach((seg) => {
     const i = Number(seg.dataset.seg)
     const target = info.targets[i]
     if (!target) return
-    segmentTargets.set(seg, { ...target, shown: info.segments[i] })
+    dropZone(seg, {
+      shown: info.segments[i],
+      current: () => { try { const a = functionBodies[target.fnId]?.[target.nodeId]?.annotation; return a ? typeFromText(a) : hole() } catch { return hole() } },
+      commit: (type) => { const problem = commitAnnotation(target.fnId, target.nodeId, typeText(type)); if (problem) showToast(problem) },
+    })
     seg.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
     seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('Drag a type from TYPES in the workspace onto this chevron (or onto a part of it) — _ leaves it to inference') })
   })
@@ -1404,12 +1448,12 @@ function typePaletteHtml() {
 let typeDrag = null // { sub, ghost, start, moved, over }
 function typeDropTarget(x, y) {
   const el = document.elementFromPoint(x, y)
-  const seg = el?.closest?.('.type-chain > .tc-seg.editable')
-  const target = seg && segmentTargets.get(seg)
-  if (!target) return null
+  const zoneEl = el?.closest?.('.drop-zone')
+  const zone = zoneEl && dropZones.get(zoneEl)
+  if (!zone) return null
   const part = el.closest('[data-path]')
-  const inside = part && seg.contains(part)
-  return { target, path: inside && part.dataset.path ? part.dataset.path.split('.').map(Number) : [], el: inside ? part : seg }
+  const inside = part && zoneEl.contains(part)
+  return { zone, path: inside && part.dataset.path ? part.dataset.path.split('.').map(Number) : [], el: inside ? part : zoneEl }
 }
 function startTypeDrag(chip, event) {
   if (readonlyBlocked()) return
@@ -1440,23 +1484,18 @@ function endTypeDrag(event) {
   ghost.remove()
   typeDrag = null
   document.body.classList.remove('type-dragging')
-  if (drop) pinSegmentPart(drop.target, drop.path, sub)
+  if (drop) dropType(drop.zone, drop.path, sub)
   else if (event && !moved) showToast('Drag a type onto a chevron of a signature to pin it')
 }
 document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
 window.addEventListener('pointermove', (event) => { if (typeDrag) moveTypeDrag(event) })
 window.addEventListener('pointerup', (event) => { if (typeDrag) endTypeDrag(event) })
 window.addEventListener('pointercancel', () => { if (typeDrag) endTypeDrag(null) })
-// Pin `sub` at `path` of a segment's annotation (see typeExpr.js' pinAt).
-function pinSegmentPart(target, path, sub) {
-  const node = functionBodies[target.fnId]?.[target.nodeId]
-  if (!node) return
-  let annotation = hole()
-  try { if (node.annotation) annotation = typeFromText(node.annotation) } catch {}
-  const next = pinAt(annotation, target.shown, path, sub)
-  if (!next) return showToast('That part can only be pinned with the whole chevron — drop the type on the chevron itself')
-  const problem = commitAnnotation(target.fnId, target.nodeId, typeText(next))
-  if (problem) showToast(problem)
+// Put `sub` at `path` of what a drop zone holds (see typeExpr.js' pinAt).
+function dropType(zone, path, sub) {
+  const next = pinAt(zone.current(), zone.shown, path, sub)
+  if (!next) return showToast('That part can only be set with the whole type — drop it on the whole slot')
+  zone.commit(next)
 }
 // How many edges, in `fnId`'s body and the graphs that call it, don't type-check.
 function brokenEdgesAround(fnId) {

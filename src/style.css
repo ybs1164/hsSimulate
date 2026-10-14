@@ -286,26 +286,18 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .sidebar [hidden]{display:none!important}
 #type-panel{position:absolute;inset:0;z-index:6;background:var(--bg);display:flex;flex-direction:column}
 #type-panel[hidden]{display:none}
-.type-bar .te-name{font:600 13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:180px}
-.type-bar .te-keyword{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-full);padding:6px 10px;background:var(--panel)}
 .te-status{flex:1;font:11px 'DM Mono';color:var(--muted)}
 .te-status.ok{color:#1f8f74}
 .te-status.bad{color:#c0335e}
 .type-body{padding:24px 32px;overflow:auto}
+.type-bar .te-name{font:600 13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:180px}
+.type-bar .te-params{font:13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:90px}
+.ce-mname,.ce-sig{font:12px 'DM Mono';border:0;background:transparent;width:96px;padding:2px}
+.ce-sig{color:var(--accent-ink);width:130px}
 .te-hint{font:11px/1.6 'DM Mono';color:var(--muted);margin:0 0 18px;max-width:720px}
-.te-ctor{display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:#fff;border:2px solid var(--line);border-radius:999px;padding:12px 18px 12px 12px;margin-bottom:28px;position:relative;width:fit-content;max-width:100%}
-.te-head{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;font:700 18px 'Space Grotesk',sans-serif}
-.te-cname{font:600 14px 'DM Mono';border:0;border-bottom:1.5px dashed var(--line);width:120px;padding:4px}
-.te-field{display:inline-flex;align-items:center;gap:4px;background:var(--accent-soft);border-radius:999px;padding:6px 6px 6px 12px}
-.te-field i{font-style:normal;color:var(--muted)}
-.te-fname,.te-ftype{font:12px 'DM Mono';border:0;background:transparent;width:96px;padding:2px}
-.te-ftype{color:var(--accent-ink);width:130px}
 .te-x,.te-add{border:0;border-radius:50%;width:22px;height:22px;cursor:pointer;font:12px 'DM Mono'}
 .te-x{background:#fdeef2;color:#c0335e}
 .te-add{background:var(--accent);color:#fff}
-.te-drop-ctor{position:absolute;right:-8px;top:-8px}
-.te-sig{position:absolute;left:24px;bottom:-22px;font:11px 'DM Mono';color:var(--muted);white-space:nowrap}
-.te-add-ctor{max-width:420px;margin:0 0 18px}
 .te-group{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:6px 0 10px}
 .te-group small{width:100%;font:10px 'DM Mono';color:var(--muted-2)}
 .te-check{font:11px 'DM Mono';color:var(--ink);display:inline-flex;gap:4px;align-items:center}
@@ -318,7 +310,6 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .ce-method .ce-sig{width:240px}
 .ce-sigshow{color:var(--muted)}
 .ce-context{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:2px 6px;width:120px}
-.type-bar .te-params{font:13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:90px}
 .te-instance{border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:8px 12px;margin:0 0 10px;font:11px/1.8 'DM Mono';max-width:720px}
 .te-instance small{color:var(--muted)}
 .te-method{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-left:14px}
@@ -365,20 +356,25 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .library-item>span{min-width:0}
 .library-item small{overflow:hidden}
 .library-item small .type-chain,.derived-item small .type-chain{font-size:9.5px;margin-top:2px;flex-wrap:wrap;row-gap:3px}
-.te-sig .type-chain,.te-derived .type-chain{font-size:10.5px}
-.te-sig{bottom:-26px}
+.te-derived .type-chain{font-size:10.5px}
 .te-derived{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:6px}
 
-#type-palette{padding:2px 4px 8px;font:10.5px 'DM Mono',monospace}
-.tchip-group{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:3px 0}
-.tchip-group small{width:100%;color:var(--muted-2,#9691a8);font-size:9.5px;letter-spacing:.04em}
-.type-chip{display:inline-flex;padding:1px;border-radius:1em;cursor:grab;user-select:none;touch-action:none}
-.type-chip:hover{background:var(--accent-soft)}
-.type-ghost{position:fixed;z-index:80;pointer-events:none;cursor:grabbing;font:11px 'DM Mono',monospace;box-shadow:0 6px 18px #211d3433;background:#fff}
+#type-palette{padding:2px 4px 8px;font:10px 'DM Mono',monospace}
+.tchip-group{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:3px 0 6px}
+.tchip-group small{grid-column:1/-1;color:var(--muted-2,#9691a8);font-size:9.5px;letter-spacing:.04em}
+/* Every type node in the palette is the same size: one cell of the grid. */
+.type-chip{display:flex;align-items:center;justify-content:center;height:24px;min-width:0;overflow:hidden;box-sizing:border-box;border:1px solid var(--line);border-radius:999px;background:#fff;cursor:grab;user-select:none;touch-action:none;white-space:nowrap}
+.type-chip:hover{background:var(--accent-soft);border-color:var(--accent-soft-2)}
+.type-chip>.tn{border:0;background:transparent;padding:0 2px;gap:.15em;font-size:9.5px;max-width:100%}
+.type-chip .tn-hole{min-width:.95em;min-height:1em;padding:0 .1em;font-size:9px}
+.type-chip .tn-fun{border:0}
+.type-chip .tc-seg{padding-top:.1em;padding-bottom:.1em}
+.type-ghost{position:fixed;z-index:80;pointer-events:none;cursor:grabbing;width:66px;font:10px 'DM Mono',monospace;box-shadow:0 6px 18px #211d3433}
 body.type-dragging,body.type-dragging *{cursor:grabbing!important;user-select:none}
-body.type-dragging .type-chain>.tc-seg.editable{box-shadow:inset 0 0 0 1.5px var(--accent)}
-.tc-seg.drop-over{filter:brightness(.9) saturate(1.6)}
-.tc-seg .tn.drop-over{box-shadow:0 0 0 2px var(--accent);background:var(--accent-soft)}
+body.type-dragging .drop-zone{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.drop-zone.drop-over{filter:brightness(.92) saturate(1.6)}
+.drop-zone .tn.drop-over{box-shadow:0 0 0 2px var(--accent);background:var(--accent-soft)}
+
 .canvas-chain:not(.centered) .type-chain{position:relative}
 .canvas-chain:not(.centered) .tc-ctx{position:absolute;right:100%;top:50%;transform:translateY(-50%)}
 .ce-sigshow .type-chain{font-size:10.5px}
@@ -413,3 +409,27 @@ body.type-dragging .type-chain>.tc-seg.editable{box-shadow:inset 0 0 0 1.5px var
 .haskell .tok.binding{color:#1f8f74}
 .param-move{border:1px solid var(--line,#e6e3f0);background:#fff;border-radius:6px;font:inherit;font-size:11px;line-height:1;padding:3px 6px;cursor:pointer;color:var(--muted,#6f6a86)}
 .param-move:hover{color:var(--accent);border-color:var(--accent)}
+
+/* The type editor reads as a Haskell declaration: data T a = C { f :: A } | D B deriving (…) */
+.hs-decl{font:13px/1.5 'DM Mono',monospace;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-md);padding:14px 18px;max-width:980px;margin-bottom:14px}
+.hs-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:34px}
+.hs-line+.hs-line:not(.hs-head){padding-left:28px}
+.hs-op{width:14px;text-align:center;color:var(--accent);font-weight:700}
+.hs-punct{color:var(--muted)}
+.hs-comment{color:var(--muted-2,#9691a8);font-size:11px;margin-left:auto;display:inline-flex;align-items:center;white-space:nowrap}
+.hs-comment .type-chain{font-size:10.5px}
+.hs-deriving{color:var(--muted);font-size:12px}
+.hs-decl input{font:inherit;color:inherit;border:0;border-bottom:1.5px dashed var(--line);background:transparent;padding:2px 4px}
+.hs-decl input:focus{outline:none;border-bottom-color:var(--accent)}
+.hs-head .te-keyword{font:inherit;color:var(--accent);font-weight:700;border:0;border-bottom:1.5px dashed var(--line);background:transparent;padding:2px 0;cursor:pointer;appearance:none}
+.hs-head .te-name{font-weight:700;width:12ch}
+.hs-head .te-params{width:8ch;font-style:italic}
+.te-cname{font-weight:600;width:11ch}
+.te-field{display:inline-flex;align-items:center;gap:4px}
+.te-field i{font-style:normal;color:var(--muted)}
+.te-fname{width:9ch}
+.te-ftype{display:inline-flex;align-items:center;min-height:24px;padding:1px 3px;border-radius:999px;font-size:12px}
+.te-mode.on{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent-soft-2)}
+.te-mode,.te-add-ctor{font:10.5px 'DM Mono';border:1.5px solid var(--line);background:var(--panel);color:var(--muted);border-radius:999px;padding:3px 9px;cursor:pointer}
+.te-mode:hover,.te-add-ctor:hover{background:var(--accent-soft);color:var(--accent-ink)}
+.te-hint code{background:var(--accent-soft);border-radius:4px;padding:0 3px}
