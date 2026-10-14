@@ -112,14 +112,15 @@ async function dragType(chipAttr, toExpr) {
   for (let k = 1; k <= 6; k++) { await mouse('mouseMoved', p.x + ((q.x - p.x) * k) / 6, p.y + ((q.y - p.y) * k) / 6); await sleep(20) }
   await mouse('mouseReleased', q.x, q.y); await sleep(350)
 }
+// Names in the type editor are tokens: double-click one, type, Enter.
+const rename = (sel, value) => js(`(() => { document.querySelector(${JSON.stringify(sel)}).dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); const input = document.querySelector('.te-rename'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event('change')) })()`)
 const editorStatus = () => js(`document.querySelector('.te-status').textContent`)
 async function declareRecordType(name, fields) {
   await js(`document.querySelector('.add-type').click()`); await sleep(250)
-  await setField('.te-name', name); await sleep(150)
+  await rename('.te-ident-type', name); await sleep(150)
   for (const [i, [fname, ftype]] of fields.entries()) {
-    await js(`document.querySelector('[data-te="add-field"]').click()`); await sleep(120)
-    await setField(`.te-fname[data-fi="${i}"]`, fname); await sleep(100)
-    if (ftype !== 'Double') await dragType(`data-con="${ftype}"`, `document.querySelector('.te-ftype[data-fi="${i}"]')`) // a new field starts as Double
+    await dragType(`data-con="${ftype}"`, `document.querySelector('[data-te="add-field"]')`)
+    await rename(`.te-ident-field[data-fi="${i}"]`, fname); await sleep(100)
   }
   const status = await editorStatus()
   await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
@@ -184,8 +185,8 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await check('declare Model and Msg in the type editor', async () => {
     await declareRecordType('Model', [['count', 'Double']])
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
-    await setField('.te-name', 'Msg'); await sleep(150)
-    await setField('.te-cname', 'Increment'); await sleep(150)
+    await rename('.te-ident-type', 'Msg'); await sleep(150)
+    await rename('.te-ident-ctor', 'Increment'); await sleep(150)
     const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
     await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
     const p = await project()
@@ -278,7 +279,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   const closeType = async () => { await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150) }
   await check('renaming a field renames every call to what it derives', async () => {
     await openType('Model')
-    await setField('.te-fname[data-fi="0"]', 'total'); await sleep(200)
+    await rename('.te-ident-field[data-fi="0"]', 'total'); await sleep(200)
     await closeType()
     await openBody('handle')
     const { graph } = await activeGraph()
@@ -288,7 +289,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const broken = await js(`document.querySelector('.broken-call') ? 'broken' : ''`)
     await back()
     await openType('Model')
-    await setField('.te-fname[data-fi="0"]', 'count'); await sleep(200)
+    await rename('.te-ident-field[data-fi="0"]', 'count'); await sleep(200)
     await closeType()
     const again = Object.values((await project()).functionBodies).flatMap((b) => Object.values(b)).some((n) => n.sourceFunctionId === 'type:Model:over count')
     expect(!broken && again, `${broken} / renamed back: ${again}`)
@@ -319,18 +320,19 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(p.nodes[stepId].label === 'tick' && callLabels.length && callLabels.every((l) => l === 'tick'), `${p.nodes[stepId].label} / ${callLabels}`)
     return `step → tick (${callLabels.length} call)`
   })
-  await check('the type editor reads as a data declaration; field types are dragged in', async () => {
+  await check('the type editor reads as a data declaration with no text boxes; fields are dragged in', async () => {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
-    await setField('.te-name', 'Shape'); await sleep(150)
-    await js(`document.querySelector('[data-te="add-field"]').click()`); await sleep(150)
-    await dragType('data-con="Maybe"', `document.querySelector('.te-ftype[data-fi="0"]')`)
+    const boxes = await js(`document.querySelectorAll('#type-panel input, #type-panel select, #type-panel textarea').length`)
+    await rename('.te-ident-type', 'Shape'); await sleep(150)
+    await dragType('data-con="Maybe"', `document.querySelector('[data-te="add-field"]')`)
     const waiting = await editorStatus()
     await dragType('data-con="Int"', `document.querySelector('.te-ftype[data-fi="0"] .tn-hole')`)
     await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(200)
-    const source = await js(`[...document.querySelectorAll('.hs-decl .hs-line')].map((l) => [...l.querySelectorAll('select, input, .hs-op, .hs-punct, .te-ftype')].map((e) => e.value ?? e.textContent).join(' ')).join(' / ')`)
+    const source = await js(`[...document.querySelectorAll('.hs-decl .hs-line')].map((l) => [...l.querySelectorAll('.te-keyword, .te-ident, .hs-op, .hs-punct, .te-ftype')].map((e) => e.textContent).join(' ')).join(' / ')`)
     const p = await project()
     const status = await editorStatus()
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
+    expect(boxes === 0, `${boxes} text boxes in the type editor`)
     expect(status.includes('applied'), status)
     expect(/Fill each _/.test(waiting), waiting)
     expect(/= Shape MaybeInt/.test(source) && /^data Shape/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && !p.types.Shape.constructors[0].fields[0].name, source)
@@ -338,14 +340,17 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   })
   await check('a type with a parameter', async () => {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
-    await setField('.te-name', 'Box'); await sleep(150)
-    await setField('.te-params', 'a'); await sleep(150)
-    await js(`document.querySelector('[data-te="add-field"]').click()`); await sleep(150)
+    await rename('.te-ident-type', 'Box'); await sleep(150)
+    await dragType('data-var="a"', `document.querySelector('[data-te="add-param"]')`)
+    await dragType('data-var="a"', `document.querySelector('[data-te="add-field"]')`)
     const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
+    // a type variable used in a field becomes a parameter by itself
+    await dragType('data-var="b"', `document.querySelector('[data-te="add-ctor"]')`)
+    const params = await js(`[...document.querySelectorAll('.te-param')].map((e) => e.textContent.replace('−', '')).join(' ')`)
     const status = await editorStatus()
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
-    expect(sig === 'a → Box a' && status.includes('applied'), `${sig} / ${status}`)
-    return sig
+    expect(sig === 'a → Box a' && params === 'a b' && status.includes('applied'), `${sig} / ${params} / ${status}`)
+    return `data Box ${params} = Box a | Box2 b`
   })
   await check('a user class: declare it, give Model an instance, and call its method — picked by type', async () => {
     await js(`document.querySelector('.add-class').click()`); await sleep(300)

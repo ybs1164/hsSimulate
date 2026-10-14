@@ -660,9 +660,11 @@ function renderTypeEditor(error = '') {
   // A field's type, as type nodes (a slot of the same type drag as signatures); text that doesn't parse yet is shown as is.
   const fieldType = (f) => { try { return typeFromText(f.type || '_') } catch { return null } }
   const derivingText = applied ? applied.deriving.filter((c) => c.classes.length).map((c) => `deriving${c.strategy === 'stock' ? '' : ` ${c.strategy}`} (${c.classes.join(', ')})`).join(' ') : ''
-  const field = (c, f, fi, record) => {
+  // A name is a token of the declaration, renamed by double-clicking it — names are the only thing typed here.
+  const ident = (kind, name, title, data = '') => `<span class="te-ident te-ident-${kind}" data-ident="${kind}"${data} title="${escapeAttr(title)} — double-click to rename">${escapeAttr(name)}</span>`
+  const field = (ci, f, fi, record) => {
     const t = fieldType(f)
-    return `<span class="te-field">${record ? `<input class="te-fname" data-fi="${fi}" value="${escapeAttr(f.name)}" placeholder="name" spellcheck="false" /><i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`
+    return `<span class="te-field">${record ? `${ident('field', f.name, 'Field name', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`
   }
   typePanel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
@@ -673,26 +675,27 @@ function renderTypeEditor(error = '') {
     <div class="type-body">
       <div class="hs-decl">
         <div class="hs-line hs-head">
-          <select class="te-keyword" title="data: any constructors · newtype: exactly one constructor with one field"><option ${d.keyword === 'data' ? 'selected' : ''}>data</option><option ${d.keyword === 'newtype' ? 'selected' : ''}>newtype</option></select>
-          <input class="te-name" value="${escapeAttr(d.name)}" title="Type name" spellcheck="false" />
-          <input class="te-params" value="${escapeAttr((d.params || []).join(' '))}" placeholder="a b …" title="Type parameters, space-separated: data Pair a = Pair a a" spellcheck="false" />
+          <button class="te-keyword" data-te="keyword" title="${d.keyword === 'data' ? 'data: any constructors — click for newtype (exactly one constructor with one field)' : 'newtype: exactly one constructor with one field — click for data'}">${d.keyword}</button>
+          ${ident('type', d.name, 'Type name')}
+          ${(d.params || []).map((v, pi) => `<span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span><button class="te-x" data-te="drop-param" data-pi="${pi}" title="Remove this type parameter">−</button></span>`).join('')}
+          <span class="te-drop te-add-param" data-te="add-param" title="Drag a type variable (a, b, …) from TYPES here to add a parameter: data Pair a = Pair a a">+</span>
         </div>
         ${d.constructors.map((c, ci) => {
           const record = c.fields.some((f) => f.name)
           return `
         <div class="hs-line te-ctor" data-ci="${ci}">
           <span class="hs-op">${ci ? '|' : '='}</span>
-          <input class="te-cname" value="${escapeAttr(c.name)}" title="Constructor name — a value of ${escapeAttr(d.name)} is made by exactly one of its constructors" spellcheck="false" />
-          ${record ? '<span class="hs-punct">{</span>' : ''}${c.fields.map((f, fi) => field(c, f, fi, record)).join(record ? '<span class="hs-punct">,</span>' : '')}<button class="te-add" data-te="add-field" title="Add a field">+</button>${record ? '<span class="hs-punct">}</span>' : ''}
+          ${ident('ctor', c.name, `Constructor — a value of ${d.name} is made by exactly one of its constructors`, ` data-ci="${ci}"`)}
+          ${record ? '<span class="hs-punct">{</span>' : ''}${c.fields.map((f, fi) => field(ci, f, fi, record)).join(record ? '<span class="hs-punct">,</span>' : '')}<span class="te-drop te-add" data-te="add-field" title="Drag a type from TYPES here to add a field of that type">+</span>${record ? '<span class="hs-punct">}</span>' : ''}
           ${c.fields.length ? `<button class="te-mode${record ? ' on' : ''}" data-te="toggle-record" title="${record ? 'Record syntax: Con { name :: A } — click for unnamed fields, Con A' : 'Unnamed fields: Con A — click for record syntax, Con { name :: A }'}">{ record }</button>` : ''}
           ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
           <span class="hs-comment te-sig">-- ${escapeAttr(c.name)} ::&nbsp;${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</span>
         </div>`
         }).join('')}
-        <div class="hs-line"><span class="hs-op">|</span><button class="te-add-ctor" data-te="add-ctor" title="Another constructor: a value is one of them">+ constructor</button></div>
+        <div class="hs-line"><span class="hs-op">|</span><button class="te-drop te-add-ctor" data-te="add-ctor" title="Another constructor (a value is one of them): drag a type here for one holding a field of it, or click for one without fields">+ constructor</button></div>
         ${derivingText ? `<div class="hs-line hs-deriving" title="Derived by itself whenever the fields allow">${escapeAttr(derivingText)}</div>` : ''}
       </div>
-      <p class="te-hint">Like a Haskell <code>data</code> declaration: a value of ${escapeAttr(d.name)} is made by one of its constructors (<code>|</code> — a sum), each holding its fields (a product). A constructor is also the function that builds the value, shown in its comment. Drag types from TYPES onto the fields.</p>
+      <p class="te-hint">Like a Haskell <code>data</code> declaration: a value of ${escapeAttr(d.name)} is made by one of its constructors (<code>|</code> — a sum), each holding its fields (a product). A constructor is also the function that builds the value, shown in its comment. Everything is dragged from TYPES in the workspace: a type onto a <b>+</b> adds a field, onto a field changes it, onto <b>+ constructor</b> adds a constructor holding it; a type variable onto the <b>+</b> after the name adds a parameter. Double-click a name to rename it.</p>
       ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => {
         const custom = nodes[def.id]?.override
         const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
@@ -701,29 +704,73 @@ function renderTypeEditor(error = '') {
     </div>`
   // Every _ must be filled before the declaration can apply.
   const update = (mutate) => { mutate(d); renderTypeEditor(d.constructors.some((c) => c.fields.some((f) => /(^|[^\w'])_(?![\w'])/.test(f.type))) ? 'Fill each _ in a field — drag a type into it' : applyTypeDraft()) }
+  // A type variable a field mentions must be a parameter of the type (as in Haskell): it's added by itself.
+  const addParamsOf = (type) => {
+    const vars = typeText(type).match(/(?<![\w'])[a-z][\w']*/g) || []
+    d.params = [...(d.params || []), ...new Set(vars.filter((v) => !(d.params || []).includes(v)))]
+  }
   const $ = (sel) => typePanel.querySelector(sel)
-  $('.te-keyword').onchange = (e) => update(() => { d.keyword = e.target.value; if (d.keyword !== 'newtype') d.deriving.newtype = [] })
-  $('.te-name').onchange = (e) => update(() => {
-    const old = d.name
-    d.name = e.target.value.trim()
-    // a lone constructor named after the type follows its rename (the Haskell convention)
-    if (d.constructors.length === 1 && d.constructors[0].name === old) d.constructors[0].name = d.name
-    // and so does a field that mentions the type itself (a recursive type)
-    const self = new RegExp(`\\b${old}\\b`, 'g')
-    if (/^[A-Z]\w*$/.test(d.name)) d.constructors.forEach((c) => c.fields.forEach((fl) => { fl.type = fl.type.replace(self, d.name) }))
+  const renames = {
+    type: (name) => {
+      const old = d.name
+      d.name = name
+      // a lone constructor named after the type follows its rename (the Haskell convention)
+      if (d.constructors.length === 1 && d.constructors[0].name === old) d.constructors[0].name = d.name
+      // and so does a field that mentions the type itself (a recursive type)
+      const self = new RegExp(`\\b${old}\\b`, 'g')
+      if (/^[A-Z]\w*$/.test(d.name)) d.constructors.forEach((c) => c.fields.forEach((fl) => { fl.type = fl.type.replace(self, d.name) }))
+    },
+    ctor: (name, el) => { d.constructors[Number(el.dataset.ci)].name = name },
+    field: (name, el) => { d.constructors[Number(el.dataset.ci)].fields[Number(el.dataset.fi)].name = name },
+  }
+  typePanel.querySelectorAll('.te-ident').forEach((el) => {
+    el.onclick = () => showToast('Double-click a name to rename it')
+    el.ondblclick = () => {
+      const input = document.createElement('input')
+      input.className = `te-rename te-ident-${el.dataset.ident}`
+      input.value = el.textContent
+      input.spellcheck = false
+      const fit = () => { input.style.width = `${Math.max(input.value.length + 2, 6)}ch` }
+      fit()
+      let done = false
+      const finish = (commit) => {
+        if (done) return
+        done = true
+        const name = input.value.trim()
+        if (commit && name && name !== el.textContent) update(() => renames[el.dataset.ident](name, el))
+        else renderTypeEditor()
+      }
+      input.onchange = () => finish(true)
+      input.onblur = () => finish(true)
+      input.oninput = fit
+      input.onkeydown = (e) => { if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false) }
+      el.replaceWith(input)
+      input.focus()
+      input.select()
+    }
   })
-  $('.te-params').onchange = (e) => update(() => { d.params = e.target.value.trim().split(/[\s,]+/).filter(Boolean) })
+  $('[data-te="keyword"]').onclick = () => update(() => { d.keyword = d.keyword === 'data' ? 'newtype' : 'data'; if (d.keyword !== 'newtype') d.deriving.newtype = [] })
+  const addParam = $('[data-te="add-param"]')
+  addParam.onclick = () => showToast('Drag a type variable (a, b, …) from TYPES in the workspace onto + to add a parameter')
+  dropZone(addParam, {
+    shown: hole(),
+    current: hole,
+    commit: (type) => {
+      if (type.kind !== 'var') return showToast('A type parameter is a type variable — drag a, b, c or d here')
+      if ((d.params || []).includes(type.id)) return showToast(`${type.id} is already a parameter of ${d.name}`)
+      update(() => { d.params = [...(d.params || []), type.id] })
+    },
+  })
+  typePanel.querySelectorAll('[data-te="drop-param"]').forEach((b) => { b.onclick = () => update(() => { d.params.splice(Number(b.dataset.pi), 1) }) })
   typePanel.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => editDerived(b.dataset.edit) })
   typePanel.querySelectorAll('[data-reset]').forEach((b) => { b.onclick = () => { resetDerivedFunction(b.dataset.reset); renderTypeEditor() } })
   typePanel.querySelectorAll('.te-ctor').forEach((row) => {
     const c = d.constructors[Number(row.dataset.ci)]
-    row.querySelector('.te-cname').onchange = (e) => update(() => { c.name = e.target.value.trim() })
-    row.querySelectorAll('.te-fname').forEach((input) => { input.onchange = () => update(() => { c.fields[Number(input.dataset.fi)].name = input.value.trim() }) })
     row.querySelectorAll('.te-ftype').forEach((slot) => {
       const fl = c.fields[Number(slot.dataset.fi)]
       let shown = hole()
       try { shown = typeFromText(fl.type || '_') } catch {}
-      dropZone(slot, { shown, current: () => shown, commit: (type) => update(() => { fl.type = typeText(type) }) })
+      dropZone(slot, { shown, current: () => shown, commit: (type) => update(() => { fl.type = typeText(type); addParamsOf(type) }) })
     })
     row.querySelector('[data-te="toggle-record"]')?.addEventListener('click', () => update(() => {
       const record = c.fields.some((f) => f.name)
@@ -736,19 +783,29 @@ function renderTypeEditor(error = '') {
       })
     }))
     row.querySelectorAll('[data-te="drop-field"]').forEach((b) => { b.onclick = () => update(() => { c.fields.splice(Number(b.dataset.fi), 1) }) })
-    row.querySelector('[data-te="add-field"]').onclick = () => update(() => {
-      const record = c.fields.some((f) => f.name)
-      let k = c.fields.length + 1
-      while (c.fields.some((f) => f.name === `field${k}`)) k++
-      c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: d.params?.[0] || 'Double' })
+    const addField = row.querySelector('[data-te="add-field"]')
+    addField.onclick = () => showToast('Drag a type from TYPES in the workspace onto + to add a field of that type')
+    dropZone(addField, {
+      shown: hole(),
+      current: hole,
+      commit: (type) => update(() => {
+        const record = c.fields.some((f) => f.name)
+        let k = c.fields.length + 1
+        while (c.fields.some((f) => f.name === `field${k}`)) k++
+        c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: typeText(type) })
+        addParamsOf(type)
+      }),
     })
     row.querySelector('[data-te="drop-ctor"]')?.addEventListener('click', () => update(() => { d.constructors.splice(Number(row.dataset.ci), 1) }))
   })
-  $('[data-te="add-ctor"]').onclick = () => update(() => {
+  const addCtor = (type) => update(() => {
     let k = d.constructors.length + 1
     while (d.constructors.some((c) => c.name === `${d.name}${k}`)) k++
-    d.constructors.push({ name: `${d.name}${k}`, fields: [] })
+    d.constructors.push({ name: `${d.name}${k}`, fields: type ? [{ name: '', type: typeText(type) }] : [] })
+    if (type) addParamsOf(type)
   })
+  $('[data-te="add-ctor"]').onclick = () => addCtor(null)
+  dropZone($('[data-te="add-ctor"]'), { shown: hole(), current: hole, commit: addCtor })
   $('[data-te="close"]').onclick = closeTypeEditor
   $('[data-te="delete"]').onclick = () => {
     const name = typeEditor.original

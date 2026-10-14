@@ -295,9 +295,8 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .ce-mname,.ce-sig{font:12px 'DM Mono';border:0;background:transparent;width:96px;padding:2px}
 .ce-sig{color:var(--accent-ink);width:130px}
 .te-hint{font:11px/1.6 'DM Mono';color:var(--muted);margin:0 0 18px;max-width:720px}
-.te-x,.te-add{border:0;border-radius:50%;width:22px;height:22px;cursor:pointer;font:12px 'DM Mono'}
+.te-x{border:0;border-radius:50%;width:22px;height:22px;cursor:pointer;font:12px 'DM Mono'}
 .te-x{background:#fdeef2;color:#c0335e}
-.te-add{background:var(--accent);color:#fff}
 .te-group{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:6px 0 10px}
 .te-group small{width:100%;font:10px 'DM Mono';color:var(--muted-2)}
 .te-check{font:11px 'DM Mono';color:var(--ink);display:inline-flex;gap:4px;align-items:center}
@@ -419,12 +418,19 @@ body.type-dragging .drop-zone{box-shadow:inset 0 0 0 1.5px var(--accent)}
 .hs-comment{color:var(--muted-2,#9691a8);font-size:11px;margin-left:auto;display:inline-flex;align-items:center;white-space:nowrap}
 .hs-comment .type-chain{font-size:10.5px}
 .hs-deriving{color:var(--muted);font-size:12px}
-.hs-decl input{font:inherit;color:inherit;border:0;border-bottom:1.5px dashed var(--line);background:transparent;padding:2px 4px}
-.hs-decl input:focus{outline:none;border-bottom-color:var(--accent)}
-.hs-head .te-keyword{font:inherit;color:var(--accent);font-weight:700;border:0;border-bottom:1.5px dashed var(--line);background:transparent;padding:2px 0;cursor:pointer;appearance:none}
-.hs-head .te-name{font-weight:700;width:12ch}
-.hs-head .te-params{width:8ch;font-style:italic}
-.te-cname{font-weight:600;width:11ch}
+.te-keyword{font:inherit;color:var(--accent);font-weight:700;border:0;border-bottom:1.5px dashed var(--line);background:transparent;padding:2px 0;cursor:pointer}
+.te-keyword:hover{border-bottom-color:var(--accent)}
+.te-ident{padding:2px 4px;border-radius:4px;cursor:text}
+.te-ident:hover{background:var(--accent-soft)}
+.te-ident-type{font-weight:700}
+.te-ident-ctor{font-weight:600}
+.hs-decl .te-rename{font:inherit;color:inherit;border:0;border-bottom:1.5px solid var(--accent);background:transparent;padding:2px 4px;outline:none}
+.te-rename.te-ident-type{font-weight:700}
+.te-rename.te-ident-ctor{font-weight:600}
+.te-param{display:inline-flex;align-items:center;gap:2px;font-size:12px}
+.te-param .te-x{width:16px;height:16px;font-size:10px}
+.te-drop{display:inline-flex;align-items:center;justify-content:center;cursor:copy}
+.te-add,.te-add-param{border:1.5px dashed var(--accent);background:transparent;color:var(--accent);border-radius:50%;width:22px;height:22px;font:12px 'DM Mono'}
 .te-field{display:inline-flex;align-items:center;gap:4px}
 .te-field i{font-style:normal;color:var(--muted)}
 .te-fname{width:9ch}
