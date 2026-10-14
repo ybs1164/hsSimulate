@@ -8,10 +8,10 @@ import { showQual } from '../src/typeSystem.js'
 
 const types = declareTypes({}, `
 data Wallet = Wallet { clicks :: Double, gems :: Double } deriving stock (Eq, Show) deriving anyclass (AddSemigroup, AddMonoid, AddCommutativeMonoid, AddGroup, AddAbelianGroup, VectorSpace, PartialOrd, Lattice)
-data Modifier = Modifier { bonus :: Sum Double, mult :: Product Double } deriving (Semigroup, Monoid) via Generically Modifier
+data Modifier = Modifier { tags :: [String], best :: Maybe [Int] } deriving (Semigroup, Monoid) via Generically Modifier
 `)
 const derived = Object.fromEntries(derivedDefinitions(types).map((d) => [d.label, d]))
-const BUILTINS = ['plus', 'minus', 'times', 'succ', 'negate', 'identity', 'compose', 'addZero', 'mulOne', 'eq', 'geq', 'listOf', 'nil', 'just', 'nothing', 'mappend', 'mempty', 'mconcat', 'fmap', 'foldMap', 'leq', 'join', 'meet', 'scale', 'mkSum', 'getSum', 'mkProduct', 'getProduct', 'mkEndo', 'appEndo', 'every', 'onKey', 'program', 'setSubscriptions', 'wText']
+const BUILTINS = ['plus', 'minus', 'times', 'succ', 'negate', 'identity', 'compose', 'addZero', 'mulOne', 'eq', 'geq', 'listOf', 'nil', 'just', 'nothing', 'mappend', 'mempty', 'fmap', 'foldMap', 'leq', 'join', 'meet', 'scale', 'cons', 'every', 'onKey', 'program', 'setSubscriptions', 'wText']
 const nodes = { ...Object.fromEntries(BUILTINS.map((b) => [b, { id: b, type: 'function', builtin: b, label: b, params: [], mounted: [] }])), ...Object.fromEntries(Object.values(derived).map((d) => [d.id, d])) }
 const registry = { nodes, functionBodies: {}, types }
 const ev = createEvaluator(registry)
@@ -20,46 +20,36 @@ const call = (id, label, slots) => ({ id, type: 'function', sourceFunctionId: id
 const graphOf = (...ns) => Object.fromEntries(ns.map((n) => [n.id, n]))
 const show = (g, id) => showValue(ev.run(g, id), types)
 
-test('monoid structures: free monoid, Sum, Product, Maybe, Endo', () => {
+test('monoid structures: free monoid, Maybe', () => {
   const g = graphOf(
     call('xs', 'listOf', ['1', '2']), call('ys', 'listOf', ['3']), call('cat', 'mappend', [{ node: 'xs' }, { node: 'ys' }]),
-    call('s1', 'mkSum', ['2']), call('s2', 'mkSum', ['5']), call('sum', 'mappend', [{ node: 's1' }, { node: 's2' }]),
-    call('p1', 'mkProduct', ['2']), call('p2', 'mkProduct', ['5']), call('prod', 'mappend', [{ node: 'p1' }, { node: 'p2' }]),
-    call('j', 'just', [{ node: 's1' }]), call('n', 'nothing', []), call('mj', 'mappend', [{ node: 'j' }, { node: 'n' }]),
-    call('inc', 'succ', ['']), call('dbl', 'times', ['2', '']), call('e1', 'mkEndo', [{ node: 'inc' }]), call('e2', 'mkEndo', [{ node: 'dbl' }]),
-    call('e12', 'mappend', [{ node: 'e1' }, { node: 'e2' }]), call('run', 'appEndo', [{ node: 'e12' }, '5']),
+    call('j', 'just', [{ node: 'xs' }]), call('n', 'nothing', []), call('mj', 'mappend', [{ node: 'j' }, { node: 'n' }]),
+    call('k', 'just', [{ node: 'ys' }]), call('jk', 'mappend', [{ node: 'j' }, { node: 'k' }]),
   )
   assert.equal(show(g, 'cat'), '[1,2,3]')
-  assert.equal(show(g, 'sum'), 'Sum 7')
-  assert.equal(show(g, 'prod'), 'Product 10')
-  assert.equal(show(g, 'mj'), 'Just (Sum 2)')
-  assert.equal(ev.run(g, 'run'), 11, 'Endo f <> Endo g = Endo (f . g): succ (2 * 5)')
+  assert.equal(show(g, 'mj'), 'Just [1,2]')
+  assert.equal(show(g, 'jk'), 'Just [1,2,3]')
 })
 
 test('mempty is absorbed by (<>) and takes the right shape when observed', () => {
   const g = graphOf(
     call('e', 'mempty', []), call('xs', 'listOf', ['1']),
     call('l', 'mappend', [{ node: 'e' }, { node: 'xs' }]), call('r', 'mappend', [{ node: 'xs' }, { node: 'e' }]),
-    call('gs', 'getSum', [{ node: 'e' }]), call('gp', 'getProduct', [{ node: 'e' }]), call('ae', 'appEndo', [{ node: 'e' }, '7']),
-    call('bonus', 'bonus', [{ node: 'e' }]), call('gb', 'getSum', [{ node: 'bonus' }]),
+    call('ts', 'tags', [{ node: 'e' }]), call('x', 'listOf', ['"x"']), call('tx', 'mappend', [{ node: 'ts' }, { node: 'x' }]),
   )
   assert.equal(show(g, 'l'), '[1]')
   assert.equal(show(g, 'r'), '[1]')
-  assert.equal(ev.run(g, 'gs'), 0)
-  assert.equal(ev.run(g, 'gp'), 1)
-  assert.equal(ev.run(g, 'ae'), 7, 'mempty :: Endo a is the identity')
-  assert.equal(ev.run(g, 'gb'), 0, 'a Generically-derived record of mempties')
+  assert.equal(show(g, 'tx'), '["x"]', 'a Generically-derived record of mempties')
 })
 
 test('foldMap is the monoid homomorphism out of the free monoid', () => {
   const g = graphOf(
-    call('xs', 'listOf', ['1', '2', '3', '4']), call('toSum', 'mkSum', ['']), call('fm', 'foldMap', [{ node: 'toSum' }, { node: 'xs' }]),
-    call('toProd', 'mkProduct', ['']), call('fp', 'foldMap', [{ node: 'toProd' }, { node: 'xs' }]),
-    call('strs', 'listOf', ['"ab"', '"c"', '""']), call('mc', 'mconcat', [{ node: 'strs' }]),
+    call('xs', 'listOf', ['1', '2', '3']), call('nil', 'nil', []), call('single', 'cons', ['', { node: 'nil' }]),
+    call('fm', 'foldMap', [{ node: 'single' }, { node: 'xs' }]),
+    call('j', 'just', [{ node: 'xs' }]), call('fj', 'foldMap', [{ node: 'single' }, { node: 'j' }]),
   )
-  assert.equal(show(g, 'fm'), 'Sum 10')
-  assert.equal(show(g, 'fp'), 'Product 24')
-  assert.equal(show(g, 'mc'), '"abc"')
+  assert.equal(show(g, 'fm'), '[1,2,3]', 'foldMap (\\x -> [x]) = id')
+  assert.equal(show(g, 'fj'), '[[1,2,3]]')
 })
 
 test('functor laws on lists and Maybe', () => {
@@ -93,16 +83,16 @@ test('a product derives pointwise structure (anyclass): the wallet', () => {
   assert.equal(show(g, 'hi'), 'Wallet {clicks = 100, gems = 3}')
 })
 
-test('a product of monoids is a monoid (via Generically): modifiers stack in any order', () => {
+test('a product of monoids is a monoid (via Generically): fieldwise', () => {
   const g = graphOf(
-    call('b1', 'mkSum', ['5']), call('m1', 'mkProduct', ['2']), call('a', 'Modifier', [{ node: 'b1' }, { node: 'm1' }]),
-    call('b2', 'mkSum', ['1']), call('m2', 'mkProduct', ['3']), call('b', 'Modifier', [{ node: 'b2' }, { node: 'm2' }]),
-    call('ab', 'mappend', [{ node: 'a' }, { node: 'b' }]), call('ba', 'mappend', [{ node: 'b' }, { node: 'a' }]),
-    call('e', 'mempty', []), call('ae', 'mappend', [{ node: 'a' }, { node: 'e' }]),
+    call('t1', 'listOf', ['"x"']), call('l1', 'listOf', ['1']), call('j1', 'just', [{ node: 'l1' }]), call('a', 'Modifier', [{ node: 't1' }, { node: 'j1' }]),
+    call('t2', 'listOf', ['"y"']), call('n', 'nothing', []), call('b', 'Modifier', [{ node: 't2' }, { node: 'n' }]),
+    call('ab', 'mappend', [{ node: 'a' }, { node: 'b' }]),
+    call('e', 'mempty', []), call('ae', 'mappend', [{ node: 'a' }, { node: 'e' }]), call('ea', 'mappend', [{ node: 'e' }, { node: 'a' }]),
   )
-  assert.equal(show(g, 'ab'), 'Modifier {bonus = Sum 6, mult = Product 6}')
-  assert.equal(show(g, 'ab'), show(g, 'ba'))
+  assert.equal(show(g, 'ab'), 'Modifier {tags = ["x","y"], best = Just [1]}')
   assert.equal(show(g, 'ae'), show(g, 'a'))
+  assert.equal(show(g, 'ea'), show(g, 'a'))
 })
 
 // ---- Types ------------------------------------------------------------------
@@ -111,9 +101,9 @@ test('the type checker resolves constructor classes and derived instances', () =
   try {
     const pass = (g) => inferGraph(nodes, {}, g)
     const vsig = (p, id) => showQual(p.perNode.get(id).preds, valueTypeOfEntry(p.perNode.get(id)))
-    const fm = pass(graphOf(call('toSum', 'mkSum', ['']), call('xs', 'listOf', ['1', '2']), call('f', 'foldMap', [{ node: 'toSum' }, { node: 'xs' }])))
+    const fm = pass(graphOf(call('nil', 'nil', []), call('single', 'cons', ['', { node: 'nil' }]), call('xs', 'listOf', ['1', '2']), call('f', 'foldMap', [{ node: 'single' }, { node: 'xs' }])))
     assert.doesNotThrow(() => reduce(fm.preds))
-    assert.equal(vsig(fm, 'f'), 'Semiring a ⇒ Sum a')
+    assert.equal(vsig(fm, 'f'), 'Semiring a ⇒ [a]')
     // (fmap succ 3 is legal Haskell — (Functor f, Num (f Int)) => f Int — but Bool is never f a)
     const notFunctor = pass(graphOf(call('inc', 'succ', ['']), call('f', 'fmap', [{ node: 'inc' }, 'True'])))
     assert.deepEqual(notFunctor.perNode.get('f').invalidSlots, [1])
@@ -122,7 +112,7 @@ test('the type checker resolves constructor classes and derived instances', () =
     const walletLeq = pass(graphOf(call('w', 'Wallet', ['1', '2']), call('l', 'leq', [{ node: 'w' }, ''])))
     assert.doesNotThrow(() => reduce(walletLeq.preds))
     const doubleMonoid = pass(graphOf(call('e', 'mempty', []), { id: 'd', type: 'number', value: '1.5', annotation: 'Double' }, call('p', 'plus', [{ node: 'e' }, { node: 'd' }])))
-    assert.throws(() => reduce(doubleMonoid.preds), 'Double has several monoids — pick one with Sum or Product')
+    assert.throws(() => reduce(doubleMonoid.preds), 'Double has no Monoid instance (it has several monoids: + and *)')
   } finally {
     setDynamicInstances([])
   }
@@ -133,10 +123,10 @@ test('Sub is a monoid and a functor: timers fire on game time, relabelled by fma
   const extra = ['every', 'onKey', 'program', 'setSubscriptions', 'wText']
   const reg = { nodes: { ...nodes, ...Object.fromEntries(extra.map((b) => [b, { id: b, builtin: b, label: b }])) }, functionBodies: {}, types }
   const e2 = createEvaluator(reg)
-  // subs = fmap Sum (every 1 2 <> every 0.5 10) — messages are Sum Doubles; handle adds them up
+  // subs = fmap (3 *) (every 1 2 <> every 0.5 10) — messages are Doubles; handle adds them up
   const g = graphOf(
     call('t1', 'every', ['1', '2']), call('t2', 'every', ['0.5', '10']), call('both', 'mappend', [{ node: 't1' }, { node: 't2' }]),
-    call('wrap', 'mkSum', ['']), call('subs', 'fmap', [{ node: 'wrap' }, { node: 'both' }]),
+    call('triple', 'times', ['3', '']), call('subs', 'fmap', [{ node: 'triple' }, { node: 'both' }]),
   )
   const subsValue = e2.run(g, 'subs')
   const program = { kind: 'data', type: 'Program', ctor: 'Program', ctorIndex: 0, args: [0, { kind: 'closure', callee: 'wText', args: [null] }, { kind: 'closure', callee: 'plus', args: [null, null] }, { kind: 'closure', callee: 'identity', args: [null] }, 10, 0, { kind: 'closure', callee: 'identity', args: [null] }] }
@@ -144,12 +134,11 @@ test('Sub is a monoid and a functor: timers fire on game time, relabelled by fma
   reg.nodes.constSubs = { id: 'constSubs', label: 'constSubs', custom: true }
   reg.functionBodies.constSubs = { 'input-constSubs-0': { id: 'input-constSubs-0', type: 'parameter', label: 'm' }, v: { id: 'v', type: 'value', data: subsValue }, output: { id: 'output', type: 'output', source: 'v' } }
   program.args[6] = { kind: 'closure', callee: 'constSubs', args: [null] }
-  // handle (Sum k) m = m + k
+  // handle k m = m + k
   reg.nodes.addMsg = { id: 'addMsg', label: 'addMsg', custom: true }
   reg.functionBodies.addMsg = {
-    'input-addMsg-0': { id: 'input-addMsg-0', type: 'parameter', label: 's' }, 'input-addMsg-1': { id: 'input-addMsg-1', type: 'parameter', label: 'm' },
-    gs: { id: 'gs', type: 'function', sourceFunctionId: 'getSum', params: [''], mounted: ['input-addMsg-0'] },
-    add: { id: 'add', type: 'function', sourceFunctionId: 'plus', params: ['', ''], mounted: ['input-addMsg-1', 'gs'] },
+    'input-addMsg-0': { id: 'input-addMsg-0', type: 'parameter', label: 'k' }, 'input-addMsg-1': { id: 'input-addMsg-1', type: 'parameter', label: 'm' },
+    add: { id: 'add', type: 'function', sourceFunctionId: 'plus', params: ['', ''], mounted: ['input-addMsg-1', 'input-addMsg-0'] },
     output: { id: 'output', type: 'output', source: 'add' },
   }
   program.args[2] = { kind: 'closure', callee: 'addMsg', args: [null, null] }
@@ -160,5 +149,5 @@ test('Sub is a monoid and a functor: timers fire on game time, relabelled by fma
   const game = createGame(e2, program)
   assert.equal(game.subscriptions().every.length, 2)
   for (let i = 0; i < 20; i++) game.tick(0.1) // two seconds
-  assert.equal(game.model, 2 * 2 + 4 * 10, 'every 1 2 fired twice, every 0.5 10 fired four times')
+  assert.equal(game.model, 2 * 6 + 4 * 30, 'every 1 2 fired twice, every 0.5 10 fired four times (tripled)')
 })

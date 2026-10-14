@@ -57,11 +57,6 @@ export function samplesOf(type, types, fns, depth = 0) {
     if (!inner) return null
     if (isCon(h, 'List')) return [nilV, consV(inner[0], nilV), consV(inner[1 % inner.length], consV(inner[2 % inner.length], nilV))]
     if (isCon(h, 'Maybe')) return [nothingV, ...inner.slice(0, 3).map(justV)]
-    if (isCon(h, 'Sum') || isCon(h, 'Product')) return inner.map((x) => ({ kind: 'data', type: h.name, ctor: h.name, ctorIndex: 0, args: [x] }))
-    if (isCon(h, 'Endo')) {
-      const f = fns?.(argOf(type))
-      return f ? f.map((g) => ({ kind: 'data', type: 'Endo', ctor: 'Endo', ctorIndex: 0, args: [g] })) : null
-    }
   }
   return null
 }
@@ -153,7 +148,6 @@ const LAWS = {
     return Math.abs(v - (n + r)) <= 1e-9 * Math.max(1, Math.abs(v)) && Math.abs(r) < 1
   }]],
   Transcendental: [['sqrt x * sqrt x = x, for x >= 0', 1, (op, x, eq) => !op('geq', x, 0) || eq(op('times', op('sqrt', x), op('sqrt', x)), x)]],
-  IEEEFloat: [['isNaN x = not (x == x)', 1, (op, x) => op('isNaN', x) === !op('eq', x, x)]],
   Eq: [['reflexivity: x == x', 1, (op, x) => op('eq', x, x) === true]],
   PartialOrd: [
     ['reflexivity: leq x x', 1, (op, x) => op('leq', x, x) === true],

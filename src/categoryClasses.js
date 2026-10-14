@@ -8,11 +8,6 @@
 //                       coproducts (\/, join)
 //   VectorSpace         (vector-space package, scalar fixed to Double)
 //   Functor, Foldable   (base) — constructor classes over `f :: * -> *`
-//
-// plus the newtypes that pick one monoid structure on a carrier with
-// several (`Sum`, `Product`) and the endomorphism monoid `Endo a`, whose
-// (<>) and mempty are composition and the identity — the protected
-// builtins `compose` and `identity`.
 import { declareClass, declareInstance } from './classEnv.js'
 import { pred, tapp, tcon, tlist, ttuple, tvar } from './typeSystem.js'
 
@@ -30,14 +25,6 @@ const app = (name, t) => tapp(tcon(name), t)
 // The free monoid: lists under (++) and [].
 declareInstance('Semigroup', tlist($a))
 declareInstance('Monoid', tlist($a))
-// The endomorphism monoid End(a): composition and the identity.
-declareInstance('Semigroup', app('Endo', $a))
-declareInstance('Monoid', app('Endo', $a))
-// Choosing a structure on a carrier: Sum uses (+)/addZero, Product (*)/mulOne.
-declareInstance('Semigroup', app('Sum', $a), [pred('AddSemigroup', $a)])
-declareInstance('Monoid', app('Sum', $a), [pred('AddMonoid', $a)])
-declareInstance('Semigroup', app('Product', $a), [pred('MulSemigroup', $a)])
-declareInstance('Monoid', app('Product', $a), [pred('MulMonoid', $a)])
 // Maybe adjoins an identity to a semigroup (Nothing).
 declareInstance('Semigroup', app('Maybe', $a), [pred('Semigroup', $a)])
 declareInstance('Monoid', app('Maybe', $a), [pred('Semigroup', $a)])
@@ -51,10 +38,6 @@ declareInstance('Monoid', tcon('Picture'))
 // The terminal object is the trivial monoid.
 declareInstance('Semigroup', tcon('()'))
 declareInstance('Monoid', tcon('()'))
-for (const cls of ['Eq', 'Ord', 'Show']) {
-  declareInstance(cls, app('Sum', $a), [pred(cls, $a)])
-  declareInstance(cls, app('Product', $a), [pred(cls, $a)])
-}
 
 // Totally ordered carriers are lattices with max/min.
 for (const t of ['Bool', 'Int', 'Integer', 'Word', 'Natural', 'Float', 'Double', 'Rational']) {

@@ -1,5 +1,5 @@
 // Conversions in and out of the numeric tower on user types. Out is a
-// method on the source side (toInteger, toRational, round, sqrt, isNaN),
+// method on the source side (toInteger, toRational, round, sqrt),
 // hand-written or newtype-derived; in is fromInteger, the unique ring map
 // from ℤ — `fromIntegral = fromInteger . toInteger` — built at the user type
 // the type pass found for the result.
@@ -23,7 +23,7 @@ function project(types) {
   setDynamicInstances(derivedInstances(types))
   const builtin = (b) => ({ id: b, type: 'function', builtin: b, label: b, params: ['x'], mounted: [null] })
   const main = {}
-  const defs = Object.fromEntries(['fromIntegral', 'toInteger', 'toRational', 'round', 'sqrt', 'isNaN', 'plus', 'times', 'geq', 'eq', 'negate', 'mulOne', 'div', 'mod'].map((b) => [b, builtin(b)]))
+  const defs = Object.fromEntries(['fromIntegral', 'toInteger', 'toRational', 'round', 'sqrt', 'plus', 'times', 'geq', 'eq', 'negate', 'mulOne', 'div', 'mod'].map((b) => [b, builtin(b)]))
   derivedDefinitions(types).forEach((d) => { defs[d.label] = d })
   const registry = new Proxy({}, { get: (_, id) => main[id] ?? defs[id] })
   const bodies = {}
@@ -104,7 +104,6 @@ test("a newtype's derived conversions are its field's", () => {
   const at = (callee, x) => p.run([p.call('m', 'Meters', [x]), p.call('f', callee, [n('m')])], 'f').v
   assert.equal(at('round', '2.5'), 2, 'halves to even, as Haskell')
   assert.equal(at('toRational', '1.5'), 1.5)
-  assert.equal(at('isNaN', '1'), false)
   assert.deepEqual(at('sqrt', '9').args, [3], 'sqrt stays in Meters')
   setDynamicInstances(derivedInstances(types))
   const { results } = checkClassLaws('IEEEFloat', tcon('Meters'), { ev: p.ev, types })

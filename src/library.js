@@ -13,7 +13,7 @@ export const PRELUDE = [
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
   ['Text', [['show', 'show', ['x']], ['showsPrec', 'showsPrec', ['d', 'x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
   ['Pairs · Random', [['pair', '(,)', ['a', 'b']], ['fst', 'fst', ['p']], ['snd', 'snd', ['p']], ['mkStdGen', 'mkStdGen', ['seed']], ['randomR', 'randomR', ['range', 'gen']], ['randomRInt', 'randomRInt', ['range', 'gen']]]],
-  ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']], ['mkSum', 'Sum', ['x']], ['getSum', 'getSum', ['s']], ['mkProduct', 'Product', ['x']], ['getProduct', 'getProduct', ['p']], ['mkEndo', 'Endo', ['f']], ['appEndo', 'appEndo', ['e', 'x']]]],
+  ['Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []]]],
   ['Functor · Foldable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']]]],
   ['Lattice', [['leq', 'leq', ['x', 'y']], ['join', '(\\/)', ['x', 'y']], ['meet', '(/\\)', ['x', 'y']]]],
   ['VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
@@ -28,7 +28,7 @@ export const preludeDefs = Object.fromEntries(PRELUDE.flatMap(([, fns]) => fns).
 // injections) and its eliminator `caseT` (and recursor `foldT`) as
 // definitions with ids `type:<T>:<name>`; the Prelude functions on these
 // types are written with them as graphs (definitionViews.js), so `text`,
-// `program`, `set stepsPerSecond`, `maybe`, `getSum`, … are editable.
+// `program`, `set stepsPerSecond`, `maybe`, … are editable.
 // Their instances stay those of dataTypes.js and categoryClasses.js.
 //
 // `Sub e` is abstract: `fmap` relabels a subscription with a hidden `Map`
@@ -39,10 +39,7 @@ data Color = RGB Double Double Double
 data Picture = Blank | Circle Double | CircleSolid Double | RectangleSolid Double Double | Translate Double Double Picture | Color Color Picture | Pictures Picture Picture
 data Widget e = Text String | Button String e | Column [Widget e] | Row [Widget e] | Progress Double | Heading String | Spacer Double | Tinted Color (Widget e) | Drawing Double Double Picture
 data Sub e = None | Every Double e | OnKey (String -> Maybe e) | Batch (Sub e) (Sub e)
-data Program m e = Program m (m -> Widget e) (e -> m -> m) (Double -> m -> m) Int Double (m -> Sub e)
-newtype Sum a = Sum a
-newtype Product a = Product a
-newtype Endo a = Endo (a -> a)`
+data Program m e = Program m (m -> Widget e) (e -> m -> m) (Double -> m -> m) Int Double (m -> Sub e)`
 export const preludeTypes = declareTypes({}, PRELUDE_TYPES_SOURCE, { builtin: true })
 const ABSTRACT = new Set(['Sub'])
 export const preludeTypeDefs = Object.fromEntries(derivedDefinitions(preludeTypes)

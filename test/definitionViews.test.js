@@ -33,7 +33,6 @@ const base = {
   'prelude:length': fn('prelude:length', 'length', 'length', ['xs']),
   'prelude:append': fn('prelude:append', 'append', '(++)', ['xs', 'ys']),
   'prelude:index': fn('prelude:index', 'index', '(!?)', ['xs', 'i']),
-  'prelude:mconcat': fn('prelude:mconcat', 'mconcat', 'mconcat', ['xs']),
   'prelude:red': fn('prelude:red', 'red', 'red', []),
   'prelude:maybe': fn('prelude:maybe', 'maybe', 'maybe', ['default', 'f', 'm']),
 }
@@ -60,8 +59,6 @@ test('Prelude functions written with foldr mean what the builtins do', () => {
   const ys = list('ys', ['4'])
   assert.deepEqual(...both(base, 'prelude:append', [xs, ys], { xs, ys }))
   for (const i of ['0', '2', '3', '-1']) assert.deepEqual(...both(base, 'prelude:index', [xs, i], { xs }), `xs !? ${i}`)
-  const strs = list('strs', ['"ab"', '"c"'])
-  assert.deepEqual(...both(base, 'prelude:mconcat', [strs], { strs }))
   assert.deepEqual(...both(base, 'prelude:red', []))
   assert.deepEqual(...both(base, 'compose', [node({ id: 'inc', type: 'function', sourceFunctionId: 'plus', params: ['1', ''], mounted: [null, null] }), node({ id: 'dbl', type: 'function', sourceFunctionId: 'plus', params: ['5', ''], mounted: [null, null] }), '2'], { inc: node({ id: 'inc', type: 'function', sourceFunctionId: 'plus', params: ['1', ''], mounted: [null, null] }), dbl: node({ id: 'dbl', type: 'function', sourceFunctionId: 'plus', params: ['5', ''], mounted: [null, null] }) }))
   assert.deepEqual(...both(base, 'isZero', ['0']))
@@ -105,12 +102,10 @@ test('Prelude functions on the Prelude types are written with their constructors
   assert.equal(libraryPrint('prelude:wText'), 'text s = Text s')
   assert.equal(libraryPrint('prelude:wColor'), 'withColor color widget = Tinted color widget')
   assert.equal(libraryPrint('prelude:rgb'), 'rgb r g b = RGB r g b')
-  assert.equal(libraryPrint('prelude:getSum'), 'getSum s = caseSum (\\x -> x) s')
-  assert.equal(libraryPrint('prelude:appEndo'), 'appEndo e x = caseEndo ((\\x f -> apply f x) x) e')
   assert.equal(libraryPrint('prelude:program'), 'program initial view handle step = Program initial view handle step 10 604800 (\\model -> mempty)')
   assert.equal(libraryPrint('prelude:setStepsPerSecond'), 'set stepsPerSecond n program = caseProgram ((\\new initial view handle step stepsPerSecond maxOffline subscriptions -> Program initial view handle step new maxOffline subscriptions) n) program')
   // the types check: each graph has the type the builtin is given
-  for (const id of ['prelude:maybe', 'prelude:wButton', 'prelude:program', 'prelude:setSubscriptions', 'prelude:appEndo', 'prelude:getProduct', 'prelude:pTranslate', 'prelude:every', 'prelude:onKey']) {
+  for (const id of ['prelude:maybe', 'prelude:wButton', 'prelude:program', 'prelude:setSubscriptions', 'prelude:pTranslate', 'prelude:every', 'prelude:onKey']) {
     const view = buildDefinitionView(library[id], (x) => library[x])
     const pass = inferGraph({ ...library, ...view.defs }, view.bodies, { v: view.defs[view.viewId] })
     const declared = view.defs[view.viewId].scheme
@@ -131,11 +126,6 @@ test('…and mean what the builtins do', () => {
   same('prelude:pTranslate', ['1', '2', { id: 'c' }], { c: { id: 'c', type: 'function', sourceFunctionId: 'prelude:pCircle', params: ['5'], mounted: [null] } })
   same('prelude:rgb', ['1', '0.5', '0'])
   same('prelude:every', ['2', '7'])
-  const sum = { id: 's', type: 'function', sourceFunctionId: 'prelude:mkSum', params: ['4'], mounted: [null] }
-  same('prelude:getSum', [{ id: 's' }], { s: sum })
-  const mempty = { id: 'e', type: 'function', sourceFunctionId: 'prelude:mempty', params: [], mounted: [] }
-  same('prelude:getSum', [{ id: 'e' }], { e: mempty }) // getSum mempty = 0
-  same('prelude:appEndo', [{ id: 'e' }, '5'], { e: mempty }) // appEndo mempty = id
   const just = { id: 'j', type: 'function', sourceFunctionId: 'prelude:just', params: ['4'], mounted: [null] }
   const inc = { id: 'inc', type: 'function', sourceFunctionId: 'plus', params: ['1', ''], mounted: [null, null] }
   same('prelude:maybe', ['0', { id: 'inc' }, { id: 'j' }], { j: just, inc })

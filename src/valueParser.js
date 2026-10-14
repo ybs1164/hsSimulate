@@ -3,11 +3,11 @@
 // a running game's model directly:
 //
 //   Model {wallet = Wallet {clicks = 5}, perClick = 2, rate = 0}
-//   Tick 0.5        Just (Sum 3)        [1, 2, 3]        "text"        'c'
+//   Tick 0.5        Just 3              [1, 2, 3]        "text"        'c'
 //
 // Type-directed: the type decides what's acceptable (a constructor of that
 // type, every field of a record, a number for a numeric type …), and every
-// error says where. Functions, Endo and widgets have no written form.
+// error says where. Functions and widgets have no written form.
 import { cons, just, nil, nothing, pair, stdGen } from './dataTypes.js'
 import { applySubst, showType } from './typeSystem.js'
 
@@ -118,12 +118,6 @@ export function parseValue(text, type, types = {}) {
       if (atomic) throw new ParseError(`Put parentheses around Just … ${where()}`)
       i++
       return just(value(t.arg, true))
-    }
-    if (head === 'Sum' || head === 'Product') {
-      if (tok.text !== head) throw new ParseError(`Expected ${head} ${where()}`)
-      if (atomic) throw new ParseError(`Put parentheses around ${head} … ${where()}`)
-      i++
-      return { kind: 'data', type: head, ctor: head, ctorIndex: 0, args: [value(t.arg, true)] }
     }
     const decl = types[head]
     if (!decl) throw new ParseError(`A ${showType(t)} can't be written as a value`)

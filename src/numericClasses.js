@@ -17,7 +17,7 @@
 //   Ring → Field                                    (/)
 //   OrderedRing + Field → OrderedField              (round: Archimedean)
 //   Field → Transcendental                          (sqrt — analysis, not algebra)
-//   OrderedField + Transcendental → IEEEFloat       (isNaN)
+//   OrderedField + Transcendental → IEEEFloat
 //
 // Rough correspondence to the Haskell Report classes this replaces:
 // Num→Ring, Real→OrderedRing, Integral→EuclideanRing, Fractional→Field,

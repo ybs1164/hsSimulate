@@ -14,7 +14,7 @@ test('a declaration survives being edited as constructor functions and turned ba
   roundTrip('data Model = Model { clicks :: Double, log :: [String], f :: Double -> Double }')
   roundTrip('data Event = Click | Tick Double | Buy (Maybe Int) deriving stock (Eq, Show)')
   roundTrip('data W = W { a :: Double } deriving stock (Eq) deriving anyclass (AddSemigroup, AddMonoid, PartialOrd)')
-  roundTrip('data M = M { s :: Sum Double } deriving (Semigroup, Monoid) via Generically M')
+  roundTrip('data M = M { s :: [Double] } deriving (Semigroup, Monoid) via Generically M')
   roundTrip('newtype Score = Score Int deriving newtype (Eq, Ord)')
 })
 

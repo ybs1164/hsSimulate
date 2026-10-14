@@ -30,7 +30,7 @@ export const CLASS_METHODS = {
   Field: ['divide'],
   OrderedField: ['properFraction'],
   Transcendental: ['sqrt'],
-  IEEEFloat: ['isNaN'],
+  IEEEFloat: [],
   Semigroup: ['mappend'],
   Monoid: ['mempty'],
   PartialOrd: ['leq'],
@@ -47,7 +47,7 @@ export const CONSTRUCTOR_CLASSES = ['Functor', 'Foldable']
 export const METHOD_CLASS = Object.fromEntries(Object.entries(CLASS_METHODS).flatMap(([cls, ms]) => ms.map((m) => [m, cls])))
 
 /** Haskell names of the methods (for labels and generated function names). */
-export const METHOD_LABEL = { eq: '(==)', geq: '(>=)', show: 'show', plus: '(+)', addZero: 'addZero', negate: 'negate', times: '(*)', mulOne: 'mulOne', divide: '(/)', toRational: 'toRational', toInteger: 'toInteger', div: 'div', mod: 'mod', properFraction: 'properFraction', sqrt: 'sqrt', isNaN: 'isNaN', mappend: '(<>)', mempty: 'mempty', leq: 'leq', join: '(\\/)', meet: '(/\\)', scale: '(*^)', fmap: 'fmap', foldMap: 'foldMap' }
+export const METHOD_LABEL = { eq: '(==)', geq: '(>=)', show: 'show', plus: '(+)', addZero: 'addZero', negate: 'negate', times: '(*)', mulOne: 'mulOne', divide: '(/)', toRational: 'toRational', toInteger: 'toInteger', div: 'div', mod: 'mod', properFraction: 'properFraction', sqrt: 'sqrt', mappend: '(<>)', mempty: 'mempty', leq: 'leq', join: '(\\/)', meet: '(/\\)', scale: '(*^)', fmap: 'fmap', foldMap: 'foldMap' }
 
 /** Parameter names for a function implementing each method. */
-export const METHOD_PARAMS = { eq: ['x', 'y'], geq: ['x', 'y'], show: ['x'], plus: ['x', 'y'], addZero: [], negate: ['x'], times: ['x', 'y'], mulOne: [], divide: ['x', 'y'], toRational: ['x'], toInteger: ['x'], div: ['x', 'y'], mod: ['x', 'y'], properFraction: ['x'], sqrt: ['x'], isNaN: ['x'], mappend: ['x', 'y'], mempty: [], leq: ['x', 'y'], join: ['x', 'y'], meet: ['x', 'y'], scale: ['k', 'v'], fmap: ['f', 'xs'], foldMap: ['f', 'xs'] }
+export const METHOD_PARAMS = { eq: ['x', 'y'], geq: ['x', 'y'], show: ['x'], plus: ['x', 'y'], addZero: [], negate: ['x'], times: ['x', 'y'], mulOne: [], divide: ['x', 'y'], toRational: ['x'], toInteger: ['x'], div: ['x', 'y'], mod: ['x', 'y'], properFraction: ['x'], sqrt: ['x'], mappend: ['x', 'y'], mempty: [], leq: ['x', 'y'], join: ['x', 'y'], meet: ['x', 'y'], scale: ['k', 'v'], fmap: ['f', 'xs'], foldMap: ['f', 'xs'] }

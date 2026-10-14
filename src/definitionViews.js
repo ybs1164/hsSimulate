@@ -54,14 +54,13 @@ const PRIMITIVE_NOTES = {
   toInteger: 'primitive · a method of the class EuclideanRing: the embedding of an integral type in ℤ',
   fromRational: METHOD('Field'), properFraction: 'primitive · a method of the class OrderedField: x = n + r with n integral and r between -1 and 1, of the sign of x',
   div: 'primitive · a method of the class EuclideanRing: the quotient, rounded down', mod: 'primitive · a method of the class EuclideanRing: the remainder of div, of the sign of the divisor',
-  isNaN: METHOD('IEEEFloat'), geq: METHOD('Ord'), eq: METHOD('Eq'),
+  geq: METHOD('Ord'), eq: METHOD('Eq'),
   nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
   nothing: CONSTRUCTOR('Maybe a'), just: CONSTRUCTOR('Maybe a'),
   pair: 'primitive · the pairing of the product (a, b)', fst: 'primitive · the first projection π₁ of the product (a, b)', snd: 'primitive · the second projection π₂ of the product (a, b)',
   mappend: METHOD('Semigroup'), mempty: METHOD('Monoid'), fmap: METHOD('Functor'), foldMap: METHOD('Foldable'),
   leq: METHOD('PartialOrd'), join: METHOD('Lattice'), meet: METHOD('Lattice'), scale: METHOD('VectorSpace'),
-  mkSum: CONSTRUCTOR('Sum a'), mkProduct: CONSTRUCTOR('Product a'), mkEndo: CONSTRUCTOR('Endo a'),
   show: 'primitive · rendering a value as text (Show)', showFFloat: 'primitive · decimal rendering of a floating-point number', showCompact: 'primitive · compact rendering of a number (1.2K, 3.4M)',
   mkStdGen: 'primitive · a random generator from a seed', randomR: 'primitive · a uniform random number in a range, and the next generator', randomRInt: 'primitive · a uniform random integer in a range, and the next generator',
 }
@@ -76,8 +75,6 @@ const setProgramField = (index) => (g) => g.call('type:Program:caseProgram', [
   g.lambda(['new', ...PROGRAM_FIELDS], (l) => l.call('type:Program:Program', PROGRAM_FIELDS.map((_, i) => l.param(i === index ? 0 : i + 1))), [g.param(0)]),
   g.param(1),
 ])
-// getSum s = caseSum (\x -> x) s
-const unwrap = (type) => (g) => g.call(`type:${type}:case${type}`, [g.lambda(['x'], (l) => l.param(0)), g.param(0)])
 // The integral and fractional parts of x — (n, r) = properFraction x — as
 // nodes of `g`, each usable once more through g.ref.
 const fraction = (g) => {
@@ -101,7 +98,6 @@ const GRAPHS = {
   ]),
   length: (g) => g.call('prelude:foldr', [g.lambda(['x', 'n'], (l) => l.call('plus', [l.param(1), { lit: '1' }])), { lit: '0' }, g.param(0)]),
   append: (g) => g.call('prelude:foldr', [g.call('prelude:cons', [null, null]), g.param(1), g.param(0)]),
-  mconcat: (g) => g.call('prelude:foldr', [g.call('prelude:mappend', [null, null]), g.call('prelude:mempty', []), g.param(0)]),
   // xs !? i = foldr (\x r k -> select (k == 0) (Just x) (apply r (k - 1))) (\k -> Nothing) xs `apply` i
   index: (g) => g.call('apply', [
     g.call('prelude:foldr', [
@@ -154,10 +150,6 @@ const GRAPHS = {
   or: (g) => g.call('select', [g.param(0), { lit: 'True' }, g.param(1)]),
   not: (g) => g.call('select', [g.param(0), { lit: 'False' }, { lit: 'True' }]),
   maybe: (g) => g.call('type:Maybe:caseMaybe', [g.param(0), g.param(1), g.param(2)]),
-  getSum: unwrap('Sum'),
-  getProduct: unwrap('Product'),
-  // appEndo e x = caseEndo (\x f -> apply f x) e
-  appEndo: (g) => g.call('type:Endo:caseEndo', [g.lambda(['x', 'f'], (l) => l.call('apply', [l.param(1), l.param(0)]), [g.param(1)]), g.param(0)]),
   // program initial view handle step = Program initial view handle step 10 604800 (\model -> mempty)
   program: (g) => g.call('type:Program:Program', [g.param(0), g.param(1), g.param(2), g.param(3), { lit: '10' }, { lit: '604800' }, g.lambda(['model'], (l) => l.call('prelude:mempty', []))]),
   setStepsPerSecond: setProgramField(4),

@@ -16,8 +16,8 @@
 // only the weakest structure it actually needs: `(+)` is just a semigroup
 // operation, `negate`/`(-)` need additive inverses (AddGroup), `(*)` a
 // multiplicative semigroup, `addZero`/`mulOne` the two monoid identities,
-// `(/)` a Field, `sqrt` Transcendental, `toRational` OrderedRing,
-// `isNaN` IEEEFloat (the numeric conversions are below). `geq`/`eq` use the
+// `(/)` a Field, `sqrt` Transcendental, `toRational` OrderedRing (the
+// numeric conversions are below). `geq`/`eq` use the
 // auxiliary Ord/Eq classes, and `select` is the polymorphic `if` that the
 // pinned `ifThenElse` deliberately is not.
 import { pred, scheme, tapp, tcon, tfun, tlist, ttuple, tvar } from './typeSystem.js'
@@ -35,7 +35,6 @@ const t = tvar('t')
 const m = tvar('m')
 const Double = tcon('Double')
 const ap = (h, x) => tapp(h, x)
-const newtype = (name, x) => tapp(tcon(name), x)
 const e = tvar('e')
 const widget = (msg) => tapp(tcon('Widget'), msg)
 const sub = (msg) => tapp(tcon('Sub'), msg)
@@ -61,7 +60,6 @@ export const builtinSchemes = {
   divide: scheme(['a'], [pred('Field', a)], tfun(a, tfun(a, a))),
   sqrt: scheme(['a'], [pred('Transcendental', a)], tfun(a, a)),
   toRational: scheme(['a'], [pred('OrderedRing', a)], tfun(a, Rational)),
-  isNaN: scheme(['a'], [pred('IEEEFloat', a)], tfun(a, Bool)),
   geq: scheme(['a'], [pred('Ord', a)], tfun(a, tfun(a, Bool))),
   eq: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(a, Bool))),
   select: scheme(['a'], [], tfun(Bool, tfun(a, tfun(a, a)))),
@@ -130,19 +128,12 @@ export const builtinSchemes = {
   // Category classes (src/categoryClasses.js), Haskell names.
   mappend: scheme(['a'], [pred('Semigroup', a)], tfun(a, tfun(a, a))),
   mempty: scheme(['a'], [pred('Monoid', a)], a),
-  mconcat: scheme(['a'], [pred('Monoid', a)], tfun(tlist(a), a)),
   fmap: scheme(['f', 'a', 'b'], [pred('Functor', f)], tfun(tfun(a, b), tfun(ap(f, a), ap(f, b)))),
   foldMap: scheme(['t', 'm', 'a'], [pred('Foldable', t), pred('Monoid', m)], tfun(tfun(a, m), tfun(ap(t, a), m))),
   leq: scheme(['a'], [pred('PartialOrd', a)], tfun(a, tfun(a, Bool))),
   join: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
   meet: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
   scale: scheme(['a'], [pred('VectorSpace', a)], tfun(Double, tfun(a, a))),
-  mkSum: scheme(['a'], [], tfun(a, newtype('Sum', a))),
-  getSum: scheme(['a'], [], tfun(newtype('Sum', a), a)),
-  mkProduct: scheme(['a'], [], tfun(a, newtype('Product', a))),
-  getProduct: scheme(['a'], [], tfun(newtype('Product', a), a)),
-  mkEndo: scheme(['a'], [], tfun(tfun(a, a), newtype('Endo', a))),
-  appEndo: scheme(['a'], [], tfun(newtype('Endo', a), tfun(a, a))),
 
   // A game, shaped like gloss's `play` (and Elm's Browser.element): the
   // initial model, a view, a message handler and a time step. The view is a

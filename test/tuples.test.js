@@ -7,7 +7,7 @@ import { declareTypes } from '../src/typeDecls.js'
 import { showType, tcon, ttuple } from '../src/typeSystem.js'
 import { parseValue } from '../src/valueParser.js'
 
-const B = ['pair', 'fst', 'snd', 'mkStdGen', 'randomR', 'randomRInt', 'mappend', 'mkSum', 'show']
+const B = ['pair', 'fst', 'snd', 'mkStdGen', 'randomR', 'randomRInt', 'mappend', 'show']
 const nodes = Object.fromEntries(B.map((b) => [b, { id: b, type: 'function', builtin: b, label: b }]))
 const call = (id, f, slots) => ({ id, type: 'function', sourceFunctionId: f, params: slots.map((s) => (typeof s === 'string' ? s : '')), mounted: slots.map((s) => (typeof s === 'string' ? null : s.node)) })
 const g = (...ns) => Object.fromEntries(ns.map((n) => [n.id, n]))
@@ -15,13 +15,13 @@ const ev = createEvaluator({ nodes, functionBodies: {} })
 
 test('pairs: (,), fst, snd, show, and a product of monoids', () => {
   const graph = g(call('p', 'pair', ['1', 'True']), call('a', 'fst', [{ node: 'p' }]), call('b', 'snd', [{ node: 'p' }]),
-    call('s1', 'mkSum', ['2']), call('s2', 'mkSum', ['3']), call('q1', 'pair', [{ node: 's1' }, '"ab"']), call('q2', 'pair', [{ node: 's2' }, '"c"']), call('qq', 'mappend', [{ node: 'q1' }, { node: 'q2' }]))
+    call('q1', 'pair', ['"x"', '"ab"']), call('q2', 'pair', ['"y"', '"c"']), call('qq', 'mappend', [{ node: 'q1' }, { node: 'q2' }]))
   assert.equal(showValue(ev.run(graph, 'p')), '(1,True)')
   assert.equal(ev.run(graph, 'a'), 1)
   assert.equal(ev.run(graph, 'b'), true)
-  assert.equal(showValue(ev.run(graph, 'qq')), '(Sum 5,"abc")')
+  assert.equal(showValue(ev.run(graph, 'qq')), '("xy","abc")')
   const pass = inferGraph(nodes, {}, graph)
-  assert.equal(showType(valueTypeOfEntry(pass.perNode.get('qq'))), '(Sum a, String)')
+  assert.equal(showType(valueTypeOfEntry(pass.perNode.get('qq'))), '(String, String)')
   assert.doesNotThrow(() => reduce(pass.preds))
 })
 

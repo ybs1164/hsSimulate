@@ -146,10 +146,10 @@ export function elaborationIndex(data, mainGraph, functionBodies) {
 // - A bare number meeting a data value is broadcast along it: the diagonal
 //   ℤ → R × S, which is the (unique) ring map, so `0`/`addZero` and
 //   `1`/`mulOne` already are the zero and one of any product ring.
-// - `mempty` can't be a number (lists, Maybe, Endo have no map from ℤ), so
+// - `mempty` can't be a number (lists, Maybe have no map from ℤ), so
 //   it is a formal identity, MEMPTY, that `<>` absorbs and that becomes a
 //   concrete value of the right shape whenever it's observed: `[]`,
-//   `Nothing`, `Sum 0`, the identity function, or a record of MEMPTYs.
+//   `Nothing`, or a record of MEMPTYs.
 // - A type with a hand-written instance (`instance AddMonoid Wallet`) uses
 //   its own methods instead, and its own identities for literals and
 //   mempty (see "Hand-written instances" below).
@@ -163,9 +163,6 @@ export function concreteMempty(like) {
   if (like.type === 'Maybe') return nothing
   if (like.type === 'Picture') return picture('Blank', 0, [])
   if (like.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'None', ctorIndex: 0, args: [] }
-  if (like.type === 'Sum') return { ...like, args: [now(0)] }
-  if (like.type === 'Product') return { ...like, args: [now(1)] }
-  if (like.type === 'Endo') return { ...like, args: [now({ kind: 'closure', callee: 'identity', args: [null] })] } // End(a)'s identity
   return { ...like, args: like.args.map(() => now(MEMPTY)) }
 }
 
@@ -246,8 +243,8 @@ export function createEvaluator(registry) {
     divide: [2, (x, y) => lift2((a, b) => a / b, x, y, 'divide')],
     sqrt: [1, (x) => lift1(Math.sqrt, x, 'sqrt')],
     // The numeric conversions, the Haskell Report way (builtinSchemes.js).
-    // The class methods — toRational, toInteger, div/mod, properFraction,
-    // isNaN — take a value of a user type through its hand-written instance
+    // The class methods — toRational, toInteger, div/mod, properFraction —
+    // take a value of a user type through its hand-written instance
     // (or a newtype's field); on a number they're the host's arithmetic
     // (number types share one representation, so a change of type is
     // type-level only). fromInteger and fromRational aren't methods: ℤ is
@@ -266,7 +263,6 @@ export function createEvaluator(registry) {
     })],
     div: [2, (x, y) => lift2((a, b) => Math.floor(a / nonZero(b)) + 0, x, y, 'div')],
     mod: [2, (x, y) => lift2((a, b) => a - nonZero(b) * Math.floor(a / b) + 0, x, y, 'mod')],
-    isNaN: [1, (x) => convert(x, 'isNaN', Number.isNaN)],
     abs: [1, (x) => (builtins.geq[1](x, now(0)) ? force(x) : builtins.negate[1](x))], // select (x >= 0) x (negate x)
     fromIntegral: [1, (x) => builtins.toInteger[1](x)], // fromInteger . toInteger
     realToFrac: [1, (x) => builtins.toRational[1](x)], // fromRational . toRational
@@ -361,13 +357,6 @@ export function createEvaluator(registry) {
     // Category classes (categoryClasses.js).
     mappend: [2, (x, y) => mappend(x, y)],
     mempty: [0, () => MEMPTY],
-    mconcat: [1, (xs) => {
-      const go = (t) => {
-        const l = list(t)
-        return l.ctorIndex === 0 ? MEMPTY : mappend(l.args[0], delay(() => go(l.args[1])))
-      }
-      return go(xs)
-    }],
     fmap: [2, (f, t) => {
       const v = force(t)
       const own = userMethod(v, 'fmap')
@@ -391,11 +380,6 @@ export function createEvaluator(registry) {
     join: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a || b : Math.max(a, b)), x, y, 'join')],
     meet: [2, (x, y) => lift2((a, b) => (typeof a === 'boolean' ? a && b : Math.min(a, b)), x, y, 'meet')],
     scale: [2, (k, v) => scaleValue(k, v)],
-    mkSum: [1, (x) => ({ kind: 'data', type: 'Sum', ctor: 'Sum', ctorIndex: 0, args: [x] })],
-    getSum: [1, (s) => newtypeField(s, 'Sum', 0)],
-    mkProduct: [1, (x) => ({ kind: 'data', type: 'Product', ctor: 'Product', ctorIndex: 0, args: [x] })],
-    getProduct: [1, (s) => newtypeField(s, 'Product', 1)],
-    mkEndo: [1, (f) => ({ kind: 'data', type: 'Endo', ctor: 'Endo', ctorIndex: 0, args: [f] })],
     // Games (runtime.js): a Program and its widgets are plain lazy data.
     // A Program carries its settings after the four functions: steps per
     // second, the longest time away that counts (seconds), subscriptions.
@@ -426,12 +410,6 @@ export function createEvaluator(registry) {
     yellow: [0, () => colour(1, 0.85, 0)],
     black: [0, () => colour(0, 0, 0)],
     white: [0, () => colour(1, 1, 1)],
-    appEndo: [2, (e, x) => {
-      const v = force(e)
-      if (isMempty(v)) return force(x) // mempty :: Endo a is the identity
-      if (!isData(v) || v.type !== 'Endo') throw new EvalError(`Expected an Endo, got ${show(v)}`)
-      return applyValue(v.args[0], [x])
-    }],
   }
 
   // ---- Hand-written instances ----------------------------------------------
@@ -618,14 +596,6 @@ export function createEvaluator(registry) {
     return { ...v, args }
   }
 
-  /** The field of a newtype value; MEMPTY of Sum/Product unwraps to its carrier's identity. */
-  function newtypeField(t, type, identity) {
-    const v = force(t)
-    if (isMempty(v)) return identity
-    if (!isData(v) || v.type !== type) throw new EvalError(`Expected a ${type}, got ${show(v)}`)
-    return force(v.args[0])
-  }
-
   /** A unary numeric/boolean operation, lifted pointwise over data values (or a hand-written `method`). */
   function lift1(op, x, method) {
     const a = force(x)
@@ -683,15 +653,8 @@ export function createEvaluator(registry) {
     if (isMempty(b)) return a
     if (!isData(a) || !isData(b)) throw new EvalError(`No (<>) for ${show(a)}`)
     if (a.type === 'Maybe') return a.ctorIndex === 0 ? b : b.ctorIndex === 0 ? a : just(delay(() => mappend(a.args[0], b.args[0])))
-    if (a.type === 'Sum') return { ...a, args: [delay(() => lift2((p, q) => p + q, a.args[0], b.args[0]))] }
-    if (a.type === 'Product') return { ...a, args: [delay(() => lift2((p, q) => p * q, a.args[0], b.args[0]))] }
     if (a.type === 'Picture') return picture('Pictures', 6, [now(a), now(b)])
     if (a.type === 'Sub') return { kind: 'data', type: 'Sub', ctor: 'Batch', ctorIndex: 3, args: [now(a), now(b)] }
-    if (a.type === 'Endo') {
-      // End(a): (<>) is composition — the protected builtin `compose`.
-      if (registry.nodes.compose?.builtin !== 'compose') throw new EvalError('Endo needs the compose builtin')
-      return { ...a, args: [now({ kind: 'closure', callee: 'compose', args: [a.args[0], b.args[0], null] })] }
-    }
     // A record deriving Semigroup via Generically: fieldwise.
     if (a.ctorIndex !== b.ctorIndex) throw new EvalError(`Cannot combine ${a.ctor} with ${b.ctor}`)
     return { ...a, args: a.args.map((f, i) => delay(() => mappend(f, b.args[i]))) }
@@ -802,7 +765,7 @@ export function createEvaluator(registry) {
       const like = { kind: 'data', type: d.type, args: [] }
       if (typeof v === 'number' && hasWritten(like, ARITHMETIC)) return record(now(literalAt(v, like)))
       if (isMempty(v) && hasWritten(like, ['Monoid'])) return record(now(memptyAt(like)))
-      // MEMPTY standing for a value of the type: its identity (`Sum 0`, `Nothing`, `Endo id`, a record of MEMPTYs).
+      // MEMPTY standing for a value of the type: its identity (`Nothing`, a record of MEMPTYs).
       if (isMempty(v)) return concreteMempty({ kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount ?? 0 }, () => now(MEMPTY)) })
       // A broadcast number standing for a whole record: every field is that same value.
       if (typeof v === 'number' && d.fieldCount !== undefined) return { kind: 'data', type: d.type, ctor: d.ctor, ctorIndex: 0, args: Array.from({ length: d.fieldCount }, () => now(v)) }
