@@ -59,7 +59,7 @@ app.innerHTML = `
       </aside>
       <section class="canvas-panel">
         <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Nodes snap together like magnets</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Open every function: show what is plugged into its slots on the canvas">⤢</button><button id="fold-all" title="Fold every function: keep what is plugged in inside its slots">⤡</button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Drag a node's right-end port onto a slot to connect</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Open every function: show what is plugged into its slots on the canvas">⤢</button><button id="fold-all" title="Fold every function: keep what is plugged in inside its slots">⤡</button></div></div>
         <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
       </section>
       <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
@@ -71,7 +71,7 @@ const canvas = document.querySelector('#graph-canvas')
 const ctx = canvas.getContext('2d')
 const editor = document.querySelector('#port-editor')
 const inspector = document.querySelector('#inspector-content')
-const state = { functionStack: [], multi: new Set(), zoom: 1, offset: { x: 0, y: 0 }, selected: 'add', running: false, drag: null, pan: null, snapTarget: null, activeFunction: null, suppressClick: false }
+const state = { functionStack: [], multi: new Set(), zoom: 1, offset: { x: 0, y: 0 }, selected: 'add', running: false, drag: null, wire: null, pan: null, snapTarget: null, activeFunction: null, suppressClick: false }
 const nodes = {
   add: { id: 'add', type: 'function', x: 300, y: 190, label: 'add', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#6c5ce7', scope: 'main', builtin: 'succ', readonly: true, expression: 'λn f x. f (n f x)' },
   identity: { id: 'identity', type: 'function', x: 820, y: 190, label: 'identity', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#4f8ef7', scope: 'main', builtin: 'identity', readonly: true, expression: 'λx. x' },
@@ -1074,7 +1074,6 @@ const CHIP_W = 150       // default (and minimum) value-chip width; a chip grows
 const CHIP_MAX_W = 420   // past this a chip's text is cut with an ellipsis (never squeezed)
 const CHIP_H = FN_H      // chip height — the same height as a function block, so a value is visibly the same pill, not a flattened one
 const CHIP_FONT = 15     // world px, value text inside a chip
-const SNAP_RADIUS = 130  // world-space magnet radius: highlight + auto-connect distance
 const TYPE_COLORS = { Int: '#4f8ef7', Integer: '#e8b23c', Word: '#35b4e0', Float: '#3cbe84', Double: '#a96ef0', Rational: '#d66bd1', Natural: '#e07a5f', Bool: '#ed6b84' }
 const VAR_PALETTE = ['#8b7cf2', '#5fa8e8', '#3cbe9e', '#e8b23c', '#ed8fa8', '#4fc2c2', '#b98fef', '#f0954a']
 const FN_TYPE_COLOR = '#6c5ce7'
@@ -1680,7 +1679,7 @@ function layoutBody(graph) {
   let y = treeHeight(root, graph) / 2 + TREE_ROW
   for (const n of Object.values(graph)) if (!inTree.has(n.id) && n.type !== 'output' && !n.mountedTo) { setRightEdge(n, rightEdge(root)); n.y = y; y += TREE_ROW }
 }
-// A solid link from whatever feeds a function body's Output into it.
+// A solid link from whatever feeds a function body's Output into its in-port.
 function drawOutputLink() {
   const output = activeNodes().output
   const source = output?.source && activeNodes()[output.source]
@@ -1689,7 +1688,8 @@ function drawOutputLink() {
   const to = toScreen({ x: output.x - chipHalfWidth(output), y: output.y })
   ctx.save()
   ctx.strokeStyle = ACCENT; ctx.lineWidth = 2
-  ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke()
+  const bend = Math.max(40 * state.zoom, Math.abs(to.x - from.x) / 2) // the node stays wherever it was wired from, so curve like the wire did
+  ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(from.x + bend, from.y, to.x - bend, to.y, to.x, to.y); ctx.stroke()
   ctx.beginPath(); ctx.arc(to.x, to.y, 4, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
   ctx.restore()
 }
@@ -1727,6 +1727,7 @@ function draw() {
   })
   drawUnfoldedLinks()
   drawLinkHighlights()
+  drawWire()
   updatePortEditor(pass)
   document.querySelector('#node-count').textContent = Object.keys(activeNodes()).length
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
@@ -1735,7 +1736,7 @@ function draw() {
   document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
-  if (!state.drag) scheduleCheckpoint()
+  if (!state.drag && !state.wire) scheduleCheckpoint()
 }
 // A function node renders as one unified stadium block — the ƒ head badge
 // and every parameter slot live inside the SAME silhouette (no separate
@@ -1940,7 +1941,6 @@ function updatePortEditor(pass = typePass()) {
     tag.style.fontSize = `${10 * state.zoom}px`
     tag.style.padding = `${2 * state.zoom}px ${7 * state.zoom}px`
     tag.style.marginBottom = `${5 * state.zoom}px`
-    tag.style.gap = `${3 * state.zoom}px`
     tag.style.maxWidth = `${(SLOT_STRIDE - TAG_GAP) * state.zoom}px`
     // Zoomed far out the tag is a few px of unreadable text (or, under a
     // browser minimum font size, a full-size pill piling onto its
@@ -2014,7 +2014,7 @@ function updatePortEditor(pass = typePass()) {
     add.className = 'param-add'; add.type = 'button'; add.textContent = '+'; add.title = editable === 'signature' ? 'Add a parameter (to the body and every call)' : 'Add an element'
     // Just past the block's right edge (not at the next slot's would-be
     // center, which lands on the edge itself once the tail is wider).
-    const center = toScreen({ x: functionBlockRight(node) + 22, y: node.y })
+    const center = toScreen({ x: functionBlockRight(node) + 34, y: node.y }) // past the out-port
     const addSize = 26 * state.zoom
     add.style.width = add.style.height = `${addSize}px`
     add.style.fontSize = `${18 * state.zoom}px`; add.style.lineHeight = `${20 * state.zoom}px`
@@ -2029,6 +2029,38 @@ function updatePortEditor(pass = typePass()) {
   })
   drawCanvasChains(pass)
   drawSignatureBar()
+  // Every node's out-port, on its right end: drag from it to stretch a wire
+  // and release over a slot (or Output) to plug the node in there. A port
+  // that already feeds something can be pulled again to re-plug it, or
+  // dropped on empty canvas to disconnect.
+  const graph = activeNodes(), output = state.activeFunction ? graph.output : null
+  const portSize = 14 * state.zoom
+  const placePort = (el, at) => {
+    el.style.width = el.style.height = `${portSize}px`
+    el.style.left = `${at.x - portSize / 2}px`; el.style.top = `${at.y - portSize / 2}px`
+    el.style.borderWidth = `${Math.max(1, 2 * state.zoom)}px`
+  }
+  Object.values(graph).filter((n) => isVisible(n) && n.type !== 'output' && n.type !== 'law').forEach((n) => {
+    const port = document.createElement('div')
+    const feeding = !!n.mountedTo || output?.source === n.id
+    port.className = `out-port ${feeding ? 'filled' : ''} ${state.wire?.node === n ? 'active' : ''}`
+    port.dataset.nodeId = n.id
+    port.title = feeding ? 'Drag to re-plug (drop on empty canvas to disconnect)' : 'Drag onto a slot to plug this in'
+    placePort(port, toScreen({ x: rightEdge(n), y: n.y }))
+    port.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); beginWire(n, event) })
+    editor.append(port)
+  })
+  // Output's in-port on its left end: wires are dropped here; grabbing it
+  // when filled pulls out the wire of what feeds it.
+  if (output?.type === 'output' && isVisible(output)) {
+    const port = document.createElement('div')
+    const source = graph[output.source]
+    port.className = `in-port ${source ? 'filled' : ''} ${state.snapTarget?.kind === 'output' ? 'snap-target' : ''}`
+    port.title = source ? 'Drag to pull out the wire feeding Output' : 'Drop a wire here to make it the result'
+    placePort(port, toScreen({ x: output.x - chipHalfWidth(output), y: output.y }))
+    port.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); if (source && isVisible(source)) beginWire(source, event) })
+    editor.append(port)
+  }
   if (focused) {
     const input = editor.querySelector(`.param-slot[data-function-id="${CSS.escape(focused.fn)}"][data-index="${focused.index}"] .param-value`)
     if (input) { input.focus(); input.setSelectionRange(focused.start, focused.end) }
@@ -2446,64 +2478,58 @@ function hitNode(x, y) {
     return n.type === 'function' ? pointInFunctionBlock(n, x, y) : pointInValueBlock(n, x, y)
   })
 }
-// The nearest empty, type-compatible slot (or the function body's Output)
-// within magnet range of `dragged`'s current (world-space) position — the
-// single source of truth for both the "what should glow right now" snap
-// highlight and the "what do we connect to on release" decision, so the two
-// always agree.
-// Landing right on a slot's own footprint (PRECISE_RADIUS) connects even if
-// its text currently shows something else — e.g. a builtin's param starts
-// pre-filled with its own declared name ('n', 'x', ...) as a display
-// placeholder, not literal emptiness, so a precise drop must be able to
-// override it. Merely drifting into the wider magnet radius while heading
-// toward the function in general only grabs slots that are genuinely blank
-// ('' — the case for a fresh function-call node), so a loose drop can't
-// clobber a slot that already reads as meaningfully filled.
-const PRECISE_SLOT_RADIUS = 60
-function findSnapTarget(dragged) {
+// Connections are made with wires: every node has an out-port on its right
+// end (see updatePortEditor); dragging from it stretches a wire to the
+// cursor, and releasing over a slot (or the function body's Output in-port)
+// connects. This is the slot (or Output) under the wire's free end at world
+// point `at` — the single source of truth for both "what glows right now" and
+// "what do we connect to on release", so the two always agree. A slot that
+// already shows text (a typed literal, or a builtin's placeholder name) is
+// overridden by a wire dropped on it; one with a node plugged in is not —
+// pull that wire out first.
+const WIRE_SLOT_RADIUS = SLOT_D / 2 + 14
+function findWireTarget(source, at) {
   if (viewingReadonly()) return null // nodes may be moved around to look, never reconnected
-  if (!dragged || dragged.type === 'output' || dragged.type === 'law' || dragged.mountedTo) return null // a plugged-in node stays plugged where it is
-  let best = null, bestDist = SNAP_RADIUS
-  Object.values(activeNodes()).filter(isFunction).forEach((target) => {
-    if (target.id === dragged.id || isFolded(target) || !isVisible(target)) return
+  if (!source || source.type === 'output' || source.type === 'law') return null
+  const graph = activeNodes()
+  const downstream = new Set([source.id, ...[...pluggedDescendants(source, graph)].map((k) => k.id)]) // plugging into its own argument would be a cycle
+  let best = null, bestDist = WIRE_SLOT_RADIUS
+  Object.values(graph).filter(isFunction).forEach((target) => {
+    if (downstream.has(target.id) || isFolded(target) || !isVisible(target)) return
     target.params.forEach((value, index) => {
-      if (target.mounted[index]) return // already has a node plugged in — detach it first
+      if (target.mounted[index]) return
       const c = slotWorldCenter(target, index)
-      const dist = Math.hypot(dragged.x - c.x, dragged.y - c.y)
-      if ((value !== '' && dist >= PRECISE_SLOT_RADIUS) || !canConnect(dragged, target, index)) return
-      if (dist < bestDist) { bestDist = dist; best = { kind: 'param', targetId: target.id, index } }
+      const dist = Math.hypot(at.x - c.x, at.y - c.y)
+      if (dist < bestDist && canConnect(source, target, index)) { bestDist = dist; best = { kind: 'param', targetId: target.id, index } }
     })
   })
-  if (state.activeFunction) {
-    const output = activeNodes().output
-    if (output && output.id !== dragged.id) {
-      const dist = Math.hypot(dragged.x - output.x, dragged.y - output.y)
-      if (dist < bestDist) { bestDist = dist; best = { kind: 'output' } }
-    }
-  }
+  const output = state.activeFunction && graph.output
+  if (!best && output && output.id !== source.id && Math.abs(at.x - (output.x - chipHalfWidth(output))) <= chipHalfWidth(output) + 24 && Math.abs(at.y - output.y) <= CHIP_H / 2 + 24) best = { kind: 'output' }
   return best
 }
-// Applies state.snapTarget (computed live while dragging) on release. Shared
-// by every drag origin — a loose canvas node or a value pulled out of a
-// slot — so "snap to the thing that was glowing" is a single code path.
+// Whatever `node`'s out-port currently feeds — a slot or Output — is
+// disconnected (its wire is being pulled out to be re-plugged elsewhere).
+function unplug(node) {
+  const at = slotHost(node)
+  if (at) detachMounted(at.host, at.index)
+  const output = activeNodes().output
+  if (output?.type === 'output' && output.source === node.id) { output.source = null; output.value = 'open'; node.connected = false }
+}
+// Applies state.snapTarget (computed live while a wire is dragged) on
+// release, so "connect to the thing that was glowing" is a single code path.
 function finishConnection(dragged) {
   const target = state.snapTarget
   if (!target) return false
   if (target.kind === 'output') {
     const output = activeNodes().output
     // Unlike a slot, Output doesn't swallow the node: it stays on the canvas
-    // (still editable, its own slots still reachable), parked just left of
-    // Output with a link line drawn between them.
+    // where it is (still editable, its own slots still reachable), with a
+    // link line drawn between them.
     const previous = activeNodes()[output.source]
     if (previous) previous.connected = false
     output.source = dragged.id
     output.value = nodeDisplayText(dragged)
     dragged.connected = true
-    const width = dragged.type === 'function' ? functionBlockRight(dragged) - dragged.x : chipHalfWidth(dragged)
-    const ox = dragged.x, oy = dragged.y
-    dragged.x = output.x - chipHalfWidth(output) - 70 - width
-    dragged.y = output.y
-    pluggedDescendants(dragged).forEach((k) => { k.x += dragged.x - ox; k.y += dragged.y - oy })
     state.selected = output.id
     return true
   }
@@ -2529,7 +2555,7 @@ function finishConnection(dragged) {
     return false
   }
   if (dragged.type === 'function') dragged.composedInto = targetNode.id
-  dragged.placed = false // laid out beside the call it now feeds, on the next draw
+  dragged.placed = true // a wired node stays where it was put; ⤢ lays the tree out
   state.selected = targetNode.id
   return true
 }
@@ -2545,6 +2571,33 @@ function beginDrag(node, worldPoint, { moved = false } = {}) {
   document.body.classList.add('dragging')
 }
 function endDrag() { state.drag = null; document.body.classList.remove('dragging') }
+// Pulling a wire out of `node`'s out-port. What it fed stays connected until
+// the wire actually moves (a plain click on a port changes nothing).
+function beginWire(node, event) {
+  if (viewingReadonly()) return // a read-only definition can be looked at, never rewired
+  state.wire = { node, at: canvasPoint(event), moved: false }
+  state.selected = node.id
+  document.body.classList.add('dragging')
+  updateInspector(); draw()
+}
+function endWire() { state.wire = null; state.snapTarget = null; document.body.classList.remove('dragging') }
+// The wire being dragged: from the out-port to the cursor, or straight into
+// the slot / Output it would connect to — solid when it would connect.
+function drawWire() {
+  if (!state.wire) return
+  const graph = activeNodes(), target = state.snapTarget
+  const from = toScreen({ x: rightEdge(state.wire.node), y: state.wire.node.y })
+  let to = toScreen(state.wire.at)
+  if (target?.kind === 'param' && graph[target.targetId]) to = slotScreenCenter(graph[target.targetId], target.index)
+  else if (target?.kind === 'output') to = toScreen({ x: graph.output.x - chipHalfWidth(graph.output), y: graph.output.y })
+  const bend = Math.max(40 * state.zoom, Math.abs(to.x - from.x) / 2)
+  ctx.save()
+  ctx.strokeStyle = ACCENT; ctx.lineWidth = 2
+  if (!target) ctx.setLineDash([6 * state.zoom, 5 * state.zoom])
+  ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(from.x + bend, from.y, to.x - bend, to.y, to.x, to.y); ctx.stroke()
+  ctx.setLineDash([]); ctx.beginPath(); ctx.arc(to.x, to.y, 4, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
+  ctx.restore()
+}
 function canvasPoint(event) { const rect = canvas.getBoundingClientRect(); return { x: (event.clientX - rect.left - state.offset.x) / state.zoom, y: (event.clientY - rect.top - state.offset.y) / state.zoom } }
 function setZoom(nextZoom, clientX = canvas.clientWidth / 2, clientY = canvas.clientHeight / 2) {
   const rect = canvas.getBoundingClientRect()
@@ -2586,7 +2639,12 @@ canvas.addEventListener('pointerdown', (event) => {
 // rest of that drag. Both drag origins funnel through the same state.drag,
 // so one pair of window listeners drives them identically.
 window.addEventListener('pointermove', (event) => {
-  if (state.drag) {
+  if (state.wire) {
+    state.wire.at = canvasPoint(event)
+    if (!state.wire.moved && Math.hypot(event.movementX, event.movementY) > 2) { state.wire.moved = true; unplug(state.wire.node) }
+    if (state.wire.moved) state.snapTarget = findWireTarget(state.wire.node, state.wire.at)
+    draw()
+  } else if (state.drag) {
     const p = canvasPoint(event)
     if (Math.hypot(event.movementX, event.movementY) > 2) state.drag.moved = true
     const dx = p.x - state.drag.dx - state.drag.node.x, dy = p.y - state.drag.dy - state.drag.node.y
@@ -2595,7 +2653,6 @@ window.addEventListener('pointermove', (event) => {
     if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m) moving.add(m) })
     ;[...moving].forEach((m) => pluggedDescendants(m, activeNodes(), moving))
     moving.forEach((m) => { m.x += dx; m.y += dy })
-    state.snapTarget = findSnapTarget(state.drag.node)
     draw()
   } else if (state.pan) {
     state.offset.x = state.pan.offsetX + event.clientX - state.pan.x
@@ -2604,21 +2661,26 @@ window.addEventListener('pointermove', (event) => {
   }
 })
 window.addEventListener('pointerup', (event) => {
+  if (state.wire) {
+    // Released over nothing, a moved wire stays pulled out: disconnected.
+    if (state.wire.moved) finishConnection(state.wire.node)
+    endWire(); updateInspector(); draw()
+    return
+  }
   if (!state.drag && !state.pan) return
   if (!state.drag) {
     state.pan = null
     canvas.classList.remove('panning')
     return
   }
-  finishConnection(state.drag.node)
   const wasDragged = state.drag.moved
-  endDrag(); state.snapTarget = null; updateInspector(); draw()
+  endDrag(); updateInspector(); draw()
   if (wasDragged) {
     state.suppressClick = true
     event.stopPropagation()
   }
 })
-window.addEventListener('pointercancel', () => { endDrag(); state.pan = null; state.snapTarget = null; canvas.classList.remove('panning') })
+window.addEventListener('pointercancel', () => { endDrag(); endWire(); state.pan = null; canvas.classList.remove('panning'); draw() })
 canvas.addEventListener('wheel', (event) => {
   event.preventDefault()
   setZoom(state.zoom + (event.deltaY < 0 ? .1 : -.1), event.clientX, event.clientY)
