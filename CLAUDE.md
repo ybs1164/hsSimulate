@@ -2,22 +2,24 @@
 
 ## 아키텍처 개요
 - `src/main.js`: 앱 화면, 그래프 상태, 캔버스 상호작용, 실행 로직.
-- `src/typeSystem.js`: 힌들리-밀너 타입 엔진.
+- `src/typeSystem.js`: 힌들리-밀너 타입 엔진과 kind(`*`, `k₁ -> k₂`) 검사.
 - `src/typeExpr.js`: 타입을 노드로 다루기(타입 생성자 = 타입 수준 함수, 함수 타입 = 커링된 꺽쇠 사슬 `A ▸ B ▸ C`, 구멍 `_`)와 본체 매개변수·Output의 타입 주석(부분 타입 시그니처) 해석, 클래스 노드(작업 공간의 CLASSES에서 타입 변수로 끌어와 고정하는 제약 `Ord a =>`, Output의 `context`).
 - `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블.
-- `src/classEnv.js`: 클래스 환경과 제약 해소 엔진(문맥 있는 인스턴스, entailment, context reduction, 디폴팅, 사용자 클래스의 증거 생성).
+- `src/classEnv.js`: 클래스 환경과 제약 해소 엔진(문맥 있는 인스턴스, entailment, context reduction, 디폴팅, 인스턴스 키 `Cls@Head`와 모든 클래스의 사전 증거 생성).
 - `src/numericClasses.js`: 숫자 타입클래스 계층과 인스턴스 선언.
-- `src/categoryClasses.js`: 카테고리 클래스(Semigroup, Monoid, PartialOrd, Lattice, VectorSpace, Functor, Foldable) 선언과 인스턴스.
+- `src/categoryClasses.js`: 카테고리 클래스(Semigroup, Monoid, PartialOrd, Lattice, VectorSpace, Functor, Foldable, Traversable, Applicative, Monad) 선언과 인스턴스.
 - `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소 엔진을 다시 내보내는 진입점.
-- `src/typeDecls.js`: 사용자 타입 선언(하스켈 `data`/`newtype`, 타입 매개변수 포함)과 그로부터 유도되는 함수·인스턴스, 직접 작성한 인스턴스 검사.
+- `src/typeDecls.js`: 사용자 타입 선언(하스켈 `data`/`newtype`, 타입 매개변수 포함, 매개변수의 kind 추론)과 그로부터 유도되는 함수·인스턴스.
 - `src/typeEdits.js`: 유도 함수 커스터마이즈(원시 함수 `f#` 위에 재정의)와 타입 편집 시 호출 노드 이전.
 - `src/deriveGraphs.js`: 유도(deriving) 인스턴스를 같은 동작의 그래프(메서드별 커스텀 함수와 λ)로 펼쳐 직접 작성한 인스턴스로 바꾸기.
-- `src/classMethods.js`: 직접 작성할 수 있는 내장 클래스와 그 메서드 표.
-- `src/classDecls.js`: 사용자 클래스 선언(메서드·기본 구현·상위 클래스·인스턴스) 검사와 해석, 인스턴스의 사전(dictionary) 증거.
-- `src/inferGraph.js`: 캔버스 그래프 연결로부터 타입을 추론하는 패스(사용자 클래스 호출의 사전 전달 elaboration, GHC식 모호성 검사·디폴팅 포함).
-- `src/evaluator.js`: 그래프를 지연 평가하는 실행기.
+- `src/classMethods.js`: 내장 클래스의 선언(메서드와 최소 완전 정의 MINIMAL).
+- `src/classDecls.js`: 사용자 클래스 선언(메서드·기본 구현·상위 클래스·인스턴스)과, 내장 클래스에 직접 작성한 인스턴스(프로젝트의 `instances`, 같은 `{ head, context, methods }` 모양)의 검사와 해석.
+- `src/instanceTable.js`: 모든 인스턴스의 런타임 사전 표(prim·stock·pointwise·newtype·written, 상위 클래스 증거).
+- `src/inferGraph.js`: 캔버스 그래프 연결로부터 타입을 추론하는 패스(모든 클래스 제약·리터럴의 사전 전달 elaboration, GHC식 모호성 검사·디폴팅 포함).
+- `src/evaluator.js`: 그래프를 지연 평가하는 실행기(메서드는 값 모양이 아니라 사전으로 고른다).
+- `src/typedEvaluator.js`: 실행할 그래프를 스스로 타입 검사해 elaboration을 만드는 실행기(테스트·스크립트용).
 - `src/literals.js`: 리터럴 파서(리터럴 노드의 값, 예전 프로젝트의 슬롯 인라인 텍스트).
-- `src/dataTypes.js`: 내장 유도 타입(리스트, Maybe, Char, ())의 인스턴스와 런타임 표현.
+- `src/dataTypes.js`: 내장 유도 타입(리스트, Maybe, Either, Ordering, Char, ())의 인스턴스와 런타임 표현.
 - `src/laws.js`: 클래스·함수 법칙 검사기.
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.
 - `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력(토큰마다 원래 노드를 가리킴).
