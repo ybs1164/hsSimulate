@@ -1,6 +1,6 @@
 import './style.css'
 import { applySubst, constructorArity, ftv, generalize, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
-import { annotationProblem, isInferredVar, chainOf, constructorWithHoles, firstHole, headLabel, hole, isHole, replaceAt, typeFromText, typeNode, typePalette, typeText } from './typeExpr.js'
+import { annotationProblem, isInferredVar, chainOf, constructorWithHoles, headLabel, hole, isHole, pinAt, typeFromText, typeNode, typePalette, typeText } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { reduce, predsOnVar, pickDefault, entails, literalClass, numericTypes, setDynamicClasses, setDynamicInstances } from './prelude.js'
@@ -45,6 +45,7 @@ app.innerHTML = `
           <div class="library-title"><span>NODES</span><button class="add-node" aria-label="Add node">+</button></div>
           <div id="function-library"></div>
           <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
+          <div id="type-palette"></div>
           <div id="type-library"></div>
           <div class="library-title types-title"><span>CLASSES</span><button class="add-class" aria-label="Declare a class" title="Declare a class — methods each instance implements">+</button></div>
           <div id="class-library"></div>
@@ -454,6 +455,7 @@ searchInput.addEventListener('keydown', (event) => {
 })
 const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
+  document.querySelector('#type-palette').innerHTML = typePaletteHtml()
   const byType = Object.groupBy(Object.values(derivedDefs).filter((def) => !def.primitive), (def) => def.derived.type)
   typeLibrary.innerHTML = Object.values(types).map((d) => `
     <div class="type-entry">
@@ -1293,8 +1295,8 @@ function chainHtml(segments, namer, opts = {}) {
   const whole = segments.slice(0, -1).reduceRight((acc, t) => tfun(t, acc), segments[segments.length - 1])
   return `<span class="type-chain${opts.big ? ' big' : ''}" title="${escapeAttr(showQual(opts.preds || [], whole, namer))}">${context}${segments.map((t, i) => {
     const cls = ['tc-seg', i === segments.length - 1 && 'tc-result', opts.pinned?.[i] && 'pinned', opts.bad?.[i] && 'bad', opts.applied?.[i] && 'applied', opts.editable?.[i] && 'editable'].filter(Boolean).join(' ')
-    const title = opts.bad?.[i] || (opts.editable?.[i] ? (opts.pinned?.[i] ? `Pinned :: ${opts.pinned[i]} — click to change` : 'Inferred — click to pin a type') : '')
-    return `<span class="${cls}" data-seg="${i}"${title ? ` title="${escapeAttr(title)}"` : ''} style="--sc:${colorForType(t, namer)}${opts.widths?.[i] ? `;min-width:${opts.widths[i]}` : ''}">${opts.labels ? `<small class="tc-label">${escapeAttr(opts.labels[i] ?? '')}</small>` : ''}${typeNodeHtml(t, namer)}</span>`
+    const title = opts.bad?.[i] || (opts.editable?.[i] ? (opts.pinned?.[i] ? `Pinned :: ${opts.pinned[i]} — drop a type here to change it, _ to un-pin` : 'Inferred — drop a type here (from TYPES) to pin it') : '')
+    return `<span class="${cls}" data-seg="${i}"${title ? ` title="${escapeAttr(title)}"` : ''} style="--sc:${colorForType(t, namer)}${opts.widths?.[i] ? `;min-width:${opts.widths[i]}` : ''}">${opts.labels ? `<small class="tc-label">${escapeAttr(opts.labels[i] ?? '')}</small>` : ''}${typeNodeHtml(t, namer, { paths: opts.editable?.[i] })}</span>`
   }).join('')}</span>`
 }
 /** A whole (qualified) type as a chain, for lists and labels. */
@@ -1326,13 +1328,17 @@ function chainInfo(node, pass) {
     opts: { preds: entry.preds, pinned: [pinnable && node.annotation], bad: [pinnable && pass.annotations?.here?.[node.id]], editable: [pinnable] },
   }
 }
-// Wire the editable segments of a rendered chain (inside `el`) to the type picker.
-function wireChain(el, targets) {
+// Mark the editable segments of a rendered chain (inside `el`) as drop
+// targets for type nodes dragged from the workspace (see the type drag below).
+const segmentTargets = new WeakMap() // segment element → { fnId, nodeId, shown }
+function wireChain(el, info) {
   el.querySelectorAll('.type-chain > .tc-seg.editable').forEach((seg) => {
-    const target = targets[Number(seg.dataset.seg)]
+    const i = Number(seg.dataset.seg)
+    const target = info.targets[i]
     if (!target) return
+    segmentTargets.set(seg, { ...target, shown: info.segments[i] })
     seg.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
-    seg.addEventListener('click', (event) => { event.stopPropagation(); openTypePicker(target.fnId, target.nodeId, seg) })
+    seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('Drag a type from TYPES in the workspace onto this chevron (or onto a part of it) — _ leaves it to inference') })
   })
 }
 // The chains on the canvas: under each function block (lined up with its
@@ -1357,14 +1363,14 @@ function drawCanvasChains(pass) {
       el.classList.add('centered')
     }
     el.innerHTML = chainHtml(info.segments, labelNamer, info.opts)
-    wireChain(el, info.targets)
+    wireChain(el, info)
     editor.append(el)
   }
 }
 
 // Inside a function body, its signature is a row of chevron blocks pinned
 // to the top of the canvas — `ƒ f :: [x: A ▸][y: B ▸][C]` — one per
-// parameter (named on top) and the result; click a block to set its type.
+// parameter (named on top) and the result; drop a type from the workspace on a block to pin it.
 const signatureBar = document.createElement('div')
 signatureBar.id = 'signature-bar'
 function drawSignatureBar() {
@@ -1375,104 +1381,94 @@ function drawSignatureBar() {
   signatureBar.hidden = !info
   if (!info) return
   const names = [...bodyParams(fnId).map((p) => p.label), 'result']
-  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'click a block to set its type'}</span>`
-  wireChain(signatureBar, info.targets)
+  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'drag a type from TYPES onto a block'}</span>`
+  wireChain(signatureBar, info)
 }
 
-// The type picker: build the type of one segment out of type nodes. The
-// type so far is shown as nodes; click a part of it to choose what goes
-// there, from the palette of type constructors (each with its kind) and
-// variables. A constructor brings holes for its arguments, filled next; once
-// nothing's left open the type is pinned — if inference accepts it, against
-// the body and every call to the function.
-const pickerEl = document.createElement('div')
-pickerEl.id = 'type-picker'
-pickerEl.hidden = true
-document.body.append(pickerEl)
-let picker = null // { fnId, nodeId, type, path, anchor, error }
-function openTypePicker(fnId, nodeId, anchorEl) {
-  const target = functionBodies[fnId]?.[nodeId]
-  if (!target) return
-  let type = null
-  try { if (target.annotation) type = typeFromText(target.annotation) } catch {}
-  if (!type) {
-    // Start from what's inferred.
-    const entry = inferGraph(definitions, functionBodies, functionBodies[fnId]).perNode.get(nodeId)
-    try { type = typeFromText(typeText(valueTypeOfEntry(entry))) } catch { type = hole() }
-  }
-  picker = { fnId, nodeId, type, path: [], anchor: anchorEl.getBoundingClientRect(), error: '' }
-  renderTypePicker()
-}
-function closeTypePicker() {
-  picker = null
-  pickerEl.hidden = true
-  pickerEl.innerHTML = ''
-}
-// The variables the signature already uses, and one fresh one.
-function pickerVariables() {
-  const used = new Set()
-  for (const n of Object.values(functionBodies[picker.fnId] || {})) {
-    if (n.annotation) for (const m of String(n.annotation).matchAll(/\b[a-z][A-Za-z0-9_']*\b/g)) used.add(m[0])
-  }
-  const walk = (t) => { if (t.kind === 'var' && typeof t.id === 'string') used.add(t.id); typeNode(t).slots.forEach(walk) }
-  walk(picker.type)
-  const fresh = 'abcdefghijklmnopqrstuvwxyz'.split('').find((v) => !used.has(v))
-  return [...used].sort().concat(fresh ? [fresh] : [])
-}
-function renderTypePicker() {
-  if (!picker) return
-  const target = functionBodies[picker.fnId]?.[picker.nodeId]
-  if (!target) return closeTypePicker()
+// Types in the workspace: every type constructor (each with its kind),
+// type variables and the hole `_`, drawn as type nodes. Drag one onto a
+// chevron of a signature to pin that segment — or onto a part of it (a slot
+// of `Maybe _`, the `a` of an inferred `[a]`) to pin just that part; its own
+// slots come as holes, left to inference until something is dropped there.
+// `_` dropped on a part un-pins it. An annotation inference refuses is
+// rolled back, with why.
+const TYPE_VARIABLES = ['a', 'b', 'c', 'd']
+function typePaletteHtml() {
   const namer = createNamer()
-  const name = target.type === 'output' ? `${nodes[picker.fnId]?.label ?? 'result'} ⋯ ▸` : target.label
-  pickerEl.innerHTML = `
-    <div class="tp-head"><b>${escapeAttr(name)}</b><i>::</i><span class="tp-tree">${typeNodeHtml(picker.type, namer, { paths: true, named: true, selected: picker.path })}</span></div>
-    <input class="tp-text" value="${escapeAttr(typeText(picker.type))}" spellcheck="false" title="Or write it in Haskell (_ for a part left to inference) — Enter pins it" />
-    <div class="tp-hint">${firstHole(picker.type) ? 'Fill the highlighted hole' : 'Click a part to replace it'} with a type node:</div>
-    ${typePalette().map((g) => `<div class="tp-group"><small>${g.group}</small>${g.items.map((it) => `<button class="tp-item" data-con="${escapeAttr(it.name)}" title="${escapeAttr(`${it.name === '->' ? '(▸)' : it.name} :: ${it.kind}`)}">${typeNodeHtml(constructorWithHoles(it.name), namer)}</button>`).join('')}</div>`).join('')}
-    <div class="tp-group"><small>Variables</small>${pickerVariables().map((v) => `<button class="tp-item" data-var="${v}" title="A type variable: any type — the body must work for every one">${typeNodeHtml(tvar(v), namer, { named: true })}</button>`).join('')}<button class="tp-item" data-hole title="A hole: left to inference">${typeNodeHtml(hole(), namer)}</button></div>
-    ${picker.error ? `<div class="tp-error">${escapeAttr(picker.error)}</div>` : ''}
-    <div class="tp-actions"><button class="tp-pin" data-tp="pin">Pin</button><button data-tp="infer" title="Remove the annotation: inferred again">Infer</button><button data-tp="close">Cancel</button></div>`
-  pickerEl.hidden = false
-  const w = pickerEl.offsetWidth, h = pickerEl.offsetHeight
-  pickerEl.style.left = `${Math.max(8, Math.min(picker.anchor.left, window.innerWidth - w - 8))}px`
-  pickerEl.style.top = `${picker.anchor.bottom + 8 + h > window.innerHeight ? Math.max(8, picker.anchor.top - h - 8) : picker.anchor.bottom + 8}px`
-  pickerEl.querySelectorAll('.tp-tree [data-path]').forEach((el) => {
-    el.addEventListener('click', (event) => { event.stopPropagation(); picker.path = el.dataset.path ? el.dataset.path.split('.').map(Number) : []; renderTypePicker() })
-  })
-  const fill = (sub) => {
-    picker.type = replaceAt(picker.type, picker.path, sub)
-    picker.error = ''
-    const next = firstHole(picker.type)
-    if (next) { picker.path = next; return renderTypePicker() }
-    picker.path = []
-    commitAnnotation(typeText(picker.type))
+  const chip = (attr, t, title) => `<span class="type-chip" ${attr} title="${escapeAttr(title)}">${typeNodeHtml(t, namer, { named: true })}</span>`
+  return [
+    ...typePalette().map((g) => `<div class="tchip-group"><small>${g.group}</small>${g.items.map((it) => chip(`data-con="${escapeAttr(it.name)}"`, constructorWithHoles(it.name), `${it.name === '->' ? '(▸)' : it.name === 'List' ? '[ ]' : it.name} :: ${it.kind}`)).join('')}</div>`),
+    `<div class="tchip-group"><small>Variables</small>${TYPE_VARIABLES.map((v) => chip(`data-var="${v}"`, tvar(v), 'A type variable: any type — the body must work for every one (the same name is the same type across the signature)')).join('')}${chip('data-hole', hole(), 'A hole: left to inference (drop it to un-pin)')}</div>`,
+  ].join('')
+}
+let typeDrag = null // { sub, ghost, start, moved, over }
+function typeDropTarget(x, y) {
+  const el = document.elementFromPoint(x, y)
+  const seg = el?.closest?.('.type-chain > .tc-seg.editable')
+  const target = seg && segmentTargets.get(seg)
+  if (!target) return null
+  const part = el.closest('[data-path]')
+  const inside = part && seg.contains(part)
+  return { target, path: inside && part.dataset.path ? part.dataset.path.split('.').map(Number) : [], el: inside ? part : seg }
+}
+function startTypeDrag(chip, event) {
+  if (readonlyBlocked()) return
+  event.preventDefault()
+  const sub = chip.dataset.con ? constructorWithHoles(chip.dataset.con) : chip.dataset.var ? tvar(chip.dataset.var) : hole()
+  const ghost = chip.cloneNode(true)
+  ghost.classList.add('type-ghost')
+  document.body.append(ghost)
+  typeDrag = { sub, ghost, start: { x: event.clientX, y: event.clientY }, moved: false, over: null }
+  document.body.classList.add('type-dragging')
+  moveTypeDrag(event)
+}
+function moveTypeDrag(event) {
+  typeDrag.ghost.style.left = `${event.clientX + 10}px`
+  typeDrag.ghost.style.top = `${event.clientY + 10}px`
+  if (Math.hypot(event.clientX - typeDrag.start.x, event.clientY - typeDrag.start.y) > 4) typeDrag.moved = true
+  const drop = typeDropTarget(event.clientX, event.clientY)
+  if (typeDrag.over?.el !== drop?.el) {
+    typeDrag.over?.el.classList.remove('drop-over')
+    drop?.el.classList.add('drop-over')
   }
-  pickerEl.querySelectorAll('[data-con]').forEach((b) => { b.onclick = () => fill(constructorWithHoles(b.dataset.con)) })
-  pickerEl.querySelectorAll('[data-var]').forEach((b) => { b.onclick = () => fill(tvar(b.dataset.var)) })
-  pickerEl.querySelector('[data-hole]').onclick = () => { picker.type = replaceAt(picker.type, picker.path, hole()); renderTypePicker() }
-  const text = pickerEl.querySelector('.tp-text')
-  text.onkeydown = (event) => {
-    if (event.key === 'Escape') return closeTypePicker()
-    if (event.key !== 'Enter') return
-    try { picker.type = typeFromText(text.value.trim() || '_') } catch (e) { picker.error = e.message; return renderTypePicker() }
-    commitAnnotation(typeText(picker.type))
-  }
-  pickerEl.querySelector('[data-tp="pin"]').onclick = () => commitAnnotation(typeText(picker.type))
-  pickerEl.querySelector('[data-tp="infer"]').onclick = () => commitAnnotation('_')
-  pickerEl.querySelector('[data-tp="close"]').onclick = closeTypePicker
+  typeDrag.over = drop
+}
+function endTypeDrag(event) {
+  const { sub, ghost, moved } = typeDrag
+  const drop = event && typeDropTarget(event.clientX, event.clientY)
+  typeDrag.over?.el.classList.remove('drop-over')
+  ghost.remove()
+  typeDrag = null
+  document.body.classList.remove('type-dragging')
+  if (drop) pinSegmentPart(drop.target, drop.path, sub)
+  else if (event && !moved) showToast('Drag a type onto a chevron of a signature to pin it')
+}
+document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
+window.addEventListener('pointermove', (event) => { if (typeDrag) moveTypeDrag(event) })
+window.addEventListener('pointerup', (event) => { if (typeDrag) endTypeDrag(event) })
+window.addEventListener('pointercancel', () => { if (typeDrag) endTypeDrag(null) })
+// Pin `sub` at `path` of a segment's annotation (see typeExpr.js' pinAt).
+function pinSegmentPart(target, path, sub) {
+  const node = functionBodies[target.fnId]?.[target.nodeId]
+  if (!node) return
+  let annotation = hole()
+  try { if (node.annotation) annotation = typeFromText(node.annotation) } catch {}
+  const next = pinAt(annotation, target.shown, path, sub)
+  if (!next) return showToast('That part can only be pinned with the whole chevron — drop the type on the chevron itself')
+  const problem = commitAnnotation(target.fnId, target.nodeId, typeText(next))
+  if (problem) showToast(problem)
 }
 // How many edges, in `fnId`'s body and the graphs that call it, don't type-check.
 function brokenEdgesAround(fnId) {
   const graphs = [nodes, ...Object.values(functionBodies)].filter((g) => g === functionBodies[fnId] || Object.values(g).some((n) => n.type === 'function' && n.sourceFunctionId === fnId))
   return graphs.reduce((sum, g) => sum + inferGraph(definitions, functionBodies, g).brokenEdges.length, 0)
 }
-// Pin `text` as the picked node's annotation (`_` removes it) — kept only if
-// inference accepts it and no call to the function stops type-checking.
-function commitAnnotation(text) {
-  const { fnId, nodeId } = picker
+// Pin `text` as the annotation of body node `nodeId` (`_` removes it) — kept
+// only if inference accepts it and no call to the function stops
+// type-checking. Returns why not, or ''.
+function commitAnnotation(fnId, nodeId, text) {
   const target = functionBodies[fnId]?.[nodeId]
-  if (!target) return closeTypePicker()
+  if (!target) return ''
   const before = target.annotation
   const brokenBefore = brokenEdgesAround(fnId)
   if (!text || text === '_') delete target.annotation
@@ -1482,15 +1478,14 @@ function commitAnnotation(text) {
   if (problem) {
     if (before === undefined) delete target.annotation
     else target.annotation = before
-    picker.error = problem
-    return renderTypePicker()
+    return problem
   }
+  if (target.annotation === before) return ''
   const label = target.type === 'output' ? 'the result' : target.label
-  closeTypePicker()
   renderFunctionLibrary(); updateInspector(); draw()
   showToast(target.annotation ? `Pinned ${label} :: ${target.annotation}` : `${label[0].toUpperCase()}${label.slice(1)} is inferred again`)
+  return ''
 }
-document.addEventListener('pointerdown', (event) => { if (picker && !pickerEl.contains(event.target) && !event.target.closest?.('.tc-seg.editable')) closeTypePicker() })
 function canConnect(source, target, index) {
   const pass = typePass()
   const expected = pass.perNode.get(target.id)?.paramTypes?.[index]
@@ -2151,8 +2146,8 @@ function renderValueInspector(n) {
   const annotateRow = isNumber
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
-  if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — click to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — click to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' || n.type === 'literal' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
+  if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' || n.type === 'literal' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
 }
 // Why `n` can't be deleted, or null if it can. Builtins are the language
 // itself; a function's Output and parameters are its signature, changed
@@ -2379,17 +2374,17 @@ function customizedRow(n) {
 }
 // The inspector shows a node's type as the same chain as the canvas (and
 // pins it the same way); the targets are kept for wiring after render.
-let inspectorChainTargets = []
+let inspectorChainInfo = null
 function inspectorChainHtml(n) {
   const info = chainInfo(n, typePass())
-  inspectorChainTargets = info?.targets || []
+  inspectorChainInfo = info
   return info ? chainHtml(info.segments, createNamer(), info.opts) : '?'
 }
 // The whole signature of custom function `fnId` (as on its definition), pinnable segment by segment.
 function signatureChainHtml(fnId) {
   const def = nodes[fnId]
   const info = def && chainInfo(def, typePass(nodes))
-  inspectorChainTargets = info?.targets || []
+  inspectorChainInfo = info
   return info ? chainHtml(info.segments, createNamer(), info.opts) : '?'
 }
 // Inside a body, whatever is selected, the body's own definition is shown
@@ -2403,12 +2398,12 @@ function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
   inspector.innerHTML = (viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `${nodes[state.activeFunction]?.library ? customizedRow(nodes[state.activeFunction]) : ''}<div class="property"><label>SIGNATURE${nodes[state.activeFunction]?.library ? ' — the Prelude\'s, kept' : ' — click a chevron to pin it'}</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `${nodes[state.activeFunction]?.library ? customizedRow(nodes[state.activeFunction]) : ''}<div class="property"><label>SIGNATURE${nodes[state.activeFunction]?.library ? ' — the Prelude\'s, kept' : ' — drag a type onto a chevron to pin it'}</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE${isSignatureEditable(n) === 'signature' ? ' — click a chevron to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${callDefinitionBlock(n)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />${i ? `<button class="param-move" data-index="${i}" title="Move this parameter one place left — the body, the definition and every call follow">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
+    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE${isSignatureEditable(n) === 'signature' ? ' — drag a type onto a chevron to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${callDefinitionBlock(n)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />${i ? `<button class="param-move" data-index="${i}" title="Move this parameter one place left — the body, the definition and every call follow">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)) + enclosingDefinition(n)
   const chain = inspector.querySelector('.inspector-chain')
-  if (chain) wireChain(chain, inspectorChainTargets)
+  if (chain && inspectorChainInfo) wireChain(chain, inspectorChainInfo)
   wireDefinitionTokens()
   const openDefinition = document.querySelector('#open-definition')
   if (openDefinition) openDefinition.onclick = () => openDefinitionView(n.sourceFunctionId || n.id, n.params.length)

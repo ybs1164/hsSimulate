@@ -447,32 +447,54 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(p.nodes[fnId].params.join() === 'b,a' && order.join() === 'b,a', `${p.nodes[fnId].params} / ${order}`)
     return 'pairUp a b → pairUp b a'
   })
-  await check('a signature is pinned chevron by chevron with type nodes, checked by inference', async () => {
+  await check('a signature is pinned by dragging type nodes from the workspace onto its chevrons, checked by inference', async () => {
     await createFunction('pinMe', ['x'])
     const { graph } = await activeGraph()
     const fnId = Object.values(graph).find((n) => n.label === 'pinMe' && n.custom).id
     await clickNode(fnId)
     const chain = () => js(`document.querySelector('#inspector-content .type-chain').title`)
+    const annotations = async () => Object.values((await project()).functionBodies[fnId]).filter((n) => n.annotation).map((n) => `${n.type}:${n.annotation}`).sort().join(' ')
     const inferred = await chain()
-    const segment = (i) => js(`document.querySelectorAll('#inspector-content .tc-seg.editable')[${i}].click()`)
-    const pick = (con) => js(`[...document.querySelectorAll('#type-picker [data-con]')].find((b) => b.dataset.con === ${JSON.stringify(con)}).click()`)
-    // x :: Double — a whole type in one pick
-    await segment(0); await sleep(200); await pick('Double'); await sleep(300)
+    const center = async (expr) => {
+      const r = JSON.parse(await js(`JSON.stringify(${expr}.getBoundingClientRect())`))
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    }
+    const chip = (attr) => `document.querySelector('#type-palette .type-chip[${attr}]')`
+    const segment = (i, part = '') => `document.querySelectorAll('#inspector-content .type-chain > .tc-seg.editable')[${i}]${part ? `.querySelector('${part}')` : ''}`
+    // a drag with the real mouse: press on the chip in the sidebar, move, release over the chevron (or a part of it)
+    const drag = async (from, to) => {
+      await js(`[${from}, ${to}].forEach((el) => el.scrollIntoView({ block: 'nearest', behavior: 'instant' }))`)
+      const p = await center(from)
+      const q = await center(to)
+      await mouse('mousePressed', p.x, p.y)
+      for (let k = 1; k <= 6; k++) { await mouse('mouseMoved', p.x + ((q.x - p.x) * k) / 6, p.y + ((q.y - p.y) * k) / 6); await sleep(20) }
+      await mouse('mouseReleased', q.x, q.y); await sleep(350)
+    }
+    const toast = () => js(`document.querySelector('#toast')?.textContent ?? ''`)
+    // x :: Double — one drop on the parameter's chevron
+    await drag(chip('data-con="Double"'), segment(0))
     const pinned = await chain()
-    const xAnnotation = Object.values((await project()).functionBodies[fnId]).find((n) => n.type === 'parameter').annotation
-    // the result :: Maybe _ then Int — a constructor brings a hole to fill; the body says otherwise
-    await segment(1); await sleep(200); await pick('Maybe'); await sleep(150)
-    const hole = await js(`document.querySelector('#type-picker .tp-tree').textContent`)
-    await pick('Int'); await sleep(300)
-    const refused = await js(`document.querySelector('#type-picker .tp-error')?.textContent ?? ''`)
-    await js(`document.querySelector('#type-picker [data-tp="close"]').click()`); await sleep(150)
-    // and back to inferred
-    await segment(0); await sleep(200); await js(`document.querySelector('#type-picker [data-tp="infer"]').click()`); await sleep(300)
+    const xPinned = await annotations()
+    // the result :: Maybe _ — a constructor comes with a hole, left to inference; the body (x :: Double) refuses it
+    await drag(chip('data-con="Maybe"'), segment(1))
+    const refused = await toast()
+    const afterRefusal = await annotations()
+    // [_] on x, then a into its slot: x :: [a], and the result follows
+    await drag(chip('data-hole'), segment(0))
+    await drag(chip('data-con="List"'), segment(0))
+    const listed = await annotations()
+    await drag(chip('data-var="a"'), segment(0, '.tn-list > [data-path]'))
+    const filled = await annotations()
+    const listChain = await chain()
+    // and back to inferred: _ on the whole [a] (its bracket)
+    await drag(chip('data-hole'), segment(0, '.tn-list > i'))
     const cleared = await chain()
-    expect(inferred === 'a → a' && pinned === 'Double → Double' && xAnnotation === 'Double', `${inferred} / ${pinned} / ${xAnnotation}`)
-    expect(hole === 'Maybe_' && /makes the result Double, not Maybe Int/.test(refused), `${hole} / ${refused}`)
-    expect(cleared === 'a → a', cleared)
-    return `pinMe :: ${pinned}; result :: Maybe Int refused`
+    const none = await annotations()
+    expect(inferred === 'a → a' && pinned === 'Double → Double' && xPinned === 'parameter:Double', `${inferred} / ${pinned} / ${xPinned}`)
+    expect(/Maybe/.test(refused) && afterRefusal === 'parameter:Double', `${refused} / ${afterRefusal}`)
+    expect(listed === 'parameter:[_]' && filled === 'parameter:[a]' && listChain === '[a] → [a]', `${listed} / ${filled} / ${listChain}`)
+    expect(cleared === 'a → a' && none === '', `${cleared} / ${none}`)
+    return `pinMe :: ${pinned}; result :: Maybe _ refused; x :: [a]`
   })
 
   console.log(errors.length ? `Page errors:\n  ${errors.join('\n  ')}` : 'No page errors.')

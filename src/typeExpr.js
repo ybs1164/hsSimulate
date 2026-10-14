@@ -188,3 +188,28 @@ export function typePalette() {
     ...(user.length ? [{ group: 'Yours', items: user.map((e) => ({ ...e, label: [e.name, ...Array(e.arity).fill('_')].join(' ') })) }] : []),
   ]
 }
+
+/**
+ * Drop `sub` onto the part at `path` of a segment shown as `shown`, whose
+ * annotation so far is `annotation` (a hole where nothing's pinned). Only
+ * what leads to that part gets pinned: a hole on the way takes `shown`'s
+ * constructor there, its other slots left as holes — dropping `Int` into
+ * the `a` of an inferred `Maybe a` pins `Maybe Int`, and nothing else.
+ * Returns null if the part can't be reached that way (say, under a type
+ * variable applied to arguments).
+ */
+export function pinAt(annotation, shown, path, sub) {
+  if (!path.length) return sub
+  let base = annotation
+  if (isHole(base)) {
+    const { head, slots } = typeNode(shown)
+    if (!slots.length || head.kind === 'var') return null
+    base = fromTypeNode(head, slots.map(hole))
+  }
+  const { head, slots } = typeNode(base)
+  const [i, ...rest] = path
+  const below = typeNode(shown).slots[i]
+  if (slots[i] === undefined || below === undefined) return null
+  const inner = pinAt(slots[i], below, rest, sub)
+  return inner && fromTypeNode(head, slots.map((s, j) => (j === i ? inner : s)))
+}

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { annotationProblem, annotationType, chainOf, constructorWithHoles, firstHole, hole, replaceAt, typeAt, typeFromText, typeNode, typeText } from '../src/typeExpr.js'
+import { annotationProblem, annotationType, chainOf, constructorWithHoles, firstHole, hole, pinAt, replaceAt, typeAt, typeFromText, typeNode, typeText } from '../src/typeExpr.js'
 import { inferGraph } from '../src/inferGraph.js'
 import { setUserTypeArities, showQual, showType, tcon, tfun, tlist, tvar } from '../src/typeSystem.js'
 
@@ -125,4 +125,14 @@ test('looking at the body itself checks the same annotations', () => {
 
 test('a hole stays a hole when built from scratch', () => {
   assert.equal(typeText(hole()), '_')
+})
+
+test('dropping a type node onto a part pins only what leads to it', () => {
+  const shown = typeFromText('Maybe (a, b)')
+  assert.equal(typeText(pinAt(hole(), shown, [], tcon('Int'))), 'Int')
+  assert.equal(typeText(pinAt(hole(), shown, [0, 1], tcon('Int'))), 'Maybe (_, Int)')
+  assert.equal(typeText(pinAt(typeFromText('Maybe (Bool, _)'), shown, [0, 1], tcon('Int'))), 'Maybe (Bool, Int)')
+  assert.equal(typeText(pinAt(typeFromText('Maybe _'), shown, [0], hole())), 'Maybe _')
+  assert.equal(typeText(pinAt(hole(), typeFromText('a -> [b]'), [1, 0], tvar('a'))), '_ -> [a]')
+  assert.equal(pinAt(hole(), shown, [0, 2], tcon('Int')), null)
 })
