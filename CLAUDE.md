@@ -2,14 +2,46 @@
 
 ## 아키텍처 개요
 - `src/main.js`: 앱 화면, 그래프 상태, 캔버스 상호작용, 실행 로직.
-- `src/typeSystem.js`: 힌들리-밀너 타입 엔진.
+- `src/typeSystem.js`: 힌들리-밀너 타입 엔진과 kind(`*`, `k₁ -> k₂`) 검사.
+- `src/typeExpr.js`: 타입을 노드로 다루기(타입 생성자 = 타입 수준 함수, 함수 타입 = 커링된 꺽쇠 사슬 `A ▸ B ▸ C`, 구멍 `_`)와 본체 매개변수·Output의 타입 주석(부분 타입 시그니처) 해석, 클래스 노드(작업 공간의 CLASSES에서 타입 변수로 끌어와 고정하는 제약 `Ord a =>`, Output의 `context`).
 - `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블.
-- `src/numericClasses.js`: 숫자 타입클래스 계층과 제약 해소 엔진.
-- `src/inferGraph.js`: 캔버스 그래프 연결로부터 타입을 추론하는 패스.
+- `src/classEnv.js`: 클래스 환경과 제약 해소 엔진(문맥 있는 인스턴스, entailment, context reduction, 디폴팅, 인스턴스 키 `Cls@Head`와 모든 클래스의 사전 증거 생성).
+- `src/numericClasses.js`: 숫자 타입클래스 계층과 인스턴스 선언.
+- `src/categoryClasses.js`: 카테고리 클래스(Semigroup, Monoid, PartialOrd, Lattice, VectorSpace, Functor, Foldable, Traversable, Applicative, Monad) 선언과 인스턴스.
+- `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소 엔진을 다시 내보내는 진입점.
+- `src/typeDecls.js`: 사용자 타입 선언(하스켈 `data`/`newtype`, 타입 매개변수 포함, 매개변수의 kind 추론)과 그로부터 유도되는 함수·인스턴스.
+- `src/typeEdits.js`: 유도 함수 커스터마이즈(원시 함수 `f#` 위에 재정의), 타입 편집 시 호출 노드 이전, Prelude 타입 넘겨받기(런타임이 읽는 생성자는 유지).
+- `src/deriveGraphs.js`: 유도(deriving) 인스턴스를 같은 동작의 그래프(메서드별 커스텀 함수와 λ)로 펼쳐 직접 작성한 인스턴스로 바꾸기.
+- `src/classMethods.js`: 내장 클래스의 선언(메서드와 최소 완전 정의 MINIMAL).
+- `src/classDecls.js`: 사용자 클래스 선언(메서드·기본 구현·상위 클래스·인스턴스)과, 내장 클래스에 직접 작성한 인스턴스(프로젝트의 `instances`, 같은 `{ head, context, methods }` 모양 — Prelude가 선언한 타입이면 내장 인스턴스를 대신함)의 검사와 해석.
+- `src/instanceTable.js`: 모든 인스턴스의 런타임 사전 표(prim·stock·pointwise·newtype·written, 상위 클래스 증거).
+- `src/inferGraph.js`: 캔버스 그래프 연결로부터 타입을 추론하는 패스(모든 클래스 제약·리터럴의 사전 전달 elaboration, GHC식 모호성 검사·디폴팅 포함).
+- `src/evaluator.js`: 그래프를 지연 평가하는 실행기(메서드는 값 모양이 아니라 사전으로 고른다).
+- `src/typedEvaluator.js`: 실행할 그래프를 스스로 타입 검사해 elaboration을 만드는 실행기(테스트·스크립트용).
+- `src/literals.js`: 리터럴 파서(리터럴 노드의 값, 예전 프로젝트의 슬롯 인라인 텍스트).
+- `src/dataTypes.js`: 내장 유도 타입(리스트, Maybe, Either, Ordering, Char, ())의 인스턴스와 런타임 표현.
+- `src/laws.js`: 클래스·함수 법칙 검사기.
+- `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.
+- `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력(토큰마다 원래 노드를 가리킴).
+- `src/definitionViews.js`: 기초·Prelude·유도 함수의 읽기 전용 정의 그래프와, Prelude 함수를 같은 id의 사용자 함수로 넘겨받기(원시 함수는 `f#`에서 시작, 클래스 메서드는 인스턴스로).
+- `src/library.js`: Prelude 함수 표와 하스켈로 선언한 Prelude 타입(생성자·분기 함수, 곱 `(a, b)`와 `uncurry`), 그 원시 함수(`prim:`).
+- `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임, 주사위)와 빌더.
+- `src/player.js`: 위젯 렌더러와 독립 플레이어.
+- `src/exportHtml.js`: 독립 HTML 내보내기(번들러).
+- `src/valueParser.js`: 하스켈 값 파서.
+- `src/signature.js`: 함수 시그니처 편집(정의·본체·호출 동기화).
+- `e2e/ui-only.mjs`: UI만으로 게임을 만드는 브라우저 e2e 테스트.
+- `src/project.js`: 프로젝트 직렬화·불러오기·실행 취소 기록.
 - `src/style.css`: 레이아웃과 반응형 스타일.
 
 ## 기초 함수
 기초 함수(`zero`, `add`, `identity`, `apply`, `compose`, `isZero`, `ifThenElse`)는 수정하지 않는다.
 
-## 타입클래스
-숫자 타입클래스 계층은 군론을 따른다.
+## 카테고리 이론
+이 프로젝트의 타입 구조는 카테고리 이론을 따른다.
+
+## 타입 시스템
+이 프로젝트의 타입 시스템은 inductive structure를 따른다.
+
+## 람다 대수
+이 프로젝트의 함수 구조는 람다 대수 이론을 따른다.

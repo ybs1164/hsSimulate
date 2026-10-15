@@ -95,15 +95,19 @@ body{margin:0;min-width:1040px;min-width:0!important}
 /* ----- Canvas panel ----- */
 .canvas-panel{display:flex;flex-direction:column;min-width:0;min-height:0}
 .canvas-toolbar{height:65px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:0 22px}
-.breadcrumbs{display:flex;gap:10px;align-items:center;font:10px 'DM Mono';color:var(--muted-2);letter-spacing:1px}
+.breadcrumbs{display:flex;gap:10px;align-items:center;white-space:nowrap;flex-shrink:0;font:10px 'DM Mono';color:var(--muted-2);letter-spacing:1px}
 .breadcrumbs b{font-weight:600;color:var(--ink);letter-spacing:0}
 .saved{margin-left:9px;color:var(--muted);letter-spacing:0;font-size:10px}
 .saved i{display:inline-block;width:6px;height:6px;background:var(--success);border-radius:50%;margin-right:5px}
-.toolbar-actions{display:flex;gap:9px}
-.tool-button{border:1.5px solid var(--line);border-radius:var(--radius-full);padding:8px 14px;font:600 11px 'DM Mono';color:var(--muted);background:var(--panel);transition:transform .05s,background .12s,color .12s}
+.toolbar-actions{display:flex;gap:9px;min-width:0;overflow-x:auto;scrollbar-width:none;padding:4px 0 6px;margin-left:12px}
+.tool-button{white-space:nowrap;flex-shrink:0;border:1.5px solid var(--line);border-radius:var(--radius-full);padding:8px 14px;font:600 11px 'DM Mono';color:var(--muted);background:var(--panel);transition:transform .05s,background .12s,color .12s}
 .tool-button:hover{background:var(--bg);color:var(--ink)}
 .tool-button.primary{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 3px 0 var(--accent-ink)}
 .tool-button.primary:hover{background:var(--accent)}
+/* When the toolbar runs out of room it scrolls sideways (instead of the
+   buttons wrapping into tall ovals) — Run graph stays pinned in view. */
+.toolbar-actions .tool-button.primary{position:sticky;right:0}
+@media (max-width:1450px){.canvas-toolbar{padding:0 14px}.saved{display:none}.toolbar-actions{gap:6px}.tool-button{padding:8px 10px}}
 .tool-button.primary:active{transform:translateY(2px);box-shadow:0 1px 0 var(--accent-ink)}
 .canvas-wrap{position:relative;flex:1;min-height:0;overflow:hidden}
 .canvas-wrap canvas{display:block;width:100%;height:100%;cursor:grab;position:absolute;inset:0;z-index:1}
@@ -187,25 +191,29 @@ body{margin:0;min-width:1040px;min-width:0!important}
    text-bearing UI (sidebar, inspector) on its way — suppress selection
    page-wide for the duration so that never turns into a text-selection drag. */
 body.dragging{user-select:none;-webkit-user-select:none}
-.param-slot{position:absolute;pointer-events:auto;box-shadow:0 3px 10px #211d3414;transition:box-shadow .15s ease,transform .15s ease;background:#fdfcff;border-radius:50%;border:2px dashed}
-.param-slot.filled{border-style:solid;box-shadow:0 3px 10px #211d3428}
+.param-slot{position:absolute;pointer-events:auto;box-sizing:border-box;box-shadow:0 1px 3px #211d3424;transition:box-shadow .15s ease,transform .15s ease;background:#fdfcff;border-radius:50%;border:2px solid;cursor:pointer}
+.param-slot:hover{transform:scale(1.25)}
+.param-slot.invalid{box-shadow:0 0 0 3px #e0537d55}
+.literal-input{position:absolute;z-index:4;pointer-events:auto;box-sizing:border-box;border:0;border-radius:8px;background:var(--accent-soft);color:var(--ink);font-family:ui-monospace,monospace;font-weight:600;padding:0 8px;outline:2px solid var(--accent)}
+.literal-input::placeholder{color:var(--muted-2);font-weight:400}
+.param-slot.filled{border-color:#fff !important;box-shadow:0 1px 4px #211d3440}
 .param-slot.snap-target{box-shadow:0 0 0 4px #6c5ce755,0 4px 12px #211d3424;transform:scale(1.08);z-index:1}
-.param-chip{position:absolute;inset:0;border-radius:50%;display:flex;align-items:center;justify-content:center;padding:0 10px;color:#fff;font:600 11px 'DM Mono';cursor:grab;user-select:none;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.param-chip:active{cursor:grabbing}
 /* One pill above the slot, styled like a Haskell type annotation
    (`n :: Int`) — name in ink, `::` muted, the type itself colored to match
    the slot's own ring (colorForType), so the tag and the ring always agree.
+   Width is capped to one slot stride (JS) so neighbouring tags never meet;
+   when it doesn't fit, the name gives way first — the type is the point.
    Sits fully above the slot (bottom:100% + margin-bottom) so it never
    collides with the dashed/solid border or the remove button. */
-.param-tag{position:absolute;left:50%;bottom:100%;transform:translateX(-50%);display:flex;align-items:baseline;white-space:nowrap;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-full);box-shadow:0 2px 6px #211d3414;font-family:'DM Mono',monospace}
-.param-tag-name{font-weight:700;color:var(--ink)}
-.param-tag-sep{font-style:normal;color:var(--muted-2)}
-.param-tag-type{font-weight:600}
-.param-value{position:absolute;inset:0;border:0;background:transparent;text-align:center;font:11px 'DM Mono';color:var(--ink);outline:0;width:100%;padding-top:4px}
-.param-value::placeholder{color:var(--muted-2)}
-.param-value:focus{box-shadow:inset 0 0 0 2px var(--accent-soft-2);border-radius:inherit}
+.param-tag{position:absolute;z-index:1;left:50%;bottom:100%;transform:translateX(-50%);display:flex;align-items:baseline;white-space:nowrap;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-full);box-shadow:0 2px 6px #211d3414;font-family:'DM Mono',monospace}
+.param-tag-name{font-weight:700;color:var(--ink);min-width:1.5em;overflow:hidden;text-overflow:ellipsis}
+.out-port,.in-port{position:absolute;pointer-events:auto;box-sizing:border-box;border-radius:50%;border:2px solid var(--accent);background:var(--panel);cursor:crosshair;z-index:2;transition:transform .12s ease,box-shadow .12s ease}
+.out-port:hover,.out-port.active,.in-port.snap-target{transform:scale(1.35);box-shadow:0 0 0 4px #6c5ce733}
+.out-port.filled,.in-port.filled{background:var(--accent)}
+.in-port{cursor:default}
+.in-port.filled{cursor:crosshair}
 .param-remove,.param-add{position:absolute;border:0;background:var(--ink);color:#fff;border-radius:50%;cursor:pointer;text-align:center;font:12px/16px 'DM Mono';z-index:2;pointer-events:auto}
-.param-remove{right:-6px;top:-6px;width:16px;height:16px;background:#e0537d}
+.param-remove{right:0;top:0;width:16px;height:16px;background:#e0537d}
 .param-add{width:26px;height:26px;font-size:18px;line-height:20px;box-shadow:0 3px 8px #211d3428;background:var(--accent)}
 
 /* ----- Independent example and syntax panels to the left of the graph ----- */
@@ -274,3 +282,252 @@ body.dragging{user-select:none;-webkit-user-select:none}
   .syntax-dialog-header h2{font-size:17px}
   .syntax-dialog-content{padding:2px 18px 18px}
 }
+.tool-button.icon-only{padding:8px 11px}
+.tool-button:disabled{opacity:.4;cursor:default;background:var(--panel);color:var(--muted)}
+.entry-toggle,.delete-node{width:100%;border:1.5px solid var(--line);border-radius:var(--radius-sm);background:var(--panel);padding:9px 11px;font:11px 'DM Mono';color:var(--muted);text-align:left;cursor:pointer}
+.entry-toggle:hover{background:var(--bg);color:var(--ink)}
+.entry-toggle.on{background:var(--accent-soft);border-color:var(--accent-soft-2);color:var(--accent-ink)}
+.delete-node{margin-top:12px;text-align:center;color:#c0335e}
+.delete-node:hover{background:#fdeef2;border-color:#f5c6d4}
+.delete-node kbd{font:9px 'DM Mono';color:var(--muted-2);margin-left:6px}
+.bool-input{width:100%;font:12px 'DM Mono';padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel);color:var(--ink)}
+#toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,12px);background:var(--ink);color:#fff;font:11px/1.5 'DM Mono';padding:10px 16px;border-radius:var(--radius-sm);box-shadow:0 6px 20px #211d3440;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:20;max-width:min(560px,90vw);text-align:center}
+#toast.visible{opacity:1;transform:translate(-50%,0)}
+.use-again{width:100%;margin-top:12px;border:1.5px dashed var(--accent-soft-2);border-radius:var(--radius-sm);background:var(--panel);padding:9px 11px;font:11px 'DM Mono';color:var(--accent-ink);cursor:pointer}
+.use-again:hover{background:var(--accent-soft)}
+.use-again small{color:var(--muted-2);margin-left:4px}
+.types-title{margin-top:14px}
+.add-type{display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:var(--radius-full);font-size:16px;line-height:1;color:var(--accent-ink);background:var(--accent-soft);cursor:pointer}
+.add-type:hover{background:var(--accent-soft-2)}
+.type-icon{background:#e3f6f1;color:#1f8f74;font-weight:700}
+.class-icon{background:#fbeedd;color:#b0661c;font-weight:700}
+.type-entry{margin-bottom:6px}
+.derived-item{display:flex;flex-direction:column;align-items:flex-start;width:calc(100% - 38px);margin-left:38px;border:0;background:none;padding:4px 8px;border-radius:var(--radius-sm);cursor:pointer;text-align:left;font:11px 'DM Mono';color:var(--ink)}
+.derived-item:hover{background:var(--accent-soft)}
+.derived-item small{color:var(--muted);font-size:10px}
+.derived-row{display:flex;align-items:center}
+.derived-row .derived-item{flex:1;width:auto}
+.derived-edit{flex:none;border:0;background:none;color:var(--muted-2);cursor:pointer;font-size:12px;padding:4px 8px;border-radius:var(--radius-sm);opacity:0;transition:opacity .15s}
+.derived-row:hover .derived-edit,.derived-edit:focus{opacity:1}
+.derived-edit:hover{background:var(--accent-soft);color:var(--accent-ink)}
+.customized{font-style:normal;font-size:10px;color:var(--accent-ink);background:var(--accent-soft);border-radius:var(--radius-full);padding:0 6px;margin-left:4px}
+.type-form textarea{width:100%;font:12px/1.5 'DM Mono';padding:10px;border:1.5px solid var(--line);border-radius:var(--radius-sm);resize:vertical;margin-top:6px;box-sizing:border-box}
+.type-error{color:#c0335e;font:11px/1.5 'DM Mono';min-height:1em;white-space:pre-wrap}
+.type-form .danger{color:#c0335e;margin-right:auto}
+.prelude-group{font:600 9px 'DM Mono';letter-spacing:1px;color:var(--muted-2);margin:8px 0 2px 8px;text-transform:uppercase}
+.law-report{margin:6px 0 10px}
+.law-report label{font:600 9px 'DM Mono';letter-spacing:1.4px;color:var(--muted)}
+.law-report ul{list-style:none;padding:0;margin:6px 0 0;max-height:180px;overflow:auto}
+.law{font:10px/1.6 'DM Mono';color:var(--muted)}
+.law.ok{color:#1f8f74}
+.law.bad{color:#c0335e}
+.law em{font-style:normal;color:var(--ink)}
+.law-row{display:flex;gap:8px;align-items:baseline;margin-bottom:6px;flex-wrap:wrap}
+.law-check{border:1.5px solid var(--line);border-radius:var(--radius-full);background:var(--panel);padding:3px 10px;font:10px 'DM Mono';color:var(--muted);cursor:pointer}
+.law-check:hover{background:var(--accent-soft);color:var(--accent-ink)}
+#play-panel{position:absolute;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column}
+#play-panel[hidden]{display:none}
+.play-bar{display:flex;gap:9px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel);font:11px 'DM Mono'}
+.play-bar b{color:var(--accent-ink);margin-right:auto}
+.play-bar select{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-full);padding:6px 10px;background:var(--panel)}
+.play-time{color:var(--muted)}
+.play-body{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}
+.play-view{padding:36px;overflow:auto;display:flex;justify-content:safe center;align-items:flex-start}
+.play-side{border-left:1px solid var(--line);padding:18px;overflow:auto;background:var(--panel)}
+.play-side label{display:block;font:600 9px 'DM Mono';letter-spacing:1.4px;color:var(--muted);margin:14px 0 6px}
+.play-side pre{font:11px/1.5 'DM Mono';white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px;margin:0}
+.play-side ol{font:11px/1.6 'DM Mono';margin:0;padding-left:22px;color:var(--ink)}
+.play-law{font:10px/1.5 'DM Mono';color:var(--muted);margin:0}
+.play-law.ok{color:#1f8f74}
+.w-column{display:flex;flex-direction:column;gap:12px;min-width:320px;max-width:520px;width:100%}
+.w-row{display:flex;gap:12px;flex-wrap:wrap}
+.w-text{margin:0;font:16px 'DM Mono';color:var(--ink)}
+.w-button{border:0;border-radius:var(--radius-full);background:var(--accent);color:#fff;padding:13px 18px;font:600 13px 'DM Mono';cursor:pointer;box-shadow:0 3px 0 var(--accent-ink)}
+.w-button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--accent-ink)}
+.w-progress{height:12px;border-radius:var(--radius-full);background:var(--accent-soft);overflow:hidden}
+.w-progress i{display:block;height:100%;background:var(--accent);transition:width .15s}
+.w-error{color:#c0335e;font:12px 'DM Mono'}
+.fold-toggle{position:absolute;border:0;background:var(--panel);color:var(--accent-ink);border-radius:50%;box-shadow:0 1px 3px #211d3440;cursor:pointer;text-align:center;font-family:'DM Mono';z-index:3;pointer-events:auto;padding:0}
+.param-slot{overflow:visible}
+.haskell{white-space:pre-wrap;word-break:break-word;font:11px/1.6 'DM Mono'}
+.play-log li.rewindable{cursor:pointer}
+.play-log li.rewindable:hover{color:var(--accent-ink);text-decoration:underline}
+.tool-select{border:1.5px solid var(--line);border-radius:var(--radius-full);padding:7px 12px;font:600 11px 'DM Mono';color:var(--muted);background:var(--panel);cursor:pointer}
+.play-side [data-play="edit-model"]{float:right;margin-top:-26px}
+.play-model-editor textarea{width:100%;box-sizing:border-box;font:11px/1.5 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:8px}
+.param-rename{width:110px;font:11px 'DM Mono';border:1px solid var(--line);border-radius:6px;padding:3px 6px;background:var(--panel);color:var(--ink)}
+.sidebar [hidden]{display:none!important}
+#type-panel{position:absolute;inset:0;z-index:6;background:var(--bg);display:flex;flex-direction:column}
+#type-panel[hidden]{display:none}
+.te-status{flex:1;font:11px 'DM Mono';color:var(--muted)}
+.te-status.ok{color:#1f8f74}
+.te-status.bad{color:#c0335e}
+.type-body{padding:24px 32px;overflow:auto}
+.type-bar .te-name{font:600 13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:180px}
+.type-bar .te-params{font:13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:90px}
+.ce-mname,.ce-sig{font:12px 'DM Mono';border:0;background:transparent;width:96px;padding:2px}
+.ce-sig{color:var(--accent-ink);width:130px}
+.te-hint{font:11px/1.6 'DM Mono';color:var(--muted);margin:0 0 18px;max-width:720px}
+.te-x{border:0;border-radius:50%;width:22px;height:22px;cursor:pointer;font:12px 'DM Mono'}
+.te-x{background:#fdeef2;color:#c0335e}
+.te-group{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:6px 0 10px}
+.te-group small{width:100%;font:10px 'DM Mono';color:var(--muted-2)}
+.te-check{font:11px 'DM Mono';color:var(--ink);display:inline-flex;gap:4px;align-items:center}
+.te-derived{font:11px/1.8 'DM Mono'}
+.te-derived small{color:var(--muted)}
+.te-derived .law-check{margin-left:4px}
+.type-bar .ce-supers{font:13px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px;width:130px}
+.ce-arrow{font-style:normal;color:var(--muted)}
+.ce-method{margin:0 0 8px}
+.ce-method .ce-sig{width:240px}
+.ce-sigshow{color:var(--muted)}
+.ce-instance-head{display:flex;align-items:center;flex-wrap:wrap;gap:.35em;font-family:'DM Mono',monospace}
+.ce-instance-head .tc-ctx{margin-right:0}
+.ce-head{font-weight:600}
+.ce-hvar{display:inline-flex;padding:0 .35em;margin:0 .1em;border-radius:4px;cursor:default}
+.te-instance{border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:8px 12px;margin:0 0 10px;font:11px/1.8 'DM Mono';max-width:720px}
+.te-instance small{color:var(--muted)}
+.te-method{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-left:14px}
+.te-method select,.te-add-instance{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-sm);padding:3px 6px;background:var(--panel);color:var(--ink)}
+.w-heading{margin:0;font:600 22px 'DM Mono';color:inherit}
+.w-tinted .w-button{background:var(--tint);box-shadow:none}
+.w-tinted .w-text{color:inherit}
+.w-drawing{background:#fff;border:1px solid var(--line);border-radius:var(--radius-sm);align-self:center}
+.broken-call .connection-tag{border-color:#f5c6d4;color:#c0335e}
+
+/* ---------------------------------------------------------------------- *
+ * Types as nodes (typeExpr.js). A function type is a chain of chevrons,
+ * `A ▸ B ▸ C` — each segment points at the rest, the result is last. A
+ * type inside a segment is a node: a head with its argument types nested
+ * in it (`Maybe ⟨Int⟩`, `[ ⟨a⟩ ]`), the arrow included (a nested chain).
+ * ---------------------------------------------------------------------- */
+.type-chain{display:inline-flex;align-items:stretch;font-family:'DM Mono',monospace;line-height:1.25;white-space:nowrap;vertical-align:middle;max-width:100%}
+.tc-ctx{align-self:center;color:var(--muted);margin-right:.45em;font-size:.92em}
+.tc-seg{--d:.62em;display:inline-flex;align-items:center;justify-content:center;gap:.25em;padding:.32em calc(var(--d) + .4em) .32em calc(var(--d) + .45em);margin-left:calc(var(--d) * -1 + .18em);background:#e3dff4;clip-path:polygon(0 0,calc(100% - var(--d)) 0,100% 50%,calc(100% - var(--d)) 100%,0 100%,var(--d) 50%);box-sizing:border-box}
+.type-chain>.tc-seg:first-child,.tc-ctx+.tc-seg,.tn-fun>.tc-seg:first-child{margin-left:0;padding-left:.6em;clip-path:polygon(0 0,calc(100% - var(--d)) 0,100% 50%,calc(100% - var(--d)) 100%,0 100%)}
+.tc-seg.tc-result{background:#d2cbef;padding-right:.65em;clip-path:polygon(0 0,100% 0,100% 100%,0 100%,var(--d) 50%);border-radius:0 1em 1em 0}
+.type-chain>.tc-seg.tc-result:first-child,.tc-ctx+.tc-seg.tc-result{clip-path:none;border-radius:1em;padding:.32em .65em}
+.tc-seg.applied{opacity:.5}
+.tc-seg.pinned{background:#cdc3ff}
+.tc-seg.pinned.tc-result{background:#bfb3ff}
+.tc-seg.bad{background:#fbd5df}
+.tc-seg.editable{cursor:pointer}
+.tc-seg.editable:hover{filter:brightness(.95) saturate(1.3)}
+.tn{display:inline-flex;align-items:center;gap:.28em;border-radius:1em;padding:.06em .45em;font-weight:600;color:var(--tc,#4a4560);background:#fff;border:1px solid color-mix(in srgb,var(--tc,#9691a8) 40%,transparent)}
+.tn-var{font-style:italic}
+.tc-seg>.tn-con,.tc-seg>.tn-var{background:transparent;border-color:transparent;padding:0 .1em}
+.tn-hole{color:#8a84a3;background:#faf9fe;border:1px dashed #a49fbd;min-width:1.5em;min-height:1.2em;padding:0 .3em;justify-content:center;box-sizing:border-box}
+.tn-app>b{font-weight:700}
+.tn-list,.tn-tuple{--tc:#4a4560;padding:.06em .3em}
+.tn-list>i,.tn-tuple>i{font-style:normal;color:var(--muted)}
+.tn-fun{background:transparent;border:1px solid #6c5ce744;padding:.12em;gap:0}
+.tn-fun .tc-seg{--d:.5em;padding-top:.18em;padding-bottom:.18em;background:#f3f1fb}
+.tn-fun .tc-seg.tc-result{background:#e6e2f6}
+.canvas-chain{position:absolute;pointer-events:none;z-index:0}
+.canvas-chain.centered{transform:translateX(-50%)}
+.canvas-chain .tc-seg.editable{pointer-events:auto}
+.inspector-chain{font-size:11px;padding:2px 0}
+.inspector-chain .type-chain{flex-wrap:wrap;row-gap:4px}
+.library-item>span{min-width:0}
+.library-item small{overflow:hidden}
+.library-item small .type-chain,.derived-item small .type-chain{font-size:9.5px;margin-top:2px;flex-wrap:wrap;row-gap:3px}
+.te-derived .type-chain{font-size:10.5px}
+.te-derived{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:6px}
+
+#type-palette{padding:2px 4px 8px;font:10px 'DM Mono',monospace}
+.tchip-group{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:3px 0 6px}
+.tchip-group small{grid-column:1/-1;color:var(--muted-2,#9691a8);font-size:9.5px;letter-spacing:.04em}
+/* Every type node in the palette is the same size: one cell of the grid. */
+.type-chip{display:flex;align-items:center;justify-content:center;height:24px;min-width:0;overflow:hidden;box-sizing:border-box;border:1px solid var(--line);border-radius:999px;background:#fff;cursor:grab;user-select:none;touch-action:none;white-space:nowrap}
+.type-chip:hover{background:var(--accent-soft);border-color:var(--accent-soft-2)}
+.type-chip>.tn{border:0;background:transparent;padding:0 2px;gap:.15em;font-size:9.5px;max-width:100%}
+.type-chip .tn-hole{min-width:.95em;min-height:1em;padding:0 .1em;font-size:9px}
+.type-chip .tn-fun{border:0}
+.type-chip .tc-seg{padding-top:.1em;padding-bottom:.1em}
+/* Classes are nodes one level up — predicates on types, `Ord ▸ Constraint`: same cells, a different shape. */
+#class-palette{padding:2px 4px 4px;font:10px 'DM Mono',monospace}
+.cchip-group{grid-template-columns:repeat(2,minmax(0,1fr))}
+.class-chip{border-radius:5px;border-style:dashed;border-color:#b9a7e8;background:#faf8ff}
+.class-chip .tn-class{color:#5b46b5;text-overflow:ellipsis;overflow:hidden}
+.class-chip .tn-class b{font-weight:600}
+.class-chip.type-ghost{width:auto;padding:0 8px}
+/* A class context: one chip per constraint — pinned ones solid, with × to un-pin. */
+.tc-ctx .cc{display:inline-flex;align-items:center;gap:.2em;padding:.05em .4em;border:1px dashed #b9a7e8;border-radius:4px;color:#5b46b5;background:#faf8ff}
+.tc-ctx .cc.inferred{cursor:pointer}
+.tc-ctx .cc.inferred:hover{background:var(--accent-soft)}
+.tc-ctx .cc.pinned{border-style:solid;background:#e6dfff}
+.tc-ctx .cc.bad{border-color:#e0607a;background:#fde7ec;color:#b2324e}
+.tc-ctx .cc-x{border:0;background:transparent;color:inherit;padding:0;margin-left:.1em;font:inherit;line-height:1;cursor:pointer;opacity:.6}
+.tc-ctx .cc-x:hover{opacity:1}
+.tc-ctx i{font-style:normal;margin:0 .1em}
+.type-ghost{position:fixed;z-index:80;pointer-events:none;cursor:grabbing;width:66px;font:10px 'DM Mono',monospace;box-shadow:0 6px 18px #211d3433}
+body.type-dragging,body.type-dragging *{cursor:grabbing!important;user-select:none}
+body.type-dragging .drop-zone{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.drop-zone.drop-over{filter:brightness(.92) saturate(1.6)}
+.drop-zone .tn.drop-over{box-shadow:0 0 0 2px var(--accent);background:var(--accent-soft)}
+
+.canvas-chain:not(.centered) .type-chain{position:relative}
+.canvas-chain:not(.centered) .tc-ctx{position:absolute;right:100%;top:50%;transform:translateY(-50%)}
+.ce-sigshow .type-chain{font-size:10.5px}
+
+/* Chevron blocks: filled with their type's colour (--sc), pinned ones striped. */
+.tc-seg{background:color-mix(in srgb,var(--sc,#9691a8) 16%,#fff)}
+.tc-seg.tc-result{background:color-mix(in srgb,var(--sc,#9691a8) 28%,#fff)}
+.tc-seg.pinned,.tc-seg.pinned.tc-result{background:linear-gradient(to top,var(--sc,#6c5ce7) 0 .28em,transparent .28em),color-mix(in srgb,var(--sc,#6c5ce7) 34%,#fff)}
+.tc-seg.bad,.tc-seg.bad.tc-result{background:linear-gradient(to top,#e0537d 0 .28em,transparent .28em),#fbd5df}
+.tn-fun .tc-seg{background:color-mix(in srgb,var(--sc,#9691a8) 12%,#fff)}
+.tc-label{display:block;font:500 .78em 'DM Mono',monospace;color:var(--muted);line-height:1.1}
+.canvas-chain{font-weight:600}
+.canvas-chain .tc-seg{padding-top:.45em;padding-bottom:.45em}
+.inspector-chain{font-size:13px}
+/* The signature bar inside a function body */
+#signature-bar{position:absolute;top:12px;left:12px;right:12px;z-index:4;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;background:#ffffffee;border:1.5px solid var(--line);border-radius:16px;box-shadow:0 4px 14px #211d3414;pointer-events:none;width:fit-content;max-width:calc(100% - 24px);box-sizing:border-box}
+#signature-bar[hidden]{display:none}
+#signature-bar .sig-name{display:flex;align-items:baseline;gap:6px;font:600 15px 'DM Mono',monospace;color:var(--ink)}
+#signature-bar .sig-name i{font-style:normal;color:var(--muted)}
+#signature-bar .sig-hint{font:10px 'DM Mono';color:var(--muted-2,#9691a8)}
+#signature-bar .tc-seg.editable{pointer-events:auto}
+.type-chain.big{font-size:15px;flex-wrap:wrap;row-gap:6px}
+.type-chain.big .tc-seg{--d:16px;flex-direction:column;gap:3px;min-height:52px;min-width:84px;padding:6px calc(var(--d) + 12px) 8px calc(var(--d) + 14px)}
+.type-chain.big>.tc-seg:first-child{padding-left:16px}
+.type-chain.big .tc-seg.editable:hover{filter:brightness(.93) saturate(1.4)}
+
+/* DEFINITION text linked to the graph: hover a token to find its node, click to go there. */
+.haskell .tok{cursor:pointer;border-radius:3px;transition:background .1s ease}
+.haskell .tok:hover{background:#f0a02033;box-shadow:0 0 0 1px #f0a02066}
+.haskell .tok.linked{background:var(--accent-soft-2);color:var(--accent);font-weight:600}
+.haskell .tok.hole{font-style:italic}
+.haskell .tok.binding{color:#1f8f74}
+.param-move{border:1px solid var(--line,#e6e3f0);background:#fff;border-radius:6px;font:inherit;font-size:11px;line-height:1;padding:3px 6px;cursor:pointer;color:var(--muted,#6f6a86)}
+.param-move:hover{color:var(--accent);border-color:var(--accent)}
+
+/* The type editor reads as a Haskell declaration: data T a = C { f :: A } | D B deriving (…) */
+.hs-decl{font:13px/1.5 'DM Mono',monospace;color:var(--ink);background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-md);padding:14px 18px;max-width:980px;margin-bottom:14px}
+.hs-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:34px}
+.hs-line+.hs-line:not(.hs-head){padding-left:28px}
+.hs-op{width:14px;text-align:center;color:var(--accent);font-weight:700}
+.hs-punct{color:var(--muted)}
+.hs-comment{color:var(--muted-2,#9691a8);font-size:11px;margin-left:auto;display:inline-flex;align-items:center;white-space:nowrap}
+.hs-comment .type-chain{font-size:10.5px}
+.hs-deriving{color:var(--muted);font-size:12px}
+.te-keyword{font:inherit;color:var(--accent);font-weight:700;border:0;border-bottom:1.5px dashed var(--line);background:transparent;padding:2px 0;cursor:pointer}
+.te-keyword:hover{border-bottom-color:var(--accent)}
+.te-ident{padding:2px 4px;border-radius:4px;cursor:text}
+.te-ident:hover{background:var(--accent-soft)}
+.te-ident-type{font-weight:700}
+.te-ident-ctor{font-weight:600}
+.hs-decl .te-rename{font:inherit;color:inherit;border:0;border-bottom:1.5px solid var(--accent);background:transparent;padding:2px 4px;outline:none}
+.te-rename.te-ident-type{font-weight:700}
+.te-rename.te-ident-ctor{font-weight:600}
+.te-param{display:inline-flex;align-items:center;gap:2px;font-size:12px}
+.te-param .te-x{width:16px;height:16px;font-size:10px}
+.te-drop{display:inline-flex;align-items:center;justify-content:center;cursor:copy}
+.te-add,.te-add-param{border:1.5px dashed var(--accent);background:transparent;color:var(--accent);border-radius:50%;width:22px;height:22px;font:12px 'DM Mono'}
+.te-field{display:inline-flex;align-items:center;gap:4px}
+.te-field i{font-style:normal;color:var(--muted)}
+.te-fname{width:9ch}
+.te-ftype{display:inline-flex;align-items:center;min-height:24px;padding:1px 3px;border-radius:999px;font-size:12px}
+.te-mode.on{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent-soft-2)}
+.te-mode,.te-add-ctor{font:10.5px 'DM Mono';border:1.5px solid var(--line);background:var(--panel);color:var(--muted);border-radius:999px;padding:3px 9px;cursor:pointer}
+.te-mode:hover,.te-add-ctor:hover{background:var(--accent-soft);color:var(--accent-ink)}
+.te-hint code{background:var(--accent-soft);border-radius:4px;padding:0 3px}
