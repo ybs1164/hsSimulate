@@ -2,6 +2,7 @@ import './style.css'
 import { applySubst, showQual, tfun, unify, createNamer, pred } from './typeSystem.js'
 import { inferGraph, valueTypeOfEntry } from './inferGraph.js'
 import { reduce, predsOnVar, pickDefault } from './numericClasses.js'
+import { initLearningPanel } from './learningPanel.js'
 
 const app = document.querySelector('#app')
 
@@ -173,9 +174,6 @@ function resize() {
   canvas.width = canvas.clientWidth * dpr
   canvas.height = canvas.clientHeight * dpr
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  if (canvas.clientWidth < 760) {
-    nodes.add.x = 220
-  }
   draw()
 }
 // --- Node geometry --------------------------------------------------------
@@ -900,4 +898,46 @@ document.querySelectorAll('.node-library > .library-item[data-type]').forEach((i
   updateInspector()
   draw()
 }))
+initLearningPanel({
+  workspace: document.querySelector('.workspace'),
+  onModalOpen: () => {
+    endDrag()
+    state.pan = null
+    state.snapTarget = null
+    canvas.classList.remove('panning')
+    draw()
+  },
+})
+// Inspector visibility has its own column and controls, independent of learning panels.
+const workspace = document.querySelector('.workspace')
+const inspectorPanel = document.querySelector('.inspector')
+inspectorPanel.id = 'graph-inspector'
+const closeInspector = document.querySelector('.close-inspector')
+closeInspector.setAttribute('aria-label', 'Inspector 닫기')
+const reopenInspector = document.createElement('button')
+reopenInspector.type = 'button'
+reopenInspector.className = 'tool-button inspector-reopen'
+reopenInspector.textContent = 'Inspector'
+reopenInspector.setAttribute('aria-label', 'Inspector 열기')
+reopenInspector.setAttribute('aria-controls', inspectorPanel.id)
+reopenInspector.setAttribute('aria-expanded', 'true')
+reopenInspector.hidden = true
+document.querySelector('.toolbar-actions').prepend(reopenInspector)
+closeInspector.addEventListener('click', () => {
+  inspectorPanel.hidden = true
+  workspace.classList.add('inspector-hidden')
+  reopenInspector.hidden = false
+  reopenInspector.setAttribute('aria-expanded', 'false')
+  reopenInspector.focus({ preventScroll: true })
+})
+reopenInspector.addEventListener('click', () => {
+  inspectorPanel.hidden = false
+  workspace.classList.remove('inspector-hidden')
+  reopenInspector.hidden = true
+  reopenInspector.setAttribute('aria-expanded', 'true')
+  closeInspector.focus({ preventScroll: true })
+})
+// Redraw the backing store and port overlay after layout changes, without
+// fitting the graph or changing node positions, selection, zoom, or pan.
+new ResizeObserver(resize).observe(document.querySelector('.canvas-wrap'))
 renderFunctionLibrary(); updateInspector(); resize(); fitToView()
