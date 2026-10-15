@@ -443,6 +443,25 @@ export function createEvaluator(registry) {
     return v
   }
 
+  // A Prelude function that is a constructor or eliminator of a Prelude
+  // type under another name (`text s = Text s`, `red = rgb 1 0 0`; see
+  // definitionViews.js) runs that definition once it is customized — a
+  // custom `Text` or a taken-over `rgb` is what every `text` or `red` runs.
+  const VIA = {
+    ...Object.fromEntries(Object.entries({ wText: 'Text', wButton: 'Button', wColumn: 'Column', wRow: 'Row', wProgress: 'Progress', wHeading: 'Heading', wSpacer: 'Spacer', wColor: 'Tinted', wDrawing: 'Drawing' }).map(([b, c]) => [b, `type:Widget:${c}`])),
+    ...Object.fromEntries(Object.entries({ pCircle: 'Circle', pCircleSolid: 'CircleSolid', pRectangleSolid: 'RectangleSolid', pTranslate: 'Translate', pColor: 'Color' }).map(([b, c]) => [b, `type:Picture:${c}`])),
+    pair: 'type:(,):(,)', rgb: 'type:Color:RGB', every: 'type:Sub:Every', onKey: 'type:Sub:OnKey', just: 'type:Maybe:Just', nothing: 'type:Maybe:Nothing', maybe: 'type:Maybe:caseMaybe',
+  }
+  const COLOUR_RGB = { red: [1, 0, 0], green: [0, 0.7, 0], blue: [0, 0, 1], yellow: [1, 0.85, 0], black: [0, 0, 0], white: [1, 1, 1] }
+  const PROGRAM_DEFAULTS = [10, 7 * 24 * 3600]
+  const customized = (id) => !!registry.nodes[id]?.custom
+  function customizedVia(builtin) {
+    if (VIA[builtin] && customized(VIA[builtin])) return { id: VIA[builtin] }
+    if (COLOUR_RGB[builtin] && (customized('prelude:rgb') || customized(VIA.rgb))) return { id: 'prelude:rgb', args: () => COLOUR_RGB[builtin].map(now) }
+    if (builtin === 'program' && customized('type:Program:Program')) return { id: 'type:Program:Program', args: (a) => [...a, ...PROGRAM_DEFAULTS.map(now), now(NO_SUBSCRIPTIONS)] }
+    return null
+  }
+
   function definition(callee) {
     // `#name`: a builtin by name, for closures the runtime builds itself (traverse's `fmap (:)`).
     if (callee.startsWith('#')) return { builtin: callee.slice(1), label: callee.slice(1) }
@@ -812,7 +831,11 @@ export function createEvaluator(registry) {
       return invoke(dicts[0], def.method.name, args, dicts.slice(1))
     }
     if (def.derived) return runDerived(def.derived, args)
-    if (def.builtin) return def.builtin === 'listOf' ? builtins.listOf[1](...args) : builtins[def.builtin][1](...args, dicts)
+    if (def.builtin) {
+      const through = customizedVia(def.builtin)
+      if (through) return call(through.id, through.args ? through.args(args) : args)
+      return def.builtin === 'listOf' ? builtins.listOf[1](...args) : builtins[def.builtin][1](...args, dicts)
+    }
     const body = registry.functionBodies[callee]
     const output = body?.output
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)

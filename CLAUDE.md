@@ -10,10 +10,10 @@
 - `src/categoryClasses.js`: 카테고리 클래스(Semigroup, Monoid, PartialOrd, Lattice, VectorSpace, Functor, Foldable, Traversable, Applicative, Monad) 선언과 인스턴스.
 - `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소 엔진을 다시 내보내는 진입점.
 - `src/typeDecls.js`: 사용자 타입 선언(하스켈 `data`/`newtype`, 타입 매개변수 포함, 매개변수의 kind 추론)과 그로부터 유도되는 함수·인스턴스.
-- `src/typeEdits.js`: 유도 함수 커스터마이즈(원시 함수 `f#` 위에 재정의)와 타입 편집 시 호출 노드 이전.
+- `src/typeEdits.js`: 유도 함수 커스터마이즈(원시 함수 `f#` 위에 재정의), 타입 편집 시 호출 노드 이전, Prelude 타입 넘겨받기(런타임이 읽는 생성자는 유지).
 - `src/deriveGraphs.js`: 유도(deriving) 인스턴스를 같은 동작의 그래프(메서드별 커스텀 함수와 λ)로 펼쳐 직접 작성한 인스턴스로 바꾸기.
 - `src/classMethods.js`: 내장 클래스의 선언(메서드와 최소 완전 정의 MINIMAL).
-- `src/classDecls.js`: 사용자 클래스 선언(메서드·기본 구현·상위 클래스·인스턴스)과, 내장 클래스에 직접 작성한 인스턴스(프로젝트의 `instances`, 같은 `{ head, context, methods }` 모양)의 검사와 해석.
+- `src/classDecls.js`: 사용자 클래스 선언(메서드·기본 구현·상위 클래스·인스턴스)과, 내장 클래스에 직접 작성한 인스턴스(프로젝트의 `instances`, 같은 `{ head, context, methods }` 모양 — Prelude가 선언한 타입이면 내장 인스턴스를 대신함)의 검사와 해석.
 - `src/instanceTable.js`: 모든 인스턴스의 런타임 사전 표(prim·stock·pointwise·newtype·written, 상위 클래스 증거).
 - `src/inferGraph.js`: 캔버스 그래프 연결로부터 타입을 추론하는 패스(모든 클래스 제약·리터럴의 사전 전달 elaboration, GHC식 모호성 검사·디폴팅 포함).
 - `src/evaluator.js`: 그래프를 지연 평가하는 실행기(메서드는 값 모양이 아니라 사전으로 고른다).
@@ -23,8 +23,8 @@
 - `src/laws.js`: 클래스·함수 법칙 검사기.
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.
 - `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력(토큰마다 원래 노드를 가리킴).
-- `src/definitionViews.js`: 기초·Prelude·유도 함수의 읽기 전용 정의 그래프와, Prelude 함수를 같은 id의 사용자 함수로 넘겨받기.
-- `src/library.js`: Prelude 함수 표와 하스켈로 선언한 Prelude 타입(생성자·분기 함수).
+- `src/definitionViews.js`: 기초·Prelude·유도 함수의 읽기 전용 정의 그래프와, Prelude 함수를 같은 id의 사용자 함수로 넘겨받기(원시 함수는 `f#`에서 시작, 클래스 메서드는 인스턴스로).
+- `src/library.js`: Prelude 함수 표와 하스켈로 선언한 Prelude 타입(생성자·분기 함수, 곱 `(a, b)`와 `uncurry`), 그 원시 함수(`prim:`).
 - `src/examples/`: 템플릿 프로젝트(클릭 카운터, 빈 게임, 주사위)와 빌더.
 - `src/player.js`: 위젯 렌더러와 독립 플레이어.
 - `src/exportHtml.js`: 독립 HTML 내보내기(번들러).

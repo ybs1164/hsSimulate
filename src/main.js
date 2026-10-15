@@ -7,7 +7,7 @@ import { classArity, reduce, predsOnVar, pickDefault, entails, findInstance, hea
 import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, renameTypeInInstances, showHead, writtenEnvironment, writtenMethodProblem, writtenMinimalProblem } from './classDecls.js'
 import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, renameTypeReferences, typeArities, typeKinds } from './typeDecls.js'
-import { customizeDerived, isPristineOverride, migrateTypeEdit, primLabel, primitiveDefinitions, resetDerived } from './typeEdits.js'
+import { TAKEABLE_TYPES, customizeDerived, isPristineOverride, libraryTypeProblem, migrateTypeEdit, primLabel, primitiveDefinitions, resetDerived, takeOverType } from './typeEdits.js'
 import { BUILTIN_CLASSES, METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
@@ -20,7 +20,7 @@ import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
 import { buildDice } from './examples/dice.js'
 import { renderWidget } from './player.js'
-import { PRELUDE, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
+import { PRELUDE, libraryDefs, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
@@ -167,7 +167,7 @@ const classDefs = {}
 const viewDefs = {}
 const viewBodies = {}
 const laidOutViews = new Set()
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? preludeDefs[id] ?? preludeTypeDefs[id] ?? viewDefs[id] })
+const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? libraryDefs[id] ?? viewDefs[id] })
 const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
 function clearViews() {
   for (const id of Object.keys(viewDefs)) delete viewDefs[id]
@@ -409,8 +409,14 @@ function renderPreludeLibrary() {
   // The Prelude's own data types (library.js): their constructors and eliminators.
   const byType = {}
   for (const def of Object.values(preludeTypeDefs)) (byType[def.derived.type] ||= []).push(def)
-  document.querySelector('#prelude-library').insertAdjacentHTML('beforeend', Object.values(preludeTypes).map((d) => `<div class="prelude-group" title="${escapeAttr(d.source)}">${d.keyword} ${escapeAttr([d.name, ...d.params].join(' '))}</div>${(byType[d.name] || []).map((def) => `<button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button>`).join('')}`).join(''))
+  // Each constructor and eliminator can be customized like a declared type's (✎).
+  // A type taken over is listed in TYPES instead; one that can be taken over has its own ✎.
+  const head = (d) => (d.name === '(,)' ? '(a, b)' : [d.name, ...d.params].join(' '))
+  const takeOver = (d) => (TAKEABLE_TYPES.includes(d.name) ? `<button class="derived-edit prelude-take-type" data-type-name="${escapeAttr(d.name)}" title="Take the declaration over: edit it in the type editor">✎</button>` : '')
+  document.querySelector('#prelude-library').insertAdjacentHTML('beforeend', Object.values(preludeTypes).map((d) => types[d.name] ? `<div class="prelude-group" title="Your declaration is in TYPES">${d.keyword} ${escapeAttr(head(d))} <i class="customized">✎ yours</i></div>` : `<div class="derived-row"><div class="prelude-group" title="${escapeAttr(d.source)}">${d.keyword} ${escapeAttr(head(d))}</div>${takeOver(d)}</div>${(byType[d.name] || []).map((def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎ custom</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="${nodes[def.id]?.override ? 'Open its custom body' : 'Customize: redefine it with a body of your own'}">✎</button></div>`).join('')}`).join(''))
   document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
+  document.querySelectorAll('#prelude-library .derived-edit[data-edit-id]').forEach((item) => { item.onclick = () => editDerived(item.dataset.editId) })
+  document.querySelectorAll('#prelude-library .prelude-take-type').forEach((item) => { item.onclick = () => takeOverPreludeType(item.dataset.typeName) })
   applySearch()
 }
 // --- Search ---------------------------------------------------------------
@@ -466,7 +472,7 @@ function renderTypeLibrary() {
     <div class="type-entry">
       <button class="library-item type-item" data-type-name="${d.name}" title="Edit declaration">
         <span class="lib-icon type-icon">T</span>
-        <span><b>${[d.name, ...(d.params || [])].join(' ')}</b><small>${d.constructors.map((c) => c.name).join(' | ')}</small></span>
+        <span><b>${[d.name, ...(d.params || [])].join(' ')}${d.library ? ' <i class="customized">Prelude · yours</i>' : ''}</b><small>${d.constructors.map((c) => c.name).join(' | ')}</small></span>
       </button>
       ${(byType[d.name] || []).map((def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎ custom</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="${nodes[def.id]?.override ? 'Open its custom body' : 'Customize: redefine it with a body of your own'}">✎</button></div>`).join('')}
     </div>`).join('')
@@ -474,23 +480,33 @@ function renderTypeLibrary() {
   typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
   typeLibrary.querySelectorAll('.derived-edit').forEach((item) => { item.onclick = () => editDerived(item.dataset.editId) })
 }
+// Whether `id` (or the primitive `prim:<id>`) is something a Prelude type derives.
+const definitionsOfPrelude = (id) => !!preludeTypeDefs[id.replace(/^prim:/, '')]
+// Take Prelude type `name` over: its declaration becomes the project's, opened in the type editor (typeEdits.js).
+function takeOverPreludeType(name) {
+  if (!types[name]) applyTypes(takeOverType(types, preludeTypes[name]))
+  openTypeEditor(name)
+  renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
+  showToast(`${name} is your declaration now — name its fields, derive classes, write its instances (its constructors stay the runtime's)`)
+}
 // Customize a derived function (or open its customization): its body
 // starts as a call to its primitive, `wallet m = wallet# m`, ready to be
 // changed. Every existing call now runs the custom body.
 function editDerived(id) {
-  const def = derivedDefs[id]
+  const def = derivedDefs[id] ?? preludeTypeDefs[id]
   if (!def || def.primitive) return
   const fresh = !nodes[id]
   if (fresh) customizeDerived({ nodes, functionBodies }, def)
   closeTypeEditor()
   state.activeFunction = null
   enterFunction(id)
-  if (fresh) showToast(`${def.label} is now yours to edit — its body starts as the primitive ${primLabel(def.label)}. Reset it in the type editor.`)
+  if (fresh) renderPreludeLibrary()
+  if (fresh) showToast(`${def.label} is now yours to edit — its body starts as the primitive ${primLabel(def.label)}. Reset it ${preludeTypeDefs[id] ? "from its Output's inspector" : 'in the type editor'}.`)
 }
 function resetDerivedFunction(id) {
   if (state.activeFunction === id || state.functionStack.includes(id)) { state.activeFunction = null; state.functionStack = [] }
   resetDerived({ nodes, functionBodies }, id)
-  renderFunctionLibrary(); updateInspector(); draw()
+  renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
 }
 // --- Type editor -------------------------------------------------------------
 // A type is shown and edited as its Haskell declaration, an algebraic data
@@ -591,15 +607,22 @@ function applyTypeDraft() {
 }
 // The declarations draft `d` would make (throws DeclError if it can't).
 function checkTypeDraft(d) {
-  const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !isHiddenDefinition(n)), ...Object.values(preludeDefs)].map((n) => n.label)
   const before = typeEditor.original ? types[typeEditor.original] : null
+  // A taken-over Prelude type keeps what the runtime relies on (typeEdits.js); its
+  // constructors are the Prelude's own names for them (`Just` is both).
+  const library = before?.library ? [before.name] : []
+  const own = new Set(library.length ? preludeTypes[before.name].constructors.map((c) => c.name) : [])
+  const labels = [...Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !isHiddenDefinition(n)), ...Object.values(preludeDefs)].map((n) => n.label).filter((l) => !own.has(l))
+  if (library.length && d.name !== before.name) throw new DeclError(libraryTypeProblem(preludeTypes[before.name], { ...before, name: d.name }))
   // Renaming a type renames it in the declarations that mention it.
   const base = before && d.name !== before.name ? renameTypeReferences(types, before.name, d.name) : types
   // Classes and instances mention types too (method signatures, instance heads): they follow a rename, and must still make sense.
   const renamed = before && d.name !== before.name
   const nextClasses = renamed ? renameTypeInClasses(classes, before.name, d.name) : classes
   const nextInstances = renamed ? renameTypeInInstances(instances, before.name, d.name) : instances
-  const next = declareTypes(base, draftToSource(d), { replacing: typeEditor.original, functionLabels: [...labels, ...Object.values(classDefs).map((c) => c.label)], assumed: (ts) => writtenEnvironment(nextInstances, ts) })
+  const next = declareTypes(base, draftToSource(d), { replacing: typeEditor.original, functionLabels: [...labels, ...Object.values(classDefs).map((c) => c.label)], assumed: (ts) => writtenEnvironment(nextInstances, ts), library })
+  const problem = library.length ? libraryTypeProblem(preludeTypes[before.name], next[d.name]) : ''
+  if (problem) throw new DeclError(problem)
   declareClasses(nextClasses, next, classLabelsTaken(), nextInstances)
   return { before, next, nextClasses, nextInstances }
 }
@@ -673,7 +696,7 @@ function renderTypeEditor(error = '') {
   typePanel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
       <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
-      <button class="tool-button" data-te="delete">Delete type</button>
+      ${applied?.library ? `<button class="tool-button" data-te="delete" title="Drop your declaration: ${escapeAttr(d.name)} is the Prelude's again">↺ Prelude's ${escapeAttr(d.name)}</button>` : '<button class="tool-button" data-te="delete">Delete type</button>'}
       <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
     </div>
     <div class="type-body">
@@ -818,16 +841,23 @@ function renderTypeEditor(error = '') {
     // (Its own customized functions go with it, so calls inside them don't count.)
     const own = Object.values(nodes).filter((n) => n.override === name).map((n) => n.id)
     const graphsOutside = [nodes, ...Object.entries(functionBodies).filter(([id]) => !own.includes(id)).map(([, g]) => g)]
-    const calls = graphsOutside.flatMap((g) => Object.values(g)).filter((n) => n.sourceFunctionId?.startsWith(prefix) || n.sourceFunctionId?.startsWith(`prim:${prefix}`)).length
+    // A taken-over Prelude type goes back to the Prelude's: only what the Prelude's doesn't derive (a projection of a named field) must be unused.
+    const restoring = !!types[name]?.library
+    const gone = (id) => !restoring || !definitionsOfPrelude(id)
+    const calls = graphsOutside.flatMap((g) => Object.values(g)).filter((n) => (n.sourceFunctionId?.startsWith(prefix) || n.sourceFunctionId?.startsWith(`prim:${prefix}`)) && gone(n.sourceFunctionId)).length
     const usedIn = [...Object.values(types).filter((t) => t.name !== name && JSON.stringify(t.constructors).includes(`"name":"${name}"`)).map((t) => t.name), ...classesUsingType(classes, name).map((c) => `class ${c}`), ...Object.entries(instances).flatMap(([cls, list]) => list.filter((i) => i.head === name).map(() => `instance ${cls} ${name}`)), ...Object.entries(functionBodies).filter(([id, g]) => !own.includes(id) && Object.values(g).some((n) => n.type !== 'number' && new RegExp(`\\b${name}\\b`).test(n.annotation || ''))).map(([id]) => `the signature of ${nodes[id]?.label ?? id}`)]
-    if (calls || usedIn.length) return renderTypeEditor(`${name} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${usedIn.length ? ` in ${usedIn.join(', ')}` : ''}`)
-    own.forEach((id) => { delete nodes[id]; delete functionBodies[id] })
+    if (restoring) {
+      const users = Object.entries(functionBodies).filter(([id, g]) => !own.includes(id) && Object.values(g).some((n) => n.sourceFunctionId?.includes(prefix) && gone(n.sourceFunctionId))).map(([id]) => nodes[id]?.label ?? id)
+      if (calls) return renderTypeEditor(`${name}: ${calls} call node${calls > 1 ? 's' : ''}${users.length ? ` (in ${users.join(', ')})` : ''} use${calls > 1 ? '' : 's'} what only your declaration derives`)
+    } else if (calls || usedIn.length) return renderTypeEditor(`${name} is still used${calls ? ` by ${calls} call node${calls > 1 ? 's' : ''}` : ''}${usedIn.length ? ` in ${usedIn.join(', ')}` : ''}`)
+    // (A customization of what the Prelude's also derives stays: it now customizes the Prelude's.)
+    own.filter(gone).forEach((id) => { delete nodes[id]; delete functionBodies[id] })
     const next = { ...types }
     delete next[name]
     applyTypes(next)
     closeTypeEditor()
-    renderFunctionLibrary(); updateInspector(); draw()
-    showToast(`Deleted type ${name} (undo to bring it back)`)
+    renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
+    showToast(restoring ? `${name} is the Prelude's declaration again (undo to bring yours back)` : `Deleted type ${name} (undo to bring it back)`)
   }
 }
 
@@ -971,12 +1001,16 @@ function renderClassEditor(error = '') {
   const applied = !builtin && classEditor.original && resolvedClasses.find((c) => c.name === classEditor.original)
   const fnChoices = (selected, none) => `<option value="">${none}</option>${customFunctionChoices(selected)}<option value="__new">+ new function</option>`
   const takenHeads = new Set(d.instances.map((i) => i.head))
-  // An instance can be added for a type that hasn't the class yet (a builtin class's own instances, or derived ones, already give it).
+  // An instance can be added for a type that hasn't the class yet (a builtin class's own instances, or derived ones, already give it)
+  // — or that has the Prelude's, for a type the Prelude declares: a written one replaces it (classDecls.js).
   const arity = builtin ? classArity(d.name) : applied?.arity || 0
+  const derivedKeys = new Set(derivedInstances(types).map((i) => `${i.cls}@${headName(i.head)}`))
   const alreadyHas = (h) => {
     if (!builtin) return false
     const n = (types[h] ? (types[h].params || []).length : constructorArity[h] || 0) - arity
-    return n < 0 || !!findInstance(pred(d.name, ['a', 'b', 'c', 'd'].slice(0, n).reduce((acc, v) => tapp(acc, tvar(v)), tcon(h))))
+    if (n < 0) return true
+    const found = findInstance(pred(d.name, ['a', 'b', 'c', 'd'].slice(0, n).reduce((acc, v) => tapp(acc, tvar(v)), tcon(h))))
+    return !!found && !(preludeTypes[h] && found.inst.how !== 'written' && !derivedKeys.has(found.inst.key))
   }
   const heads = [...Object.keys(types), ...HEAD_NAMES.filter((h) => !types[h])].filter((h) => !takenHeads.has(h) && !alreadyHas(h))
   // The class's methods as an instance sees them: name, Haskell label, default, a function's parameters.
@@ -1015,7 +1049,7 @@ function renderClassEditor(error = '') {
       <button class="tool-button" data-ce="delete">Delete class</button>
       <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>`
   const methodsHtml = builtin
-    ? `<p class="te-hint">A builtin class: its methods are fixed, and so are the instances it comes with (${escapeAttr(listInstances().filter((i) => i.cls === d.name && i.how !== 'written').map((i) => showHead(headName(i.head))).join(', ') || 'none')}). Give it an instance of your own — for a type of yours, or a builtin one that hasn't it — by picking a function for each method${minimal ? `; the rest come from the class's defaults, so it's enough to define <code>${escapeAttr(minimal)}</code>` : ''}. Which instance a call means is worked out from the types.</p>
+    ? `<p class="te-hint">A builtin class: its methods are fixed, and so are the instances it comes with (${escapeAttr(listInstances().filter((i) => i.cls === d.name && i.how !== 'written').map((i) => showHead(headName(i.head))).join(', ') || 'none')}). Give it an instance of your own — for a type of yours, a builtin one that hasn't it, or a type the Prelude declares (yours replaces the Prelude's) — by picking a function for each method${minimal ? `; the rest come from the class's defaults, so it's enough to define <code>${escapeAttr(minimal)}</code>` : ''}. Which instance a call means is worked out from the types.</p>
       <div class="property"><label>METHODS</label>
         ${methods.map((m) => `<div class="te-method ce-method"><code>${escapeAttr(m.label)}</code> <small class="ce-sigshow">${qualChainHtml(builtinSchemes[m.name].preds, builtinSchemes[m.name].type)}</small></div>`).join('') || '<small>none of its own — an instance is a claim the laws check</small>'}
         ${minimal ? `<small class="ce-minimal">{-# MINIMAL ${escapeAttr(minimal)} #-}</small>` : ''}
@@ -2608,7 +2642,7 @@ function callDefinitionBlock(n) {
   if (def.custom) return `${definitionBlock(defId)}${def.library ? '<button class="use-again" id="open-definition">Open definition → <small>(your graph)</small></button>' : ''}`
   const viewId = ensureView(defId, n.params.length)
   if (!viewId) return ''
-  return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>${isEditableView(viewId, viewDefs) ? '(a graph you can take over)' : '(a primitive · read-only)'}</small></button>`
+  return `${definitionBlock(viewId)}<button class="use-again" id="open-definition">Open definition → <small>${isEditableView(viewId, viewDefs) ? (viewDefs[viewId].note ? '(a primitive you can take over)' : '(a graph you can take over)') : '(a primitive · read-only)'}</small></button>`
 }
 function tokensHtml(tokens) {
   const graph = activeNodes()
@@ -2677,7 +2711,7 @@ function readonlyInspector(n) {
   if (n.type === 'output') {
     const def = definitions[active]
     const editable = def?.view && isEditableView(active, viewDefs)
-    return `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>${escapeAttr(def?.label ?? '')}</b><small>Definition · read-only</small></div><span class="live">VIEW</span></div>${definitionBlock(active)}${editable ? '<button class="evaluate" id="edit-definition">✎ &nbsp; Edit definition</button>' : ''}<div class="inspector-note">${editable ? 'How the Prelude defines it. Edit definition makes it your own graph — every call then runs yours, checked against the same type.' : 'A read-only definition: nodes can be moved to look, not changed.'}</div>`
+    return `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>${escapeAttr(def?.label ?? '')}</b><small>Definition · read-only</small></div><span class="live">VIEW</span></div>${definitionBlock(active)}${editable ? '<button class="evaluate" id="edit-definition">✎ &nbsp; Edit definition</button>' : ''}<div class="inspector-note">${editable ? (def.note ? `A primitive of the runtime. Edit definition makes it your own graph, starting as the primitive itself (${escapeAttr(primLabel(def.label))}) — wrap or replace it; every call then runs yours, checked against the same type.` : 'How the Prelude defines it. Edit definition makes it your own graph — every call then runs yours, checked against the same type.') : 'A read-only definition: nodes can be moved to look, not changed.'}</div>`
   }
   return `<div class="selected-node"><span class="selected-icon">${n.type === 'function' ? 'ƒ' : '·'}</span><div><b>${escapeAttr(nodeDisplayText(n))}</b><small>${escapeAttr(nodeTypeLabel(n))} · read-only</small></div></div><div class="property"><label>TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${n.type === 'function' ? callDefinitionBlock(n) : ''}${definitions[n.sourceFunctionId]?.lambda ? '<button class="use-again" id="open-body">Open body →</button>' : ''}`
 }
@@ -2763,7 +2797,7 @@ function updateInspector() {
   const n = activeNodes()[state.selected]
   if (!n) return
   inspector.innerHTML = (viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `${nodes[state.activeFunction]?.library ? customizedRow(nodes[state.activeFunction]) : ''}<div class="property"><label>SIGNATURE${nodes[state.activeFunction]?.library ? ' — the Prelude\'s, kept' : ' — drag a type onto a chevron to pin it'}</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `${nodes[state.activeFunction]?.library || nodes[state.activeFunction]?.override ? customizedRow(nodes[state.activeFunction]) : ''}<div class="property"><label>SIGNATURE${nodes[state.activeFunction]?.library ? ' — the Prelude\'s, kept' : ' — drag a type onto a chevron to pin it'}</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
     : n.type === 'function'
     ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE${isSignatureEditable(n) === 'signature' ? ' — drag a type onto a chevron to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${callDefinitionBlock(n)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />${i ? `<button class="param-move" data-index="${i}" title="Move this parameter one place left — the body, the definition and every call follow">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
     : renderValueInspector(n)) + enclosingDefinition(n)
@@ -3388,7 +3422,7 @@ document.querySelector('#export-game').onclick = () => {
   const info = entryId && nodes[entryId] ? programInfo(entryId) : null
   if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
   const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
-  const data = { title, definitions: { ...preludeTypeDefs, ...preludeDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
+  const data = { title, definitions: { ...libraryDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
   const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
   const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
   link.click()
@@ -3425,7 +3459,7 @@ function loadProject(project) {
   if (state.activeFunction && !allBodies[state.activeFunction]) state.activeFunction = null
   if (!activeNodes()[state.selected]) state.selected = state.activeFunction ? 'output' : 'add'
   recheckLawNodes()
-  renderFunctionLibrary(); updateInspector(); draw()
+  renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
 }
 function restoreSnapshot(snapshot) { loadProject(parseProject(snapshot)) }
 const defaultSnapshot = currentSnapshot()

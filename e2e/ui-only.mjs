@@ -615,6 +615,54 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(unpinned === 'a → a' && unpinnedSig === 'parameter:a', `${unpinned} / ${unpinnedSig}`)
     return `constrainMe :: ${ord}, then ${show}; Functor a refused`
   })
+  await check('a Prelude primitive is taken over as name#; a Prelude constructor is customized and reset', async () => {
+    await openBody('view')
+    await clickToken('showFFloat')
+    await js(`document.querySelector('#open-definition').click()`); await sleep(700)
+    await js(`document.querySelector('#edit-definition').click()`); await sleep(500)
+    const crumb = await js(`document.querySelector('#graph-name').textContent`)
+    const text = await definitionText()
+    await back(); await back()
+    const played = await playText()
+    await openBody('view')
+    await clickToken('showFFloat')
+    await js(`document.querySelector('#restore-library').click()`); await sleep(400)
+    await back()
+    const restored = !(await project()).nodes['prelude:showFFloat']
+    // Text, a constructor of the Prelude's Widget: ✎ in the Prelude list, reset from its Output
+    await js(`document.querySelector('#prelude-library .derived-edit[data-edit-id="type:Widget:Text"]').click()`); await sleep(500)
+    const ctor = (await project()).functionBodies['type:Widget:Text']
+    const primCall = Object.values(ctor || {}).some((n) => n.sourceFunctionId === 'prim:type:Widget:Text')
+    await js(`document.querySelector('#reset-derived').click()`); await sleep(400)
+    const reset = !(await project()).nodes['type:Widget:Text']
+    expect(crumb === 'ƒ view / ƒ showFFloat · taken over' && /showFFloat# digits x/.test(text) && /^Count: /.test(played) && restored, `${crumb} / ${text} / ${played} / ${restored}`)
+    expect(primCall && reset, `${primCall} / ${reset}`)
+    return text.split('\n')[1]
+  })
+  await check("a Prelude type is taken over (its constructors kept) and given back; a builtin instance of it is replaced by a written one", async () => {
+    await js(`document.querySelector('.prelude-take-type[data-type-name="Color"]').click()`); await sleep(500)
+    const taken = (await project()).types.Color?.library
+    // naming the fields derives projections; a constructor more is refused: the runtime reads Color's values
+    await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(400)
+    const projections = Object.keys((await project()).types.Color.constructors[0].fields.filter((f) => f.name)).length
+    await js(`document.querySelector('[data-te="add-ctor"]').click()`); await sleep(300)
+    const refused = await editorStatus()
+    await js(`document.querySelectorAll('[data-te="drop-ctor"]')[1].click()`); await sleep(300)
+    await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(500)
+    const given = !(await project()).types.Color
+    // instance Show Color, written in the builtin class Show's editor, replaces the Prelude's
+    const r = JSON.parse(await js(`(() => { const el = document.querySelector('#class-palette .type-chip[data-cls="Show"]'); el.scrollIntoView({ block: 'nearest', behavior: 'instant' }); return JSON.stringify(el.getBoundingClientRect()) })()`))
+    await mouse('mousePressed', r.x + r.width / 2, r.y + r.height / 2)
+    await mouse('mouseReleased', r.x + r.width / 2, r.y + r.height / 2); await sleep(400)
+    await setField('.ce-add-instance', 'Color'); await sleep(400)
+    const inst = (await project()).instances?.Show?.find((i) => i.head === 'Color')
+    const status = await js(`document.querySelector('.ce-status, .te-status')?.textContent ?? ''`)
+    await js(`document.querySelector('[data-ce="close"]').click()`); await sleep(200)
+    expect(taken && projections === 3 && given, `${taken} / ${projections} / ${given}`)
+    expect(/constructors stay RGB/.test(refused), refused)
+    expect(inst && !/already has/.test(status), `${JSON.stringify(inst)} / ${status}`)
+    return `Color taken over and given back; instance Show Color where show = ${(await project()).nodes[inst.methods.show]?.label}`
+  })
 
   console.log(errors.length ? `Page errors:\n  ${errors.join('\n  ')}` : 'No page errors.')
   if (errors.length) failures++

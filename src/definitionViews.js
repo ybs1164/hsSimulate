@@ -26,12 +26,33 @@
 // A Prelude function written as a graph can be taken over: its view becomes
 // a custom function under the Prelude id (overrideFromView), which shadows
 // the library definition the way a customized derived function does
-// (typeEdits.js) — every call runs it.
+// (typeEdits.js) — every call runs it. A Prelude primitive can be taken
+// over too, the way a derived function is customized: its body starts as
+// the primitive itself, `show# x` (`prim:prelude:<name>`), ready to be
+// wrapped or replaced. Two kinds stay out: class methods (a method is
+// customized per type, by an instance written in the type editor) and the
+// way into a type from ℤ or ℚ (fromInteger/fromRational: the unique ring
+// map, fixed by the target type's own Ring).
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
+import { METHOD_CLASS } from './classMethods.js'
+import { PRIM_PREFIX, defaultOverrideBody, primLabel } from './typeEdits.js'
 import { typeText } from './typeExpr.js'
 
 /** Library definitions that can be taken over as graphs: the Prelude's (derived ones are customized through typeEdits.js). */
 export const isEditableLibraryId = (id) => /^prelude:/.test(id)
+
+const FIXED_PRIMITIVES = new Set(['fromInteger', 'fromRational'])
+const builtinOf = (id) => (isEditableLibraryId(id) ? id.slice('prelude:'.length) : null)
+
+/** Why Prelude primitive `id` can't be taken over as `name#`, or '' if it can (a function written as a graph is not a primitive). */
+export function primitiveTakeOverProblem(id) {
+  const builtin = builtinOf(id)
+  if (!builtin || builtin === 'listOf') return 'not a Prelude primitive'
+  if (METHOD_CLASS[builtin]) return `a method of the class ${METHOD_CLASS[builtin]} — customize it for a type by writing that type's instance in the type editor`
+  if (FIXED_PRIMITIVES.has(builtin)) return "the unique ring map out of ℤ (or ℚ) — fixed by the target type's own Ring, so there is nothing to choose"
+  return ''
+}
+const isTakeOverPrimitive = (id) => !GRAPHS[builtinOf(id)] && !primitiveTakeOverProblem(id)
 
 /** The id of the view of function `defId` (of the list literal with `slots` elements). */
 export const viewIdOf = (defId, slots = null) => `view:${defId}${slots === null ? '' : `/${slots}`}`
@@ -39,7 +60,7 @@ export const viewIdOf = (defId, slots = null) => `view:${defId}${slots === null 
 // Notes for primitives, by builtin name. Anything not listed (and not
 // written as a graph below) is a runtime primitive.
 const CONSTRUCTOR = (of) => `primitive · a constructor of ${of} (an injection into it)`
-const METHOD = (cls) => `primitive · a method of the class ${cls}`
+const METHOD = (cls) => `primitive · a method of the class ${cls} — a type gets its own by an instance (written in the type editor)`
 const PRIMITIVE_NOTES = {
   succ: 'primitive · the Church successor λn f x. f (n f x)',
   zero: 'primitive · the Church numeral λf x. x',
@@ -58,8 +79,6 @@ const PRIMITIVE_NOTES = {
   traverse: METHOD('Traversable'), pure: METHOD('Applicative'), ap: METHOD('Applicative'), bind: METHOD('Monad'),
   nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
-  nothing: CONSTRUCTOR('Maybe a'), just: CONSTRUCTOR('Maybe a'),
-  pair: 'primitive · the pairing of the product (a, b)', fst: 'primitive · the first projection π₁ of the product (a, b)', snd: 'primitive · the second projection π₂ of the product (a, b)',
   mappend: METHOD('Semigroup'), mempty: METHOD('Monoid'), fmap: METHOD('Functor'), foldMap: METHOD('Foldable'),
   leq: METHOD('PartialOrd'), join: METHOD('Lattice'), meet: METHOD('Lattice'), scale: METHOD('VectorSpace'),
   show: METHOD('Show'), showFFloat: 'primitive · decimal rendering of a floating-point number', showCompact: 'primitive · compact rendering of a number (1.2K, 3.4M)',
@@ -151,6 +170,12 @@ const GRAPHS = {
   or: (g) => g.call('select', [g.param(0), { lit: 'True' }, g.param(1)]),
   not: (g) => g.call('select', [g.param(0), { lit: 'False' }, { lit: 'True' }]),
   maybe: (g) => g.call('type:Maybe:caseMaybe', [g.param(0), g.param(1), g.param(2)]),
+  nothing: viaConstructor('Maybe', 'Nothing'),
+  just: viaConstructor('Maybe', 'Just'),
+  // The product (a, b): pairing is its constructor, the projections its eliminator applied to π₁, π₂.
+  pair: viaConstructor('(,)', '(,)'),
+  fst: (g) => g.call('type:(,):uncurry', [g.lambda(['a', 'b'], (l) => l.param(0)), g.param(0)]),
+  snd: (g) => g.call('type:(,):uncurry', [g.lambda(['a', 'b'], (l) => l.param(1)), g.param(0)]),
   // program initial view handle step = Program initial view handle step 10 604800 (\model -> mempty)
   program: (g) => g.call('type:Program:Program', [g.param(0), g.param(1), g.param(2), g.param(3), { lit: '10' }, { lit: '604800' }, g.lambda(['model'], (l) => l.call('prelude:mempty', []))]),
   setStepsPerSecond: setProgramField(4),
@@ -359,7 +384,7 @@ function graph(fnId, params, resolve, defs, bodies) {
  */
 export function isEditableView(viewId, defs) {
   const view = defs[viewId]
-  return Boolean(view && !view.note && isEditableLibraryId(view.view))
+  return Boolean(view && isEditableLibraryId(view.view) && (!view.note || isTakeOverPrimitive(view.view)))
 }
 
 /**
@@ -399,6 +424,19 @@ export function hasDefinitionGraph(def) {
   return Boolean(def && isEditableLibraryId(def.id) && def.builtin !== 'listOf' && GRAPHS[def.builtin])
 }
 
+/** Whether Prelude function `def` can be taken over: written as a graph, or a primitive taken over as `name#`. */
+export function canTakeOver(def) {
+  return Boolean(def && (hasDefinitionGraph(def) || isTakeOverPrimitive(def.id)))
+}
+
+/** The primitive behind each Prelude primitive that can be taken over (`prim:prelude:show` = `show#`), for the definitions lookup. */
+export function preludePrimitives(preludeDefs) {
+  return Object.fromEntries(Object.values(preludeDefs).filter((def) => isTakeOverPrimitive(def.id)).map((def) => {
+    const id = PRIM_PREFIX + def.id
+    return [id, { ...def, id, label: primLabel(def.label), primitive: true, params: [...def.params], mounted: [...def.mounted], paramScopes: [...def.paramScopes] }]
+  }))
+}
+
 /**
  * Take Prelude function `def` over as a graph: a custom function under its
  * own id (marked `library`), which shadows the library definition, so every
@@ -414,7 +452,10 @@ export function takeOverDefinition(project, def, resolve) {
   if (project.nodes[def.id]?.library) return project.nodes[def.id]
   const view = buildDefinitionView(def, resolve)
   if (!isEditableView(view.viewId, view.defs)) return null
-  const { body, lambdas, lambdaBodies } = overrideFromView(view.viewId, view.defs, view.bodies)
+  // A primitive starts as itself: `f x₁ … xₙ = f# x₁ … xₙ`.
+  const { body, lambdas, lambdaBodies } = view.defs[view.viewId].note
+    ? { body: defaultOverrideBody({ ...def, params: view.defs[view.viewId].params }), lambdas: {}, lambdaBodies: {} }
+    : overrideFromView(view.viewId, view.defs, view.bodies)
   // The library's type, slot by slot: parameters, then Output.
   let rest = view.defs[view.viewId].scheme.type
   for (const n of Object.values(body).filter((x) => x.type === 'parameter')) {

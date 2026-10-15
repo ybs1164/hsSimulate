@@ -17,6 +17,8 @@ import { pred, showType, tcon } from './typeSystem.js'
 const staticClasses = new Map() // name -> { supers: string[], numeric: boolean, arity }
 let dynamicClasses = new Map() // user-declared classes (classDecls.js), replaced wholesale
 const staticInstances = []
+let shadowFor = null // the dynamic instances `unshadowed` was computed for (see allInstances)
+let unshadowed = staticInstances
 let dynamicInstances = [] // replaced wholesale whenever user type declarations change
 const classes = {
   get: (name) => staticClasses.get(name) ?? dynamicClasses.get(name),
@@ -66,6 +68,7 @@ export function classArity(name) {
  */
 export function declareInstance(cls, head, context = [], impl = { how: 'prim' }) {
   staticInstances.push({ ...impl, cls, head, context, key: instanceKey(cls, head) })
+  shadowFor = null
 }
 
 /** The constructor at the head of a type (`Maybe` for `Maybe a`, `List` for `[a]`), or null for a variable or function type. */
@@ -106,8 +109,17 @@ export function withDynamicInstances(list, fn) {
   }
 }
 
+// A project's own instance of a class for a type (derived by a declaration,
+// or written by hand) replaces a builtin one with the same key: a Prelude
+// type the project has taken over, or written an instance for, is the
+// project's for that class (typeEdits.js, classDecls.js).
 function allInstances() {
-  return [...staticInstances, ...dynamicInstances]
+  if (shadowFor !== dynamicInstances) {
+    shadowFor = dynamicInstances
+    const own = new Set(dynamicInstances.map((i) => i.key))
+    unshadowed = own.size ? staticInstances.filter((i) => !own.has(i.key)) : staticInstances
+  }
+  return [...unshadowed, ...dynamicInstances]
 }
 
 export function isClass(name) {

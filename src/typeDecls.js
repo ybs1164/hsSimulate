@@ -367,15 +367,16 @@ const lowerFirst = (s) => s[0].toLowerCase() + s.slice(1)
  * types, duplicate names, clashes with existing function names, and
  * underivable `deriving` clauses.
  */
-export function declareTypes(types, text, { replacing = null, functionLabels = [], assumed = () => [], builtin = false } = {}) {
+export function declareTypes(types, text, { replacing = null, functionLabels = [], assumed = () => [], builtin = false, library = [] } = {}) {
   const parsed = parseDecls(text)
   const next = { ...types }
   if (replacing) delete next[replacing]
   for (const d of parsed) {
     if (next[d.name]) throw new DeclError(`Type "${d.name}" is already declared`)
-    if (!builtin && (builtinTypeNames.includes(d.name) || d.name === '()')) throw new DeclError(`"${d.name}" is a built-in type`) // (the Prelude declares its own: library.js)
+    // (the Prelude declares its own, library.js; a project may take one over — `library` — and edit it, typeEdits.js)
+    if (!builtin && !library.includes(d.name) && (builtinTypeNames.includes(d.name) || d.name === '()')) throw new DeclError(`"${d.name}" is a built-in type`)
     if (d.params.includes('r')) throw new DeclError(`Type parameter "r" is kept for the result of case${d.name} — use another letter`)
-    next[d.name] = { name: d.name, keyword: d.keyword, params: d.params, constructors: d.constructors, deriving: d.deriving, source: parsed.length === 1 ? text.trim() : null }
+    next[d.name] = { name: d.name, keyword: d.keyword, params: d.params, constructors: d.constructors, deriving: d.deriving, source: parsed.length === 1 ? text.trim() : null, ...(library.includes(d.name) ? { library: true } : {}) }
   }
   // Resolve field types against every declared name (so declarations may refer to each other).
   const known = new Map([...builtinTypeNames.map((n) => [n, constructorArity[n] || 0]), ...Object.values(next).map((d) => [d.name, (d.params || []).length])])

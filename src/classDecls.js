@@ -32,10 +32,11 @@
 // builtins' (builtinSchemes.js); a method it leaves out comes from the
 // class's defaults (classMethods.js' minimal complete definitions).
 import { DeclError, builtinTypeNames, derivedInstances, parseSignature, schemeProblem } from './typeDecls.js'
-import { classArity, classClosure, entails, findInstance, isClass, isUserClass, withDynamicClasses, withDynamicInstances } from './prelude.js'
+import { classArity, classClosure, entails, findInstance, headName, isClass, isUserClass, withDynamicClasses, withDynamicInstances } from './prelude.js'
 import { constructorArity, ftv, pred, scheme, showType, tapp, tcon, tfun, tvar } from './typeSystem.js'
 import { BUILTIN_CLASSES, CLASS_METHODS, minimalProblem } from './classMethods.js'
 import { builtinMethodType, methodTypeAtHead, runtimeInstances } from './instanceTable.js'
+import { preludeTypes } from './library.js'
 
 const isUpperName = (s) => /^[A-Z][A-Za-z0-9_']*$/.test(s || '')
 const isLowerName = (s) => /^[a-z_][A-Za-z0-9_']*$/.test(s || '')
@@ -163,11 +164,16 @@ export function declareClasses(classes, types, functionLabels = [], instances = 
   return withDynamicClasses(provisional, () => {
     const resolved = resolveClasses(classes, types, functionLabels)
     const written = resolveWritten(instances, types, (q) => isClass(q) || resolved.some((c) => c.name === q))
-    // A written instance may not overlap one that's derived or builtin.
-    withDynamicInstances(derivedInstances(types), () => {
+    // A written instance may not overlap one that's derived or builtin — but
+    // it may replace a builtin instance of a type the Prelude declares
+    // (library.js): `instance Show Color` is the project's Show for Color.
+    const derived = derivedInstances(types)
+    const ownKeys = new Set(derived.map((i) => `${i.cls}@${headName(i.head)}`))
+    withDynamicInstances(derived, () => {
       for (const w of written) {
         const other = findInstance(pred(w.cls, w.head))
-        if (other) throw new DeclError(`instance ${w.cls} ${showHead(w.headName)}: ${showHead(w.headName)} already has ${w.cls}${other.inst.how === 'prim' ? ' (builtin)' : ' (derived — drop it from the deriving clause first)'}`)
+        const own = other && ownKeys.has(other.inst.key)
+        if (other && !(!own && preludeTypes[w.headName])) throw new DeclError(`instance ${w.cls} ${showHead(w.headName)}: ${showHead(w.headName)} already has ${w.cls}${own ? ' (derived — drop it from the deriving clause first)' : ' (builtin)'}`)
       }
     })
     resolved.written = written

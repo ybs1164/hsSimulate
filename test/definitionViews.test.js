@@ -228,3 +228,29 @@ test('(&&), (||) and not are copairings of Bool, written with select', () => {
     }
   }
 })
+
+test('Maybe and the product (a, b): just, nothing, pairing and the projections are graphs too', () => {
+  assert.equal(libraryPrint('prelude:just'), 'Just x = Just x')
+  assert.equal(libraryPrint('prelude:pair'), '(,) a b = (a, b)')
+  assert.equal(libraryPrint('prelude:fst'), 'fst p = uncurry (\\a b -> a) p')
+  assert.equal(libraryPrint('prelude:snd'), 'snd p = uncurry (\\a b -> b) p')
+  for (const id of ['prelude:just', 'prelude:nothing', 'prelude:pair', 'prelude:fst', 'prelude:snd']) {
+    assert.ok(hasDefinitionGraph(library[id]), id)
+    const view = buildDefinitionView(library[id], (x) => library[x])
+    const pass = inferGraph({ ...library, ...view.defs }, view.bodies, { v: view.defs[view.viewId] })
+    const declared = view.defs[view.viewId].scheme
+    assert.equal(showQual(pass.perNode.get('v').preds, valueTypeOfEntry(pass.perNode.get('v'))), showQual(declared.preds, declared.type), id)
+  }
+  const run = (defId, args, extra = {}) => {
+    const view = buildDefinitionView(library[defId], (id) => library[id])
+    const ev = createEvaluator({ nodes: { ...library, ...view.defs }, functionBodies: view.bodies })
+    const call = (sourceFunctionId) => ({ ...extra, call: { id: 'call', type: 'function', sourceFunctionId, params: args.map((a) => (typeof a === 'string' ? a : '')), mounted: args.map((a) => (typeof a === 'string' ? null : a.id)) } })
+    return [ev.run(call(view.viewId), 'call'), ev.run(call(defId), 'call')].map((v) => showValue(v))
+  }
+  const p = { p: { id: 'p', type: 'function', sourceFunctionId: 'prelude:pair', params: ['1', '"x"'], mounted: [null, null] } }
+  assert.deepEqual(...run('prelude:fst', [{ id: 'p' }], p))
+  assert.deepEqual(...run('prelude:snd', [{ id: 'p' }], p))
+  assert.deepEqual(...run('prelude:pair', ['1', '2']))
+  assert.deepEqual(...run('prelude:just', ['4']))
+  assert.equal(run('prelude:snd', [{ id: 'p' }], p)[0], '"x"')
+})

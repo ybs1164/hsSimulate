@@ -6,8 +6,9 @@ import assert from 'node:assert/strict'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
 import { buildDefinitionView, isEditableView, restoreDefinition, takeOverDefinition } from '../src/definitionViews.js'
 import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
+import { customizeDerived, resetDerived } from '../src/typeEdits.js'
 import { inferGraph } from '../src/inferGraph.js'
-import { preludeDefs, preludeTypeDefs } from '../src/library.js'
+import { libraryDefs } from '../src/library.js'
 import { setDynamicInstances } from '../src/prelude.js'
 import { createGame } from '../src/runtime.js'
 import { derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
@@ -29,7 +30,7 @@ const BUILTINS = {
 function clickCounter() {
   const project = buildClickCounter()
   Object.assign(project.nodes, BUILTINS)
-  const library = { ...preludeDefs, ...preludeTypeDefs, ...Object.fromEntries(derivedDefinitions(project.types).map((d) => [d.id, d])) }
+  const library = { ...libraryDefs, ...Object.fromEntries(derivedDefinitions(project.types).map((d) => [d.id, d])) }
   const definitions = new Proxy({}, { get: (_, id) => project.nodes[id] ?? library[id], ownKeys: () => [...new Set([...Object.keys(library), ...Object.keys(project.nodes)])], getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }) })
   return { project, definitions }
 }
@@ -90,11 +91,65 @@ test('a taken-over definition keeps the library type, and is checked against it'
   }
 })
 
-test('primitives, derived functions and the protected builtins are not taken over here', () => {
+test('a Prelude primitive is taken over as itself, name#, and can then be rewired', () => {
   const app = clickCounter()
-  for (const id of ['prelude:foldr', 'prelude:just', 'prelude:show', 'prelude:toInteger', 'prelude:properFraction', 'type:Widget:Text', 'type:Program:caseProgram', 'type:Model:perClick', 'compose', 'identity', 'plus']) {
+  setDynamicInstances(derivedInstances(app.project.types))
+  try {
+    const node = edit(app, 'prelude:showCompact')
+    assert.ok(node?.library)
+    const body = app.project.functionBodies['prelude:showCompact']
+    assert.equal(body[body.output.source].sourceFunctionId, 'prim:prelude:showCompact')
+    assert.equal(body[body.output.source].label, 'showCompact#')
+    assert.ok(texts(app).includes('Clicks: 3'), 'left as it was, it is the primitive')
+    assert.equal(inferGraph(app.definitions, app.project.functionBodies, app.project.nodes).annotations.functions['prelude:showCompact'], undefined)
+    // showCompact x = showFFloat 2 x
+    const x = Object.values(body).find((n) => n.type === 'parameter')
+    body.ff = { id: 'ff', type: 'function', sourceFunctionId: 'prelude:showFFloat', label: 'showFFloat', params: ['2', ''], mounted: [null, x.id], paramScopes: ['local', 'local'], connected: true }
+    delete body.prim
+    x.mountedTo = 'ff:1'
+    body.output.source = 'ff'
+    assert.ok(texts(app).includes('Clicks: 3.00'))
+    restoreDefinition(app.project, 'prelude:showCompact')
+    assert.ok(texts(app).includes('Clicks: 3'))
+  } finally {
+    setDynamicInstances([])
+  }
+})
+
+test('class methods, the ring maps, derived functions and the protected builtins are not taken over here', () => {
+  const app = clickCounter()
+  for (const id of ['prelude:show', 'prelude:mappend', 'prelude:toInteger', 'prelude:properFraction', 'prelude:fromInteger', 'type:Widget:Text', 'type:Program:caseProgram', 'type:Model:perClick', 'compose', 'identity', 'plus']) {
     const view = buildDefinitionView(app.definitions[id], (x) => app.definitions[x])
     assert.equal(isEditableView(view.viewId, view.defs), false, id)
     assert.equal(edit(app, id), null, id)
   }
+})
+
+test('a customized constructor of a Prelude type is what its smart constructor runs', () => {
+  const app = clickCounter()
+  const def = app.definitions['type:Widget:Text']
+  customizeDerived(app.project, def)
+  assert.ok(texts(app).includes('Clicks: 3'), 'left as it was, it is Text#')
+  // Text s = Text# ("> " ++ s): every `text` call now shows the prefix.
+  const body = app.project.functionBodies['type:Widget:Text']
+  const s = Object.values(body).find((n) => n.type === 'parameter')
+  body.pre = { id: 'pre', type: 'function', sourceFunctionId: 'prelude:append', label: '(++)', params: ['"> "', ''], mounted: [null, s.id], paramScopes: ['local', 'local'], connected: true }
+  s.mountedTo = 'pre:1'
+  body.prim.mounted[0] = 'pre'
+  assert.ok(texts(app).includes('> Clicks: 3'))
+  resetDerived(app.project, 'type:Widget:Text')
+  assert.ok(texts(app).includes('Clicks: 3'))
+})
+
+test('a taken-over rgb is what every named colour runs', () => {
+  const app = clickCounter()
+  edit(app, 'prelude:rgb')
+  const ev = createEvaluator({ nodes: app.definitions, functionBodies: app.project.functionBodies, types: app.project.types })
+  const graph = { r: { id: 'r', type: 'function', sourceFunctionId: 'prelude:red', label: 'red', params: [], mounted: [] } }
+  assert.deepEqual(ev.run(graph, 'r').args, [1, 0, 0])
+  // rgb r g b = RGB b g r
+  const body = app.project.functionBodies['prelude:rgb']
+  const ctor = body[body.output.source]
+  ctor.mounted = [...ctor.mounted].reverse()
+  assert.deepEqual(ev.run(graph, 'r').args, [0, 0, 1])
 })

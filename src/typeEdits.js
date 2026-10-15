@@ -237,3 +237,41 @@ function renameCalls(project, from, to, label) {
     for (const node of Object.values(graph)) if (node.sourceFunctionId === from) { node.sourceFunctionId = to; node.label = label }
   }
 }
+
+// ---- Taking over a Prelude type ---------------------------------------------
+// The Prelude's own data types (library.js) can be taken over: the
+// declaration is copied into the project's types under its own name
+// (marked `library`), where the type editor edits it like any other — and
+// what it derives shadows the Prelude's, as a customized function does.
+// The runtime reads values of these types (it draws a Widget, plays a
+// Program, colours a Picture), so what it relies on stays: the
+// constructors, in order, with their fields' types. Everything else is
+// the project's — naming the fields (record syntax, which derives
+// projections and updates), deriving classes, and writing instances by
+// hand, which then replace the Prelude's for that type.
+//
+// `Sub` stays the Prelude's: it is abstract (a hidden constructor relabels
+// messages), and the product `(a, b)` has no declaration syntax.
+export const TAKEABLE_TYPES = ['Maybe', 'Color', 'Picture', 'Widget', 'Program']
+
+/** `types` with Prelude declaration `decl` taken over (a copy, its instances the project's to write). */
+export function takeOverType(types, decl) {
+  return { ...types, [decl.name]: { ...structuredClone(decl), deriving: [], instances: [], library: true } }
+}
+
+/** Why `decl` can't stand for Prelude type `prelude` (what the runtime relies on changed), or '' if it can. */
+export function libraryTypeProblem(prelude, decl) {
+  const what = `${prelude.name} is the Prelude's (the runtime reads its values)`
+  if (decl.name !== prelude.name) return `${what}: it keeps its name`
+  if (decl.keyword !== prelude.keyword) return `${what}: it stays a ${prelude.keyword} declaration`
+  if ((decl.params || []).length !== (prelude.params || []).length) return `${what}: it keeps its ${(prelude.params || []).length} type parameter${(prelude.params || []).length === 1 ? '' : 's'}`
+  const want = prelude.constructors.map((c) => c.name).join(' | ')
+  if (decl.constructors.map((c) => c.name).join(' | ') !== want) return `${what}: its constructors stay ${want}, in that order`
+  // Field types compared with the parameters renamed positionally.
+  const rename = (d) => (t) => JSON.stringify(t, (k, v) => (k === 'id' && typeof v === 'string' && (d.params || []).includes(v) ? `#${d.params.indexOf(v)}` : v))
+  for (const [i, c] of prelude.constructors.entries()) {
+    const mine = decl.constructors[i]
+    if (mine.fields.length !== c.fields.length || mine.fields.some((f, k) => rename(decl)(f.type) !== rename(prelude)(c.fields[k].type))) return `${what}: ${c.name}'s fields keep their types`
+  }
+  return ''
+}
