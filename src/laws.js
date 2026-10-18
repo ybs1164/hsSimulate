@@ -300,4 +300,3 @@ export function checkFunctionLaw(kind, fn, fnType, ctx) {
   }
   return fail(kind, 'unknown law')
 }
-

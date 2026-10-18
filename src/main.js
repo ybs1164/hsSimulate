@@ -1,4 +1,5 @@
 import './style.css'
+import { initLearningPanel } from './learningPanel.js'
 import { applySubst, constructorArity, ftv, generalize, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
@@ -1293,9 +1294,6 @@ function resize() {
   canvas.width = Math.round(canvas.clientWidth * dpr)
   canvas.height = Math.round(canvas.clientHeight * dpr)
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  if (canvas.clientWidth < 760) {
-    nodes.add.x = 220
-  }
   draw()
 }
 // --- Node geometry --------------------------------------------------------
@@ -3616,6 +3614,47 @@ document.querySelectorAll('.node-library > .library-item[data-type]').forEach((i
   updateInspector()
   draw()
 }))
+initLearningPanel({
+  workspace: document.querySelector('.workspace'),
+  onModalOpen: () => {
+    endDrag()
+    endWire()
+    if (typeDrag) endTypeDrag(null)
+    state.pan = null
+    state.snapTarget = null
+    canvas.classList.remove('panning')
+    draw()
+  },
+})
+// Inspector visibility has its own column and controls, independent of learning panels.
+const workspace = document.querySelector('.workspace')
+const inspectorPanel = document.querySelector('.inspector')
+inspectorPanel.id = 'graph-inspector'
+const closeInspector = document.querySelector('.close-inspector')
+closeInspector.setAttribute('aria-label', 'Inspector 닫기')
+const reopenInspector = document.createElement('button')
+reopenInspector.type = 'button'
+reopenInspector.className = 'tool-button inspector-reopen'
+reopenInspector.textContent = 'Inspector'
+reopenInspector.setAttribute('aria-label', 'Inspector 열기')
+reopenInspector.setAttribute('aria-controls', inspectorPanel.id)
+reopenInspector.setAttribute('aria-expanded', 'true')
+reopenInspector.hidden = true
+document.querySelector('.toolbar-actions').prepend(reopenInspector)
+closeInspector.addEventListener('click', () => {
+  inspectorPanel.hidden = true
+  workspace.classList.add('inspector-hidden')
+  reopenInspector.hidden = false
+  reopenInspector.setAttribute('aria-expanded', 'false')
+  reopenInspector.focus({ preventScroll: true })
+})
+reopenInspector.addEventListener('click', () => {
+  inspectorPanel.hidden = false
+  workspace.classList.remove('inspector-hidden')
+  reopenInspector.hidden = true
+  reopenInspector.setAttribute('aria-expanded', 'true')
+  closeInspector.focus({ preventScroll: true })
+})
 // Restore the autosaved project, if any, then start history from whatever
 // is on screen.
 try {

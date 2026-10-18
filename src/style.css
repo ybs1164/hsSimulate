@@ -30,7 +30,7 @@
 }
 *{box-sizing:border-box}
 body{margin:0;min-width:1040px;min-width:0!important}
-@media (max-width:1050px){.workspace{grid-template-columns:220px minmax(0,1fr)}.inspector{display:none}.shortcut{display:none}}
+@media (max-width:1050px){.shortcut{display:none}}
 @media (max-width:680px){.top-actions>span:not(.status-dot),.icon-button{display:none}.topbar{height:54px;padding:0 16px}.sidebar{padding:18px 12px 12px}.library-item{padding:8px 6px;gap:8px}.library-item small,.side-footer{display:none}.lib-icon{width:30px;height:30px}.library-item b{font-size:12px}.canvas-toolbar{height:52px;padding:0 14px}.saved{display:none}.tool-button span{display:none}.canvas-footer{height:32px;padding:0 14px}.canvas-footer>span:not(:first-child){display:none}}
 
 .shell{height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -48,7 +48,13 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .avatar{border:0;border-radius:var(--radius-full);width:30px;height:30px;background:var(--ink);color:#fff;font:600 10px 'DM Mono';cursor:pointer}
 
 /* ----- Workspace layout ----- */
-.workspace{display:grid;grid-template-columns:247px minmax(0,1fr) 282px;flex:1;min-height:0}
+.workspace{--sidebar-width:200px;--syntax-space:220px;--examples-space:220px;--inspector-space:250px;--syntax-width:var(--syntax-space);--examples-width:var(--examples-space);--inspector-width:var(--inspector-space);display:grid;grid-template-columns:var(--examples-width) var(--syntax-width) var(--sidebar-width) minmax(calc(360px + var(--syntax-space) - var(--syntax-width) + var(--examples-space) - var(--examples-width) + var(--inspector-space) - var(--inspector-width)),1fr) var(--inspector-width);flex:1;min-height:0;overflow-x:auto;overflow-y:hidden}
+.workspace > *{grid-row:1;min-width:0}
+.examples-panel{grid-column:1}
+.syntax-panel{grid-column:2}
+.sidebar{grid-column:3}
+.canvas-panel{grid-column:4}
+.inspector{grid-column:5}
 .sidebar,.inspector{background:var(--panel)}
 .sidebar{border-right:1px solid var(--line);display:flex;flex-direction:column;padding:28px 18px 18px;min-height:0}
 .node-library{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--muted-2) transparent}
@@ -87,7 +93,7 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .runtime-row i{color:var(--success);font-style:normal;font-size:8px}
 
 /* ----- Canvas panel ----- */
-.canvas-panel{display:flex;flex-direction:column;min-width:0}
+.canvas-panel{display:flex;flex-direction:column;min-width:0;min-height:0}
 .canvas-toolbar{height:65px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:0 22px}
 .breadcrumbs{display:flex;gap:10px;align-items:center;white-space:nowrap;flex-shrink:0;font:10px 'DM Mono';color:var(--muted-2);letter-spacing:1px}
 .breadcrumbs b{font-weight:600;color:var(--ink);letter-spacing:0}
@@ -104,7 +110,7 @@ body{margin:0;min-width:1040px;min-width:0!important}
 @media (max-width:1450px){.canvas-toolbar{padding:0 14px}.saved{display:none}.toolbar-actions{gap:6px}.tool-button{padding:8px 10px}}
 .tool-button.primary:active{transform:translateY(2px);box-shadow:0 1px 0 var(--accent-ink)}
 .canvas-wrap{position:relative;flex:1;min-height:0;overflow:hidden}
-.canvas-wrap canvas{display:block;width:100%;height:100%;cursor:grab;position:relative;z-index:1}
+.canvas-wrap canvas{display:block;width:100%;height:100%;cursor:grab;position:absolute;inset:0;z-index:1}
 .canvas-wrap canvas.panning{cursor:grabbing}
 .canvas-hint{position:absolute;left:24px;bottom:23px;display:flex;gap:8px;align-items:center;color:var(--muted-2);font:10px 'DM Mono';pointer-events:none;background:var(--panel);border:1px solid var(--line);padding:7px 12px;border-radius:var(--radius-full)}
 .canvas-hint i{font-style:normal;color:var(--muted-2)}
@@ -209,6 +215,73 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .param-remove,.param-add{position:absolute;border:0;background:var(--ink);color:#fff;border-radius:50%;cursor:pointer;text-align:center;font:12px/16px 'DM Mono';z-index:2;pointer-events:auto}
 .param-remove{right:0;top:0;width:16px;height:16px;background:#e0537d}
 .param-add{width:26px;height:26px;font-size:18px;line-height:20px;box-shadow:0 3px 8px #211d3428;background:var(--accent)}
+
+/* ----- Independent example and syntax panels to the left of the graph ----- */
+.topbar{flex-shrink:0}
+.canvas-toolbar,.canvas-footer{flex-shrink:0}
+.inspector{display:block;overflow-y:auto;min-height:0}
+.inspector[hidden]{display:none}
+.workspace.inspector-hidden{--inspector-width:0px}
+.inspector-reopen[hidden]{display:none}
+.inspector-reopen:focus-visible,.close-inspector:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.learning-panel{min-width:0;min-height:0;display:flex;flex-direction:column;background:#fcfbff;border-right:1px solid var(--line)}
+.learning-header{height:65px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 12px;border-bottom:1px solid var(--line)}
+.learning-eyebrow{font:500 9px 'DM Mono',monospace;letter-spacing:1.5px;color:var(--accent-ink)}
+.learning-heading h2{margin:5px 0 0;font-size:15px;font-weight:700}
+.learning-toggle,.syntax-close{flex:none;display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--accent-soft-2);border-radius:10px;background:var(--accent-soft);color:var(--accent-ink);font-size:24px;cursor:pointer}
+.learning-toggle:hover,.syntax-close:hover{background:var(--accent-soft-2)}
+.learning-toggle{scroll-margin-inline:8px}
+.learning-section{display:flex;flex-direction:column;flex:1;min-height:0;padding:20px 10px 12px;overflow:hidden}
+.learning-section[hidden]{display:none}
+.learning-section-heading{flex:none;padding:0 8px 12px}
+.learning-section h3{margin:0 0 6px;font-size:14px}
+.learning-section-heading p,.learning-footnote{margin:0;font-size:11px;line-height:1.6;color:#767086}
+.learning-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--muted-2) transparent;list-style:none;margin:0;padding:2px 3px}
+.learning-list li + li{margin-top:4px}
+.learning-item{display:flex;align-items:center;gap:10px;width:100%;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--ink);padding:11px 8px;text-align:left;font:500 12px/1.5 'DM Sans',sans-serif;cursor:pointer}
+.learning-item:hover{background:var(--accent-soft)}
+.learning-item-number{flex:none;color:#8c83a4;font:10px 'DM Mono',monospace}
+.learning-item[aria-pressed="true"]{background:var(--accent-soft);border-color:#c6b9f5;color:var(--accent-ink);font-weight:700}
+.learning-item[aria-pressed="true"] .learning-item-number{color:var(--accent-ink)}
+.learning-footnote{flex:none;padding:12px 8px 0;font-size:10px}
+.learning-item:focus-visible,.learning-toggle:focus-visible,.syntax-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.workspace.syntax-collapsed{--syntax-width:44px}
+.workspace.examples-collapsed{--examples-width:44px}
+.learning-panel.is-collapsed .learning-header{padding:0;justify-content:center}
+.learning-panel.is-collapsed .learning-heading{display:none}
+
+/* Native dialog stays in the viewport even when the workspace scrolls. */
+.syntax-dialog{width:min(540px,calc(100vw - 32px));max-width:none;max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);margin:auto;padding:0;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--panel);color:var(--ink);box-shadow:0 24px 80px #211d3433}
+.syntax-dialog::backdrop{background:#211d3466}
+.syntax-dialog-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:24px 24px 18px;border-bottom:1px solid var(--line)}
+.syntax-dialog-header h2{margin:7px 0 0;font-size:19px;line-height:1.5;overflow-wrap:anywhere}
+.syntax-dialog-header h2:focus{outline:none}
+.syntax-close{font-size:22px}
+.syntax-dialog-content{padding:4px 24px 24px}
+.syntax-dialog-content p{font-size:13px;line-height:1.85;word-break:keep-all;overflow-wrap:anywhere}
+.syntax-dialog-content h3{margin:22px 0 10px;font-size:12px;color:var(--accent-ink)}
+.syntax-dialog-content pre{margin:0;padding:16px;border:1px solid var(--line);border-radius:12px;background:#f7f5ff;white-space:pre-wrap;overflow-wrap:anywhere}
+.syntax-dialog-content code{font:12px/1.8 'DM Mono',monospace}
+.syntax-dialog-content .syntax-note{margin:22px 0 0;border-top:1px solid var(--line);padding-top:14px;font-size:11px;color:#767086}
+@media (max-width:1400px){
+  .workspace{--sidebar-width:180px;--syntax-space:190px;--examples-space:190px;--inspector-space:220px}
+  .canvas-toolbar{padding:0 12px;gap:8px}
+  .breadcrumbs{gap:6px}
+  .saved{display:none}
+  .tool-button{padding:8px}
+}
+@media (max-width:1000px){
+  .workspace{--sidebar-width:160px;--syntax-space:170px;--examples-space:180px;--inspector-space:200px}
+  .sidebar{padding-left:10px;padding-right:10px}
+  .inspector{padding-left:12px;padding-right:12px}
+  .learning-header{padding-left:8px;padding-right:8px}
+  .learning-section{padding-left:6px;padding-right:6px}
+}
+@media (max-width:600px){
+  .syntax-dialog-header{padding:18px 18px 14px}
+  .syntax-dialog-header h2{font-size:17px}
+  .syntax-dialog-content{padding:2px 18px 18px}
+}
 .tool-button.icon-only{padding:8px 11px}
 .tool-button:disabled{opacity:.4;cursor:default;background:var(--panel);color:var(--muted)}
 .entry-toggle,.delete-node{width:100%;border:1.5px solid var(--line);border-radius:var(--radius-sm);background:var(--panel);padding:9px 11px;font:11px 'DM Mono';color:var(--muted);text-align:left;cursor:pointer}
@@ -259,7 +332,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .play-bar select{font:11px 'DM Mono';border:1.5px solid var(--line);border-radius:var(--radius-full);padding:6px 10px;background:var(--panel)}
 .play-time{color:var(--muted)}
 .play-body{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:0}
-.play-view{padding:36px;overflow:auto;display:flex;justify-content:center;align-items:flex-start}
+.play-view{padding:36px;overflow:auto;display:flex;justify-content:safe center;align-items:flex-start}
 .play-side{border-left:1px solid var(--line);padding:18px;overflow:auto;background:var(--panel)}
 .play-side label{display:block;font:600 9px 'DM Mono';letter-spacing:1.4px;color:var(--muted);margin:14px 0 6px}
 .play-side pre{font:11px/1.5 'DM Mono';white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px;margin:0}

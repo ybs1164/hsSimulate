@@ -155,12 +155,28 @@ async function addSlot(fnId) {
   await sleep(200)
 }
 async function plug(nodeId, fnId, i) {
+  await fitConnectionIfClipped(`.out-port[data-node-id="${nodeId}"]`, `.param-slot[data-function-id="${fnId}"][data-index="${i}"]`)
   await drag(await outPort(nodeId), await slotCenter(fnId, i))
   expect(await js(`!!document.querySelector('.param-slot.filled[data-function-id="${fnId}"][data-index="${i}"]')`), `plugging ${nodeId} into ${fnId}#${i} did not connect`)
 }
 async function toOutput(nodeId) {
+  await fitConnectionIfClipped(`.out-port[data-node-id="${nodeId}"]`, '.in-port')
   await drag(await outPort(nodeId), await portCenter('.in-port'))
   expect((await activeGraph()).graph.output.source === nodeId, `${nodeId} did not connect to Output`)
+}
+// Learning panels reduce the canvas width. A newly added call can also
+// widen after it is connected, putting its out-port beyond the canvas.
+// Use the editor's Fit control before dragging an offscreen port, as a user
+// would; keep the same real-pointer interaction and connection assertions.
+async function fitConnectionIfClipped(...selectors) {
+  const clipped = await js(`(() => {
+    const canvas = document.querySelector('#graph-canvas').getBoundingClientRect()
+    return ${JSON.stringify(selectors)}.some((selector) => {
+      const r = document.querySelector(selector).getBoundingClientRect()
+      return r.left < canvas.left || r.right > canvas.right || r.top < canvas.top || r.bottom > canvas.bottom
+    })
+  })()`)
+  if (clipped) { await js(`document.querySelector('#fit').click()`); await sleep(200) }
 }
 const paramId = async (name) => Object.values((await activeGraph()).graph).find((n) => n.type === 'parameter' && n.label === name).id
 
@@ -180,7 +196,39 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   // A cold Vite start can take a while to serve the app: wait for it to render.
   for (let i = 0; i < 120 && !(await js(`!!document.querySelector('.add-type')`).catch(() => false)); i++) await sleep(250)
   await sleep(500)
-  console.log('Building a game through the UI only:')
+  console.log('Learning panels:')
+  await check('independent panels preserve the graph, search and example selection in all four layouts', async () => {
+    await js(`document.querySelector('.example-list button').click()`)
+    await setField('.search input', 'identity', 'input')
+    const before = JSON.stringify(await project())
+    const snapshot = () => js(`JSON.stringify({
+      ports: document.querySelector('#port-editor').innerHTML,
+      inspector: document.querySelector('#inspector-content').innerHTML,
+      zoom: document.querySelector('#zoom-level').textContent,
+      search: document.querySelector('.search input').value,
+      example: document.querySelector('.example-list [aria-pressed="true"]').textContent
+    })`)
+    const initial = await snapshot()
+    const widths = []
+    for (const toggle of [null, '.examples-panel', '.syntax-panel', '.examples-panel', '.syntax-panel']) {
+      if (toggle) { await js(`document.querySelector('${toggle} .learning-toggle').click()`); await sleep(150) }
+      const layout = await js(`[...document.querySelector('.workspace').children].map((e) => ({
+        name: e.className, x: e.getBoundingClientRect().x, right: e.getBoundingClientRect().right, width: e.getBoundingClientRect().width
+      }))`)
+      expect(['examples-panel', 'syntax-panel', 'sidebar', 'canvas-panel', 'inspector'].every((name, i) => layout[i].name.includes(name)), 'panel order changed')
+      expect(layout.slice(1).every((r, i) => Math.abs(r.x - layout[i].right) < 1), 'panels overlap or leave gaps')
+      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'panel toggle changed the graph or selection')
+      widths.push(layout[3].width)
+    }
+    expect(widths[1] > widths[0] && widths[2] > widths[1] && widths[3] === widths[1] && widths[4] === widths[0], `canvas widths: ${widths}`)
+    await setField('.search input', '', 'input')
+    // Use the compact learning rails for the large game below. Both expanded
+    // and collapsed layouts were checked above; no graph state is reset.
+    await js(`document.querySelectorAll('.learning-toggle').forEach((button) => button.click())`)
+    await sleep(200)
+    return `canvas widths ${widths.join(' → ')}`
+  })
+  console.log('Building a game through the UI only (learning panels collapsed):')
 
   await check('declare Model and Msg in the type editor', async () => {
     await declareRecordType('Model', [['count', 'Double']])
