@@ -37,6 +37,8 @@ import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { METHOD_CLASS } from './classMethods.js'
 import { PRIM_PREFIX, defaultOverrideBody, primLabel } from './typeEdits.js'
 import { typeText } from './typeExpr.js'
+import { classShown } from './typeSystem.js'
+import { CLASS_NOTES } from './classGroups.js'
 
 /** Library definitions that can be taken over as graphs: the Prelude's (derived ones are customized through typeEdits.js). */
 export const isEditableLibraryId = (id) => /^prelude:/.test(id)
@@ -48,7 +50,7 @@ const builtinOf = (id) => (isEditableLibraryId(id) ? id.slice('prelude:'.length)
 export function primitiveTakeOverProblem(id) {
   const builtin = builtinOf(id)
   if (!builtin || builtin === 'listOf') return 'not a Prelude primitive'
-  if (METHOD_CLASS[builtin]) return `a method of the class ${METHOD_CLASS[builtin]} — customize it for a type by writing that type's instance in the type editor`
+  if (METHOD_CLASS[builtin]) return `a method of the class ${classShown(METHOD_CLASS[builtin])} — customize it for a type by writing that type's instance in the type editor`
   if (FIXED_PRIMITIVES.has(builtin)) return "the unique ring map out of ℤ (or ℚ) — fixed by the target type's own Ring, so there is nothing to choose"
   return ''
 }
@@ -59,8 +61,11 @@ export const viewIdOf = (defId, slots = null) => `view:${defId}${slots === null 
 
 // Notes for primitives, by builtin name. Anything not listed (and not
 // written as a graph below) is a runtime primitive.
+// A note naming a class is written when it's shown (a function), so the
+// class reads as the app shows it (`Fractional`, not `Field` — classGroups.js).
 const CONSTRUCTOR = (of) => `primitive · a constructor of ${of} (an injection into it)`
-const METHOD = (cls) => `primitive · a method of the class ${cls} — a type gets its own by an instance (written in the type editor)`
+const named = (cls) => `${classShown(cls)}${CLASS_NOTES[cls] && cls !== 'Ring' ? ` (${CLASS_NOTES[cls]})` : ''}`
+const METHOD = (cls, what = '') => () => `primitive · a method of the class ${named(cls)}${what} — a type gets its own by an instance (written in the type editor)`
 const PRIMITIVE_NOTES = {
   succ: 'primitive · the Church successor λn f x. f (n f x)',
   zero: 'primitive · the Church numeral λf x. x',
@@ -68,13 +73,15 @@ const PRIMITIVE_NOTES = {
   ifThenElse: 'primitive · the eliminator of Bool (Int-only, by design)',
   select: 'primitive · the eliminator of Bool: select c a b = if c then a else b',
   showsPrec: 'primitive · a method of the class Show: rendering a value as text at a precedence',
-  plus: METHOD('AddSemigroup'), negate: METHOD('AddGroup'), minus: METHOD('AddGroup'), times: METHOD('MulSemigroup'),
-  addZero: METHOD('AddMonoid'), mulOne: METHOD('MulMonoid'), divide: METHOD('Field'), sqrt: METHOD('Transcendental'),
-  toRational: METHOD('OrderedRing'),
-  fromInteger: 'primitive · the unique ring map ℤ → a (ℤ is the initial ring), fixed by the Ring dictionary of a',
-  toInteger: 'primitive · a method of the class EuclideanRing: the embedding of an integral type in ℤ',
-  fromRational: 'primitive · the unique field map ℚ → a, fixed by the Field dictionary of a', properFraction: 'primitive · a method of the class OrderedField: x = n + r with n integral and r between -1 and 1, of the sign of x',
-  div: 'primitive · a method of the class EuclideanRing: the quotient, rounded down', mod: 'primitive · a method of the class EuclideanRing: the remainder of div, of the sign of the divisor',
+  plus: METHOD('AddSemigroup'), negate: METHOD('AddGroup'), times: METHOD('MulSemigroup'),
+  addZero: METHOD('AddMonoid', ': the 0 of (+), which Haskell writes as the literal 0'), mulOne: METHOD('MulMonoid', ': the 1 of (*), which Haskell writes as the literal 1'),
+  divide: METHOD('Field'), sqrt: METHOD('Transcendental'), toRational: METHOD('OrderedRing'),
+  fromInteger: () => `primitive · the unique ring map ℤ → a (ℤ is the initial ring), fixed by the ${classShown('Ring')} dictionary of a`,
+  toInteger: () => `primitive · a method of the class ${classShown('EuclideanRing')}: the embedding of an integral type in ℤ`,
+  fromRational: () => `primitive · the unique field map ℚ → a, fixed by the ${classShown('Field')} dictionary of a`,
+  properFraction: () => `primitive · a method of the class ${classShown('OrderedField')}: x = n + r with n integral and r between -1 and 1, of the sign of x`,
+  div: () => `primitive · a method of the class ${classShown('EuclideanRing')}: the quotient, rounded down`,
+  mod: () => `primitive · a method of the class ${classShown('EuclideanRing')}: the remainder of div, of the sign of the divisor`,
   geq: METHOD('Ord'), eq: METHOD('Eq'), neq: METHOD('Eq'), compare: METHOD('Ord'), le: METHOD('Ord'), lt: METHOD('Ord'), gt: METHOD('Ord'), max: METHOD('Ord'), min: METHOD('Ord'),
   traverse: METHOD('Traversable'), pure: METHOD('Applicative'), ap: METHOD('Applicative'), bind: METHOD('Monad'),
   nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'), unit: CONSTRUCTOR('()'),
@@ -116,6 +123,8 @@ const GRAPHS = {
   // compose f g x = f (g x) — application made explicit
   compose: (g) => g.call('apply', [g.param(0), g.call('apply', [g.param(1), g.param(2)])]),
   isZero: (g) => g.call('eq', [g.param(0), { lit: '0' }]),
+  // x - y = x + negate y — Num's own default for (-)
+  minus: (g) => g.call('plus', [g.param(0), g.call('negate', [g.param(1)])]),
   map: (g) => g.call('prelude:foldr', [
     g.lambda(['f', 'x', 'acc'], (l) => l.call('prelude:cons', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
     g.call('prelude:nil', []),
@@ -385,7 +394,8 @@ export function buildDefinitionView(def, resolve, { slots = 0 } = {}) {
   else {
     // A primitive: its parameters applied to it.
     root = g.call(def.id, params.map((_, i) => g.param(i)))
-    view.note = def.derived ? derivedNote(def) : PRIMITIVE_NOTES[def.builtin] || 'primitive · built into the runtime'
+    const note = PRIMITIVE_NOTES[def.builtin]
+    view.note = def.derived ? derivedNote(def) : (typeof note === 'function' ? note() : note) || 'primitive · built into the runtime'
   }
   if (variadic) view.note = 'syntax · a list literal is sugar for the constructors (:) and []'
   g.output(root)

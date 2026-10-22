@@ -28,7 +28,7 @@ import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
 const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
-import { classLabel } from './classGroups.js'
+import { BUILTIN_GROUPS, CLASS_NOTES, classLabel } from './classGroups.js'
 // Classes print under their Haskell names (Ring as Num, …) everywhere the app shows a type.
 setClassLabels(classLabel)
 
@@ -404,7 +404,11 @@ function renderFunctionLibrary() {
       <span><b>${escapeAttr(node.label)}</b><small>${functionChainHtml(node, nodes)}</small></span>
     </button><button class="add-call" data-add-function="${node.id}" aria-label="Add call to ${escapeAttr(node.label)}" title="Add call to ${escapeAttr(node.label)}">+</button></div>
   `
-  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>Built-in functions</summary>${items.filter((n) => !n.custom).map(row).join('')}</details>`
+  // The builtins, grouped as the Prelude is (classGroups.js); one this version doesn't group goes last.
+  const builtins = items.filter((n) => !n.custom)
+  const grouped = new Set(BUILTIN_GROUPS.flatMap((g) => g.ids))
+  const groups = [...BUILTIN_GROUPS.map((g) => [g.group, g.ids.map((id) => builtins.find((n) => n.id === id)).filter(Boolean)]), ['Other', builtins.filter((n) => !grouped.has(n.id))]].filter(([, ns]) => ns.length)
+  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>Built-in functions</summary>${groups.map(([group, ns]) => `<div class="builtin-group">${escapeAttr(group)}</div>${ns.map(row).join('')}`).join('')}</details>`
   restoreDisclosureState(functionLibrary)
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
@@ -1314,8 +1318,8 @@ const classLibrary = document.querySelector('#class-library')
 // Classes in the workspace, as nodes: drag one onto a type variable of a
 // signature to constrain it (`Ord a ⇒`) — see constrainVariable.
 function classPaletteHtml() {
-  // Grouped by task (classGroups.js); the numeric tower under its Haskell names, the structural building blocks folded away.
-  const groupHtml = (g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.map(classLabel).join(', ')} ⇒ ` : ''}${it.label} :: ${it.kind}${it.label !== it.name ? ` (structurally ${it.name})` : ''} — drag onto a type variable of a signature to constrain it; click to open the class (its methods and instances)`)}"><span class="tn tn-class"><b>${escapeAttr(it.label)}</b></span></span>`).join('')}</div>`
+  // Grouped by task (classGroups.js); the numeric tower under its Haskell names, with a note on what each piece of Num is.
+  const groupHtml = (g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.map(classLabel).join(', ')} ⇒ ` : ''}${it.label} :: ${it.kind}${it.label !== it.name ? ` (structurally ${it.name})` : ''}${CLASS_NOTES[it.name] ? ` — ${CLASS_NOTES[it.name]}` : ''} — drag onto a type variable of a signature to constrain it; click to open the class (its methods and instances)`)}"><span class="tn tn-class"><b>${escapeAttr(it.label)}</b></span></span>`).join('')}</div>`
   const groups = classPalette()
   const advanced = groups.filter((g) => g.advanced)
   return groups.filter((g) => !g.advanced).map(groupHtml).join('') + (advanced.length ? `<details class="cchip-advanced"><summary><small>Advanced</small></summary>${advanced.map(groupHtml).join('')}</details>` : '')
