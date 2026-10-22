@@ -390,6 +390,33 @@ export function createEvaluator(registry) {
       return go(num(n))
     }],
     unit: [0, () => unit],
+    // Control.Monad.State. A State value wraps its s → (a, s) function; the
+    // st* builtins are those functions, for closures built here.
+    state: [1, (f) => wrapped('State', f)],
+    stateGet: [0, () => wrapped('State', now(fn('stGet')))],
+    statePut: [1, (v) => wrapped('State', now(fn('stPut', v)))],
+    stateModify: [1, (f) => wrapped('State', now(fn('stModify', f)))],
+    stateGets: [1, (f) => wrapped('State', now(fn('stGets', f)))],
+    evalState: [2, (m, st) => force(force(runStateOf(m, st)).args[0])],
+    execState: [2, (m, st) => force(force(runStateOf(m, st)).args[1])],
+    stGet: [1, (st) => pair(st, st)],
+    stPut: [2, (v) => pair(now(unit), v)],
+    stModify: [2, (f, st) => pair(now(unit), delay(() => applyValue(f, [st])))],
+    stGets: [2, (f, st) => pair(delay(() => applyValue(f, [st])), st)],
+    stPure: [2, (x, st) => pair(x, st)],
+    stMap: [3, (g, m, st) => {
+      const r = runStateOf(m, st)
+      return pair(delay(() => applyValue(g, [delay(() => force(force(r).args[0]))])), delay(() => force(force(r).args[1])))
+    }],
+    stAp: [3, (mf, mx, st) => {
+      const r1 = runStateOf(mf, st)
+      const r2 = runStateOf(mx, delay(() => force(force(r1).args[1])))
+      return pair(delay(() => applyValue(force(r1).args[0], [delay(() => force(force(r2).args[0]))])), delay(() => force(force(r2).args[1])))
+    }],
+    stBind: [3, (m, k, st) => {
+      const r = runStateOf(m, st)
+      return force(runStateOf(delay(() => applyValue(k, [delay(() => force(force(r).args[0]))])), delay(() => force(force(r).args[1]))))
+    }],
     take: [2, (n, xs) => takeList(num(n), xs)],
     drop: [2, (n, xs) => dropList(num(n), xs)],
     splitAt: [2, (n, xs) => pair(delay(() => takeList(num(n), xs)), delay(() => dropList(num(n), xs)))],
@@ -496,6 +523,8 @@ export function createEvaluator(registry) {
   // A Foldable's elements as a list (a thunk): a list is itself, anything
   // else is folded into the free monoid — toList = foldMap singleton.
   const LIST_MONOID = { kind: 'dict', key: 'Monoid@List', sub: [] }
+  // runState m s, as a thunk of the (a, s) pair.
+  const runStateOf = (m, st) => delay(() => applyValue(force(m).args[0], [st]))
   const listVia = (d, t) => (d?.key === 'Foldable@List' ? t : delay(() => invoke(d, 'foldMap', [now(fn('singleton')), t], [LIST_MONOID])))
 
   function mapList(f, xs) {
@@ -918,6 +947,12 @@ export function createEvaluator(registry) {
     Any: { mappend: ([x, y]) => wrapped('Any', delay(() => bool(inside(x)) || bool(inside(y)))), mempty: () => wrapped('Any', now(false)) },
     All: { mappend: ([x, y]) => wrapped('All', delay(() => bool(inside(x)) && bool(inside(y)))), mempty: () => wrapped('All', now(true)) },
     Endo: { mappend: ([x, y]) => wrapped('Endo', now(fn('compose', inside(x), inside(y)))), mempty: () => wrapped('Endo', now(fn('identity'))) },
+    State: {
+      fmap: ([g, m]) => wrapped('State', now(fn('stMap', g, m))),
+      pure: ([x]) => wrapped('State', now(fn('stPure', x))),
+      ap: ([mf, mx]) => wrapped('State', now(fn('stAp', mf, mx))),
+      bind: ([m, k]) => wrapped('State', now(fn('stBind', m, k))),
+    },
     Char: { eq: NUM.eq, compare: NUM.compare, showsPrec: STOCK.showsPrec },
     StdGen: { showsPrec: STOCK.showsPrec },
     List: {

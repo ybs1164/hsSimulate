@@ -35,6 +35,8 @@ const t = tvar('t')
 const m = tvar('m')
 const Double = tcon('Double')
 const Unit = tcon('()')
+const s = tvar('s')
+const State = (st, x) => tapp(tapp(tcon('State'), st), x)
 const ap = (h, x) => tapp(h, x)
 const e = tvar('e')
 const widget = (msg) => tapp(tcon('Widget'), msg)
@@ -198,6 +200,14 @@ export const builtinSchemes = {
   kleisli: scheme(['m', 'a', 'b', 'c'], [pred('Monad', m)], tfun(tfun(a, ap(m, b)), tfun(tfun(b, ap(m, c)), tfun(a, ap(m, c))))),
   joinM: scheme(['m', 'a'], [pred('Monad', m)], tfun(ap(m, ap(m, a)), ap(m, a))),
   mapM_: scheme(['t', 'm', 'a', 'b'], [pred('Foldable', t), pred('Monad', m)], tfun(tfun(a, ap(m, b)), tfun(ap(t, a), ap(m, Unit)))),
+  // Control.Monad.State: a state threaded through a computation.
+  state: scheme(['s', 'a'], [], tfun(tfun(s, ttuple(a, s)), State(s, a))),
+  stateGet: scheme(['s'], [], State(s, s)),
+  statePut: scheme(['s'], [], tfun(s, State(s, Unit))),
+  stateModify: scheme(['s'], [], tfun(tfun(s, s), State(s, Unit))),
+  stateGets: scheme(['s', 'a'], [], tfun(tfun(s, a), State(s, a))),
+  evalState: scheme(['s', 'a'], [], tfun(State(s, a), tfun(s, a))),
+  execState: scheme(['s', 'a'], [], tfun(State(s, a), tfun(s, s))),
   // Data.Traversable: traverse with the function last, or none.
   sequenceA: scheme(['t', 'f', 'a'], [pred('Traversable', t), pred('Applicative', f)], tfun(ap(t, ap(f, a)), ap(f, ap(t, a)))),
   forT: scheme(['t', 'f', 'a', 'b'], [pred('Traversable', t), pred('Applicative', f)], tfun(ap(t, a), tfun(tfun(a, ap(f, b)), ap(f, ap(t, b))))),

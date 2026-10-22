@@ -18,7 +18,7 @@ const library = {
   addZero: fn('addZero', 'addZero', []), mulOne: fn('mulOne', 'mulOne', []), eq: fn('eq', '(==)', ['x', 'y']), geq: fn('geq', '(>=)', ['x', 'y']),
 }
 const FOLDABLE = ['length', 'toList', 'null', 'elem', 'any', 'all', 'sum', 'product', 'concat', 'concatMap']
-const WRITTEN = ['mconcat', 'fmapOp', 'constMap', 'liftA2', 'thenA', 'when', 'replicateM', 'returnM', 'thenM', 'kleisli', 'joinM', 'mapM_', 'sequenceA', 'forT', 'mapM']
+const WRITTEN = ['mconcat', 'fmapOp', 'constMap', 'liftA2', 'thenA', 'when', 'replicateM', 'returnM', 'thenM', 'kleisli', 'joinM', 'mapM_', 'sequenceA', 'forT', 'mapM', 'state', 'stateGet', 'statePut', 'stateModify', 'stateGets', 'evalState', 'execState']
 
 const call = (id, callee, slots) => ({ id, type: 'function', sourceFunctionId: callee, label: callee, params: slots.map((s) => (typeof s === 'string' ? s : '')), mounted: slots.map((s) => (typeof s === 'string' ? null : s.node)) })
 const list = (id, items) => call(id, 'prelude:listOf', items)

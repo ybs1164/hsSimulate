@@ -51,7 +51,7 @@ export function tlist(elem) {
 }
 
 /** How many type arguments each constructor takes (its kind is `*` with that many `* ->` in front). */
-export const constructorArity = { List: 1, Maybe: 1, Either: 2, Widget: 1, Program: 2, Sub: 1, '(,)': 2 }
+export const constructorArity = { List: 1, Maybe: 1, Either: 2, Widget: 1, Program: 2, Sub: 1, '(,)': 2, Sum: 1, Product: 1, Min: 1, Max: 1, First: 1, Last: 1, Endo: 1, State: 2 }
 
 // Arities of user-declared type constructors (`data Pair a = …` takes one),
 // and their kinds, replaced wholesale whenever the declarations change (see

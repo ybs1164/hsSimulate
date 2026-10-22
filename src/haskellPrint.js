@@ -19,7 +19,7 @@
 // its tokens. Joining the tokens' text gives the plain definition.
 import { parseLiteral } from './literals.js'
 
-const OPERATORS = { '(+)': '+', '(-)': '-', '(*)': '*', '(/)': '/', '(>=)': '>=', '(==)': '==', '(<>)': '<>', '(++)': '++', '(:)': ':', '(&&)': '&&', '(||)': '||', '(!?)': '!?', '(*^)': '*^', '(\\/)': '\\/', '(/\\)': '/\\' }
+const OPERATORS = { '(+)': '+', '(-)': '-', '(*)': '*', '(/)': '/', '(>=)': '>=', '(==)': '==', '(<>)': '<>', '(++)': '++', '(:)': ':', '(&&)': '&&', '(||)': '||', '(!?)': '!?', '(*^)': '*^', '(\\/)': '\\/', '(/\\)': '/\\', '(<$>)': '<$>', '(<$)': '<$', '(<*>)': '<*>', '(*>)': '*>', '(>>=)': '>>=', '(>>)': '>>', '(>=>)': '>=>' }
 // Right-associative operators (infixr): `x : y : []` needs no parentheses on the right.
 const RIGHT_ASSOC = new Set([':', '++', '<>'])
 export const identifier = (s) => typeof s === 'string' && /^[a-z_][A-Za-z0-9_']*$/.test(s)
@@ -175,6 +175,11 @@ function printBody(fnId, definitions, functionBodies) {
       return atom([tok(x, n.id, { role: 'hole', slot: i })])
     })
     const callTok = (t) => tok(t, n.id, { role: 'call' })
+    // m >>= (\x -> rest) and m >> rest read as do-notation, one statement per step.
+    if (!head && !holes.length && applied.length === 2 && (labelText === '(>>=)' || labelText === '(>>)')) {
+      const block = doBlock(n, labelText, applied, callTok)
+      if (block) return block
+    }
     let e
     if (labelText === '(,)' && applied.length === 2 && !head) e = atom([callTok('('), ...applied[0].tokens, callTok(', '), ...applied[1].tokens, callTok(')')])
     else if (labelText === '[ , , ]' && !head) e = atom([callTok('['), ...applied.flatMap((a, i) => (i ? [callTok(', '), ...a.tokens] : a.tokens)), callTok(']')])
@@ -200,9 +205,39 @@ function printBody(fnId, definitions, functionBodies) {
     return lambda([tok('\\', n.id, { role: 'call' }), ...binders, { text: ' -> ' }, ...e.tokens])
   }
 
+  // A do block `do { s₁; s₂; … }` (braces and semicolons, so it reads the
+  // same inline); `stmts` lets a block that ends in another one flatten it —
+  // `m >>= \x -> (k >>= \y -> e)` is one block, by the monad's associativity.
+  const stmtsOf = (e) => e.stmts || [e.tokens]
+  const resolve = (id) => { let r = id; while (body[r]?.type === 'ref') r = body[r].target; return r }
+  const doExpr = (stmts) => ({ tokens: [{ text: 'do { ' }, ...stmts.flatMap((st, i) => (i ? [{ text: '; ' }, ...st] : st)), { text: ' }' }], prec: 0, stmts })
+  function doBlock(n, labelText, applied, callTok) {
+    if (labelText === '(>>)') return doExpr([applied[0].tokens, ...stmtsOf(applied[1])])
+    // (>>=): the continuation must be an unshared λ whose captures are this
+    // body's parameters under the λ's own names — then its last binder is
+    // the statement's `x <-` and its body the statements after.
+    const k = n.mounted?.[1]
+    if (!k || body[k]?.type === 'ref' || refCount.get(k)) return null
+    const kn = body[k]
+    const lam = definitions[kn?.sourceFunctionId]
+    if (!lam?.lambda) return null
+    const inner = printBody(lam.id, definitions, functionBodies)
+    const last = (inner?.params.length || 0) - 1
+    if (last < 0 || (kn.params || []).length !== last + 1 || kn.mounted?.[last] || parseLiteral(kn.params[last] ?? '')) return null
+    for (let i = 0; i < last; i++) {
+      const cap = body[resolve(kn.mounted?.[i])]
+      if (cap?.type !== 'parameter' || cap.label !== inner.params[i].name) return null
+    }
+    const x = inner.params[last]
+    const bindStmt = [{ text: x.name, id: x.id, scope: lam.id, role: 'param' }, callTok(' <- '), ...applied[0].tokens]
+    const lets = inner.bindings.length ? [[{ text: 'let { ' }, ...inner.bindings.flatMap((b, i) => [...(i ? [{ text: '; ' }] : []), { text: b.name, id: b.id, scope: lam.id, role: 'binding' }, { text: ' = ' }, ...b.value]), { text: ' }' }]] : []
+    return doExpr([bindStmt, ...lets, ...(inner.stmts || [inner.rhs])])
+  }
+
   const output = body.output
-  const rhs = output?.source ? expr(output.source).tokens : [{ text: 'undefined' }]
-  return { params: params.map((p) => ({ name: p.label, id: p.id })), rhs, bindings }
+  const rhsExpr = output?.source ? expr(output.source) : null
+  const rhs = rhsExpr ? rhsExpr.tokens : [{ text: 'undefined' }]
+  return { params: params.map((p) => ({ name: p.label, id: p.id })), rhs, bindings, stmts: rhsExpr?.stmts }
 }
 
 /** A type as Haskell source (ASCII arrows). */

@@ -82,6 +82,8 @@ for (const w of ['Min', 'Max']) declareInstance('Semigroup', app(w, $a), [pred('
 for (const w of ['First', 'Last']) declareInstance('Semigroup', app(w, $a))
 for (const w of ['Any', 'All']) for (const cls of ['Semigroup', 'Monoid']) declareInstance(cls, tcon(w))
 for (const cls of ['Semigroup', 'Monoid']) declareInstance(cls, app('Endo', $a))
+// State s: the state monad, s → (a, s) — the monad of the adjunction (− × s) ⊣ (s → −).
+for (const cls of ['Functor', 'Applicative', 'Monad']) declareInstance(cls, app('State', $a))
 
 /**
  * Classes a product (single-constructor record) may derive pointwise, by

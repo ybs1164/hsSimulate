@@ -26,6 +26,7 @@ export const PRELUDE = [
   ['Folding · Foldable', [['foldMap', 'foldMap', ['f', 'xs']], ['toList', 'toList', ['xs']], ['length', 'length', ['xs']], ['null', 'null', ['xs']], ['elem', 'elem', ['x', 'xs']], ['any', 'any', ['p', 'xs']], ['all', 'all', ['p', 'xs']], ['sum', 'sum', ['xs']], ['product', 'product', ['xs']], ['concat', 'concat', ['xss']], ['concatMap', 'concatMap', ['f', 'xs']]]],
   ['Traversing · Traversable', [['traverse', 'traverse', ['f', 'xs']], ['sequenceA', 'sequenceA', ['xs']], ['forT', 'for', ['xs', 'f']], ['mapM', 'mapM', ['f', 'xs']]]],
   ['Chained computations · Applicative, Monad', [['pure', 'pure', ['x']], ['ap', '(<*>)', ['fs', 'xs']], ['liftA2', 'liftA2', ['f', 'x', 'y']], ['thenA', '(*>)', ['x', 'y']], ['when', 'when', ['condition', 'action']], ['replicateM', 'replicateM', ['n', 'action']], ['bind', '(>>=)', ['m', 'k']], ['thenM', '(>>)', ['m', 'k']], ['returnM', 'return', ['x']], ['kleisli', '(>=>)', ['f', 'g', 'x']], ['joinM', 'join', ['mm']], ['mapM_', 'mapM_', ['f', 'xs']]]],
+  ['State · State s', [['state', 'state', ['f']], ['stateGet', 'get', []], ['statePut', 'put', ['x']], ['stateModify', 'modify', ['f']], ['stateGets', 'gets', ['f']], ['evalState', 'evalState', ['m', 's']], ['execState', 'execState', ['m', 's']]]],
   ['Display · Show', [['show', 'show', ['x']], ['showsPrec', 'showsPrec', ['d', 'x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
   ['Random', [['mkStdGen', 'mkStdGen', ['seed']], ['randomR', 'randomR', ['range', 'gen']], ['randomRInt', 'randomRInt', ['range', 'gen']]]],
   ['Game', [['program', 'program', ['initial', 'view', 'handle', 'step']], ['setStepsPerSecond', 'set stepsPerSecond', ['n', 'program']], ['setMaxOffline', 'set maxOffline', ['seconds', 'program']], ['setSubscriptions', 'set subscriptions', ['subscriptions', 'program']], ['every', 'every', ['seconds', 'msg']], ['onKey', 'onKey', ['handler']], ['wText', 'text', ['s']], ['wButton', 'button', ['label', 'msg']], ['wColumn', 'column', ['widgets']], ['wRow', 'row', ['widgets']], ['wProgress', 'progress', ['fraction']], ['wHeading', 'heading', ['s']], ['wSpacer', 'spacer', ['px']], ['wColor', 'withColor', ['color', 'widget']], ['wDrawing', 'drawing', ['width', 'height', 'picture']]]],
@@ -67,13 +68,19 @@ newtype First a = First { getFirst :: a }
 newtype Last a = Last { getLast :: a }
 newtype Any = Any { getAny :: Bool }
 newtype All = All { getAll :: Bool }
-newtype Endo a = Endo { appEndo :: a -> a }`
+newtype Endo a = Endo { appEndo :: a -> a }
+newtype State s a = State { runState :: s -> (a, s) }`
 //
 // The last nine are Data.Monoid's wrappers: one type, several ways to
 // combine it, each its own newtype — `Sum` adds, `Max` keeps the larger,
 // `Any` is (||), `Endo` composes updates (categoryClasses.js gives their
 // instances). They are folded through with foldMap: sum is
 // `getSum . foldMap Sum` (definitionViews.js).
+//
+// `State s a` is Control.Monad.State's: a computation that reads and
+// replaces a state of type s while giving an a — a Monad, so steps chain
+// with (>>=) or do-notation instead of threading the state by hand
+// (`state (randomRInt (1, 6))` rolls a die with the generator as the state).
 //
 // The product `(a, b)` is declared too, though its syntax isn't a
 // declaration's: `data (a, b) = (,) a b`, a single constructor (the
@@ -84,7 +91,7 @@ export const preludeTypes = { ...declareTypes({}, PRELUDE_TYPES_SOURCE, { builti
 const ABSTRACT = new Set(['Sub'])
 // The wrappers show just their constructor and projection (`Sum`, `getSum`): a setter or case of a one-field wrapper adds nothing.
 export const MONOID_WRAPPERS = ['Sum', 'Product', 'Min', 'Max', 'First', 'Last', 'Any', 'All', 'Endo']
-const wrapperExtra = (def) => MONOID_WRAPPERS.includes(def.derived.type) && ['set', 'over', 'case'].includes(def.derived.op)
+const wrapperExtra = (def) => [...MONOID_WRAPPERS, 'State'].includes(def.derived.type) && ['set', 'over', 'case'].includes(def.derived.op)
 // uncurry :: (a → b → r) → (a, b) → r — the copairing of a one-constructor type.
 const relabel = (def) => (def.id === 'type:(,):case(,)' ? { ...def, id: 'type:(,):uncurry', label: 'uncurry', params: ['f', 'p'] } : def)
 export const preludeTypeDefs = Object.fromEntries(derivedDefinitions(preludeTypes)

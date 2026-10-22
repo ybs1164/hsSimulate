@@ -204,6 +204,17 @@ const GRAPHS = {
     g.call('prelude:returnM', [g.call('prelude:unit', [])]),
     g.call('prelude:toList', [g.param(1)]),
   ]),
+  // Control.Monad.State, each a State around its s → (a, s):
+  // state f = State f;  get = State (\s -> (s, s));  put x = State (\x s -> ((), x))
+  state: viaConstructor('State', 'State'),
+  stateGet: (g) => g.call('type:State:State', [g.lambda(['s'], (l) => l.call('prelude:pair', [l.param(0), l.param(0)]))]),
+  statePut: (g) => g.call('type:State:State', [g.lambda(['x', 's'], (l) => l.call('prelude:pair', [l.call('prelude:unit', []), l.param(0)]), [g.param(0)])]),
+  // modify f = State (\f s -> ((), apply f s));  gets f = State (\f s -> (apply f s, s))
+  stateModify: (g) => g.call('type:State:State', [g.lambda(['f', 's'], (l) => l.call('prelude:pair', [l.call('prelude:unit', []), l.call('apply', [l.param(0), l.param(1)])]), [g.param(0)])]),
+  stateGets: (g) => g.call('type:State:State', [g.lambda(['f', 's'], (l) => l.call('prelude:pair', [l.call('apply', [l.param(0), l.param(1)]), l.param(1)]), [g.param(0)])]),
+  // evalState m s = fst (apply (runState m) s);  execState with snd
+  evalState: (g) => g.call('prelude:fst', [g.call('apply', [g.call('type:State:runState', [g.param(0)]), g.param(1)])]),
+  execState: (g) => g.call('prelude:snd', [g.call('apply', [g.call('type:State:runState', [g.param(0)]), g.param(1)])]),
   // sequenceA xs = traverse identity xs;  for xs f = traverse f xs;  mapM f xs = traverse f xs
   sequenceA: (g) => g.call('prelude:traverse', [g.call('identity', [null]), g.param(0)]),
   forT: (g) => g.call('prelude:traverse', [g.param(1), g.param(0)]),
