@@ -12,7 +12,7 @@ import { TAKEABLE_TYPES, customizeDerived, isPristineOverride, libraryTypeProble
 import { BUILTIN_CLASSES, METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
-import { asciiType, printDefinitionTokens } from './haskellPrint.js'
+import { asciiType, printDefinitionTokens, printNodeText } from './haskellPrint.js'
 import { buildDefinitionView, isEditableView, restoreDefinition, takeOverDefinition, viewIdOf } from './definitionViews.js'
 import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
@@ -1482,11 +1482,27 @@ function toScreen(world) { return { x: world.x * state.zoom + state.offset.x, y:
 function slotWorldCenter(node, index) { return { x: node.x + SLOT_START + index * SLOT_STRIDE, y: node.y } }
 function slotScreenCenter(node, index) { return toScreen(slotWorldCenter(node, index)) }
 function functionBlockLeft(node) { return node.x - FN_LEFT }
-// A folded call shows no slots: just its head and a "⋯" where they were.
+// A folded call shows no slots: just its head and, where they were, the
+// expression it stands for (`add 3 (mul x 2)`) — cut with an ellipsis past
+// CHIP_MAX_W, like a chip's text.
 function isFolded(node) { return !!node.folded && node.params.length > 0 }
-const FOLDED_W = 124     // world px from node.x to a folded call's right edge
+const FOLDED_W = 124     // world px from node.x to a folded call's right edge, at least
+const FOLDED_TEXT_X = 37 // world px from node.x to the start of a folded call's expression
+const FOLDED_TAIL = 44   // world px after the expression — room for the ▶ badge
+let foldedTexts = new Map() // node id -> its expression, until the next draw()
+function foldedText(node) {
+  if (!foldedTexts.has(node.id)) foldedTexts.set(node.id, printNodeText(activeNodes(), node.id, definitions, allBodies) || '⋯')
+  return foldedTexts.get(node.id)
+}
+function foldedWidth(node) {
+  ctx.save()
+  ctx.font = `600 ${CHIP_FONT}px ui-monospace, monospace`
+  const text = ctx.measureText(foldedText(node)).width
+  ctx.restore()
+  return Math.min(CHIP_MAX_W, Math.max(FOLDED_W, FOLDED_TEXT_X + text + FOLDED_TAIL))
+}
 function functionBlockRight(node) {
-  if (isFolded(node)) return node.x + FOLDED_W
+  if (isFolded(node)) return node.x + foldedWidth(node)
   return node.params.length > 0
     ? node.x + SLOT_START + (node.params.length - 1) * SLOT_STRIDE + SLOT_D / 2 + FN_TAIL
     : node.x + 78
@@ -2229,6 +2245,7 @@ function drawReferenceLinks() {
   ctx.restore()
 }
 function draw() {
+  foldedTexts = new Map()
   updateRunLabel()
   elaborationCache = null // something may have changed
   projectPassCache = null
@@ -2280,7 +2297,17 @@ function drawFunctionBlock(node, pass, selected) {
   ctx.shadowColor = 'transparent'; ctx.lineWidth = selected || broken ? 3 : 2; ctx.strokeStyle = broken ? '#e0537d' : selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
   ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('ƒ', p.x, p.y + 1)
-  if (isFolded(node)) { ctx.fillStyle = '#9691a8'; ctx.font = `700 ${20 * state.zoom}px sans-serif`; ctx.fillText('⋯', p.x + 46 * state.zoom, p.y + 1) }
+  if (isFolded(node)) {
+    ctx.textAlign = 'left'; ctx.fillStyle = '#211d34'; ctx.font = `600 ${CHIP_FONT * state.zoom}px ui-monospace, monospace`
+    const textX = p.x + FOLDED_TEXT_X * state.zoom, room = rect.right - textX - FOLDED_TAIL * state.zoom
+    let content = foldedText(node)
+    if (ctx.measureText(content).width > room) {
+      while (content.length > 1 && ctx.measureText(`${content}…`).width > room) content = content.slice(0, -1)
+      content = `${content}…`
+    }
+    ctx.fillText(content, textX, p.y + 1)
+    ctx.textAlign = 'center'
+  }
   const playX = rect.right - 24 * state.zoom, playY = rect.top + 2 * state.zoom
   ctx.beginPath(); ctx.arc(playX, playY, 13 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = '#211d34'; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `${11 * state.zoom}px sans-serif`; ctx.fillText('▶', playX + 1, playY + 1)

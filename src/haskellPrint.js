@@ -83,9 +83,23 @@ function printLambda(fnId, definitions, functionBodies) {
   return [...head, { text: ' ' }, { text: '->', ...at('output') }, { text: ' ' }, ...body]
 }
 
-/** The pieces of a function body: parameters, the right-hand side, and shared bindings — each as tokens. */
-function printBody(fnId, definitions, functionBodies) {
-  const body = functionBodies[fnId]
+/**
+ * The expression node `nodeId` of `graph` stands for, e.g. `add 3 (mul x 2)` —
+ * what a folded call shows in place of its slots. Shared values are printed
+ * where they are used, so the text needs no `where`.
+ */
+export function printNodeText(graph, nodeId, definitions, functionBodies) {
+  const printed = printBody(null, definitions, functionBodies, { body: graph, root: nodeId, inline: true })
+  return printed ? tokensText(printed.rhs) : ''
+}
+
+/**
+ * The pieces of a function body: parameters, the right-hand side, and shared bindings — each as tokens.
+ * `options` prints another graph (`body`) from another node (`root`) than the
+ * body's output, and `inline` prints shared values in place instead of binding them.
+ */
+function printBody(fnId, definitions, functionBodies, options = {}) {
+  const body = options.body ?? functionBodies[fnId]
   if (!body) return null
   const at = (id, extra) => ({ id, scope: fnId, ...extra })
   const tok = (text, id, extra) => (id ? { text, ...at(id, extra) } : { text })
@@ -126,7 +140,7 @@ function printBody(fnId, definitions, functionBodies) {
     if (!n) return atom([{ text: 'undefined' }])
     if (n.type === 'ref') return expr(n.target, via)
     if (n.type === 'parameter') return atom([tok(n.label, via, { role: 'param' })])
-    if (refCount.get(id)) {
+    if (refCount.get(id) && !options.inline) {
       if (!shared.has(id)) {
         const name = claimed.get(id) ?? freshName(id)
         shared.set(id, name)
@@ -136,8 +150,12 @@ function printBody(fnId, definitions, functionBodies) {
       }
       return atom([tok(shared.get(id), via, { role: 'binding' })])
     }
-    return print(n)
+    if (!options.inline) return print(n)
+    if (inlining.has(id)) return atom([{ text: '…' }]) // a value that holds itself
+    inlining.add(id)
+    try { return print(n) } finally { inlining.delete(id) }
   }
+  const inlining = new Set()
 
   function literal(textValue, id, extra) {
     const t = textValue.trim()
@@ -234,8 +252,8 @@ function printBody(fnId, definitions, functionBodies) {
     return doExpr([bindStmt, ...lets, ...(inner.stmts || [inner.rhs])])
   }
 
-  const output = body.output
-  const rhsExpr = output?.source ? expr(output.source) : null
+  const root = 'root' in options ? options.root : body.output?.source
+  const rhsExpr = root ? expr(root) : null
   const rhs = rhsExpr ? rhsExpr.tokens : [{ text: 'undefined' }]
   return { params: params.map((p) => ({ name: p.label, id: p.id })), rhs, bindings, stmts: rhsExpr?.stmts }
 }
