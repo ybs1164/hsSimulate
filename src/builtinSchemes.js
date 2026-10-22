@@ -34,6 +34,7 @@ const f = tvar('f')
 const t = tvar('t')
 const m = tvar('m')
 const Double = tcon('Double')
+const Unit = tcon('()')
 const ap = (h, x) => tapp(h, x)
 const e = tvar('e')
 const widget = (msg) => tapp(tcon('Widget'), msg)
@@ -84,7 +85,11 @@ export const builtinSchemes = {
   cons: scheme(['a'], [], tfun(a, tfun(tlist(a), tlist(a)))),
   foldr: scheme(['a', 'b'], [], tfun(tfun(a, tfun(b, b)), tfun(b, tfun(tlist(a), b)))),
   map: scheme(['a', 'b'], [], tfun(tfun(a, b), tfun(tlist(a), tlist(b)))),
-  length: scheme(['a'], [], tfun(tlist(a), Int)),
+  // Foldable, as in base: length, null, elem, any, all, sum, product,
+  // concat, concatMap and toList work on any container — `t a` is folded
+  // into a monoid with foldMap (definitionViews.js writes each so).
+  length: scheme(['t', 'a'], [pred('Foldable', t)], tfun(ap(t, a), Int)),
+  toList: scheme(['t', 'a'], [pred('Foldable', t)], tfun(ap(t, a), tlist(a))),
   append: scheme(['a'], [], tfun(tlist(a), tfun(tlist(a), tlist(a)))),
   index: scheme(['a'], [], tfun(tlist(a), tfun(Int, Maybe(a)))),
   // The inverse of [] and (:) — [a] ≅ 1 + a × [a] (Lambek's lemma): the
@@ -93,15 +98,15 @@ export const builtinSchemes = {
   foldl: scheme(['a', 'b'], [], tfun(tfun(b, tfun(a, b)), tfun(b, tfun(tlist(a), b)))),
   filter: scheme(['a'], [], tfun(tfun(a, Bool), tfun(tlist(a), tlist(a)))),
   reverse: scheme(['a'], [], tfun(tlist(a), tlist(a))),
-  concat: scheme(['a'], [], tfun(tlist(tlist(a)), tlist(a))),
-  concatMap: scheme(['a', 'b'], [], tfun(tfun(a, tlist(b)), tfun(tlist(a), tlist(b)))),
-  null: scheme(['a'], [], tfun(tlist(a), Bool)),
-  elem: scheme(['a'], [pred('Eq', a)], tfun(a, tfun(tlist(a), Bool))),
-  any: scheme(['a'], [], tfun(tfun(a, Bool), tfun(tlist(a), Bool))),
-  all: scheme(['a'], [], tfun(tfun(a, Bool), tfun(tlist(a), Bool))),
-  // The free monoid's fold into the additive (multiplicative) monoid.
-  sum: scheme(['a'], [pred('AddMonoid', a)], tfun(tlist(a), a)),
-  product: scheme(['a'], [pred('MulMonoid', a)], tfun(tlist(a), a)),
+  concat: scheme(['t', 'a'], [pred('Foldable', t)], tfun(ap(t, tlist(a)), tlist(a))),
+  concatMap: scheme(['t', 'a', 'b'], [pred('Foldable', t)], tfun(tfun(a, tlist(b)), tfun(ap(t, a), tlist(b)))),
+  null: scheme(['t', 'a'], [pred('Foldable', t)], tfun(ap(t, a), Bool)),
+  elem: scheme(['t', 'a'], [pred('Foldable', t), pred('Eq', a)], tfun(a, tfun(ap(t, a), Bool))),
+  any: scheme(['t', 'a'], [pred('Foldable', t)], tfun(tfun(a, Bool), tfun(ap(t, a), Bool))),
+  all: scheme(['t', 'a'], [pred('Foldable', t)], tfun(tfun(a, Bool), tfun(ap(t, a), Bool))),
+  // A fold into the additive (multiplicative) monoid: getSum . foldMap Sum.
+  sum: scheme(['t', 'a'], [pred('Foldable', t), pred('AddMonoid', a)], tfun(ap(t, a), a)),
+  product: scheme(['t', 'a'], [pred('Foldable', t), pred('MulMonoid', a)], tfun(ap(t, a), a)),
   take: scheme(['a'], [], tfun(Int, tfun(tlist(a), tlist(a)))),
   drop: scheme(['a'], [], tfun(Int, tfun(tlist(a), tlist(a)))),
   splitAt: scheme(['a'], [], tfun(Int, tfun(tlist(a), ttuple(tlist(a), tlist(a))))),
@@ -174,6 +179,29 @@ export const builtinSchemes = {
   ap: scheme(['f', 'a', 'b'], [pred('Applicative', f)], tfun(ap(f, tfun(a, b)), tfun(ap(f, a), ap(f, b)))),
   bind: scheme(['m', 'a', 'b'], [pred('Monad', m)], tfun(ap(m, a), tfun(tfun(a, ap(m, b)), ap(m, b)))),
   traverse: scheme(['t', 'f', 'a', 'b'], [pred('Traversable', t), pred('Applicative', f)], tfun(tfun(a, ap(f, b)), tfun(ap(t, a), ap(f, ap(t, b))))),
+
+  // Written with the methods (definitionViews.js), by their base names.
+  mconcat: scheme(['a'], [pred('Monoid', a)], tfun(tlist(a), a)),
+  unit: scheme([], [], Unit),
+  // Data.Functor: (<$>) is fmap, (<$) replaces every element.
+  fmapOp: scheme(['f', 'a', 'b'], [pred('Functor', f)], tfun(tfun(a, b), tfun(ap(f, a), ap(f, b)))),
+  constMap: scheme(['f', 'a', 'b'], [pred('Functor', f)], tfun(a, tfun(ap(f, b), ap(f, a)))),
+  // Control.Applicative: two effects side by side.
+  liftA2: scheme(['f', 'a', 'b', 'c'], [pred('Applicative', f)], tfun(tfun(a, tfun(b, c)), tfun(ap(f, a), tfun(ap(f, b), ap(f, c))))),
+  thenA: scheme(['f', 'a', 'b'], [pred('Applicative', f)], tfun(ap(f, a), tfun(ap(f, b), ap(f, b)))),
+  when: scheme(['f'], [pred('Applicative', f)], tfun(Bool, tfun(ap(f, Unit), ap(f, Unit)))),
+  replicateM: scheme(['f', 'a'], [pred('Applicative', f)], tfun(Int, tfun(ap(f, a), ap(f, tlist(a))))),
+  // Control.Monad: one effect after another. (>=>) composes in the Kleisli
+  // category of m, as `compose` does in the category of types.
+  returnM: scheme(['m', 'a'], [pred('Monad', m)], tfun(a, ap(m, a))),
+  thenM: scheme(['m', 'a', 'b'], [pred('Monad', m)], tfun(ap(m, a), tfun(ap(m, b), ap(m, b)))),
+  kleisli: scheme(['m', 'a', 'b', 'c'], [pred('Monad', m)], tfun(tfun(a, ap(m, b)), tfun(tfun(b, ap(m, c)), tfun(a, ap(m, c))))),
+  joinM: scheme(['m', 'a'], [pred('Monad', m)], tfun(ap(m, ap(m, a)), ap(m, a))),
+  mapM_: scheme(['t', 'm', 'a', 'b'], [pred('Foldable', t), pred('Monad', m)], tfun(tfun(a, ap(m, b)), tfun(ap(t, a), ap(m, Unit)))),
+  // Data.Traversable: traverse with the function last, or none.
+  sequenceA: scheme(['t', 'f', 'a'], [pred('Traversable', t), pred('Applicative', f)], tfun(ap(t, ap(f, a)), ap(f, ap(t, a)))),
+  forT: scheme(['t', 'f', 'a', 'b'], [pred('Traversable', t), pred('Applicative', f)], tfun(ap(t, a), tfun(tfun(a, ap(f, b)), ap(f, ap(t, b))))),
+  mapM: scheme(['t', 'm', 'a', 'b'], [pred('Traversable', t), pred('Monad', m)], tfun(tfun(a, ap(m, b)), tfun(ap(t, a), ap(m, ap(t, b))))),
 
   // A game, shaped like gloss's `play` (and Elm's Browser.element): the
   // initial model, a view, a message handler and a time step. The view is a

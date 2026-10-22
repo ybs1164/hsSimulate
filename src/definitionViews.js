@@ -77,7 +77,7 @@ const PRIMITIVE_NOTES = {
   div: 'primitive · a method of the class EuclideanRing: the quotient, rounded down', mod: 'primitive · a method of the class EuclideanRing: the remainder of div, of the sign of the divisor',
   geq: METHOD('Ord'), eq: METHOD('Eq'), neq: METHOD('Eq'), compare: METHOD('Ord'), le: METHOD('Ord'), lt: METHOD('Ord'), gt: METHOD('Ord'), max: METHOD('Ord'), min: METHOD('Ord'),
   traverse: METHOD('Traversable'), pure: METHOD('Applicative'), ap: METHOD('Applicative'), bind: METHOD('Monad'),
-  nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
+  nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'), unit: CONSTRUCTOR('()'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
   uncons: 'primitive · the eliminator of [a]: the inverse of [] and (:), since [a] ≅ 1 + a × [a] (Lambek\'s lemma)',
   mappend: METHOD('Semigroup'), mempty: METHOD('Monoid'), fmap: METHOD('Functor'), foldMap: METHOD('Foldable'),
@@ -104,6 +104,8 @@ const fraction = (g) => {
 }
 // apply (apply f x) y — a two-argument application, made explicit.
 const app2 = (g, f, x, y) => g.call('apply', [g.call('apply', [f, x]), y])
+// getW (foldMap f xs): a fold through Data.Monoid's wrapper `w` (Sum, Any, …).
+const viaWrapper = (g, w, f, xs) => g.call(`type:${w}:get${w}`, [g.call('prelude:foldMap', [f, xs])])
 const COLOURS = { red: ['1', '0', '0'], green: ['0', '0.7', '0'], blue: ['0', '0', '1'], yellow: ['1', '0.85', '0'], black: ['0', '0', '0'], white: ['1', '1', '1'] }
 // The functions written as graphs, by builtin name. Each gets a builder
 // (see `graph` below) and returns the node feeding Output.
@@ -119,7 +121,11 @@ const GRAPHS = {
     g.call('prelude:nil', []),
     g.param(1),
   ]),
-  length: (g) => g.call('prelude:foldr', [g.lambda(['x', 'n'], (l) => l.call('plus', [l.param(1), { lit: '1' }])), { lit: '0' }, g.param(0)]),
+  // The Foldable functions fold the container into a monoid (Data.Monoid's
+  // wrappers pick which): length xs = getSum (foldMap (\x -> Sum 1) xs)
+  length: (g) => viaWrapper(g, 'Sum', g.lambda(['x'], (l) => l.call('type:Sum:Sum', [{ lit: '1' }])), g.param(0)),
+  // toList xs = foldMap (\x -> [x]) xs — into the free monoid
+  toList: (g) => g.call('prelude:foldMap', [g.lambda(['x'], (l) => l.call('prelude:cons', [l.param(0), l.call('prelude:nil', [])])), g.param(0)]),
   append: (g) => g.call('prelude:foldr', [g.call('prelude:cons', [null, null]), g.param(1), g.param(0)]),
   // xs !? i = foldr (\x r k -> select (k == 0) (Just x) (apply r (k - 1))) (\k -> Nothing) xs `apply` i
   index: (g) => g.call('apply', [
@@ -134,8 +140,8 @@ const GRAPHS = {
     ]),
     g.param(1),
   ]),
-  // null xs = foldr (\x acc -> False) True xs
-  null: (g) => g.call('prelude:foldr', [g.lambda(['x', 'acc'], (l) => l.bool(false)), { lit: 'True' }, g.param(0)]),
+  // null xs = getAll (foldMap (\x -> All False) xs)
+  null: (g) => viaWrapper(g, 'All', g.lambda(['x'], (l) => l.call('type:All:All', [{ lit: 'False' }])), g.param(0)),
   // foldl f z xs = foldr (\f x k acc -> apply k (apply (apply f acc) x)) identity xs `apply` z
   foldl: (g) => g.call('apply', [
     g.call('prelude:foldr', [
@@ -160,34 +166,48 @@ const GRAPHS = {
     ]),
     g.call('prelude:nil', []),
   ]),
-  // concat xss = foldr (++) [] xss
-  concat: (g) => g.call('prelude:foldr', [g.call('prelude:append', [null, null]), g.call('prelude:nil', []), g.param(0)]),
-  // concatMap f xs = foldr (\f x acc -> apply f x ++ acc) [] xs
-  concatMap: (g) => g.call('prelude:foldr', [
-    g.lambda(['f', 'x', 'acc'], (l) => l.call('prelude:append', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
-    g.call('prelude:nil', []),
-    g.param(1),
+  // concat xss = foldMap identity xss;  concatMap f xs = foldMap f xs — lists are a monoid under (++)
+  concat: (g) => g.call('prelude:foldMap', [g.call('identity', [null]), g.param(0)]),
+  concatMap: (g) => g.call('prelude:foldMap', [g.param(0), g.param(1)]),
+  // elem x xs = any (\x y -> x == y) xs
+  elem: (g) => g.call('prelude:any', [g.lambda(['x', 'y'], (l) => l.call('eq', [l.param(0), l.param(1)]), [g.param(0)]), g.param(1)]),
+  // any p xs = getAny (foldMap (\p x -> Any (apply p x)) xs);  all with All
+  any: (g) => viaWrapper(g, 'Any', g.lambda(['p', 'x'], (l) => l.call('type:Any:Any', [l.call('apply', [l.param(0), l.param(1)])]), [g.param(0)]), g.param(1)),
+  all: (g) => viaWrapper(g, 'All', g.lambda(['p', 'x'], (l) => l.call('type:All:All', [l.call('apply', [l.param(0), l.param(1)])]), [g.param(0)]), g.param(1)),
+  // sum xs = getSum (foldMap Sum xs);  product xs = getProduct (foldMap Product xs)
+  sum: (g) => viaWrapper(g, 'Sum', g.call('type:Sum:Sum', [null]), g.param(0)),
+  product: (g) => viaWrapper(g, 'Product', g.call('type:Product:Product', [null]), g.param(0)),
+  // mconcat xs = foldr (<>) mempty xs
+  mconcat: (g) => g.call('prelude:foldr', [g.call('prelude:mappend', [null, null]), g.call('prelude:mempty', []), g.param(0)]),
+
+  // Data.Functor, Control.Applicative, Control.Monad, Data.Traversable —
+  // each written with the class methods.
+  // f <$> x = fmap f x;  x <$ ys = fmap (\x y -> x) ys
+  fmapOp: (g) => g.call('prelude:fmap', [g.param(0), g.param(1)]),
+  constMap: (g) => g.call('prelude:fmap', [g.lambda(['x', 'y'], (l) => l.param(0), [g.param(0)]), g.param(1)]),
+  // liftA2 h x y = fmap h x <*> y;  x *> y = fmap (\a b -> b) x <*> y
+  liftA2: (g) => g.call('prelude:ap', [g.call('prelude:fmap', [g.param(0), g.param(1)]), g.param(2)]),
+  thenA: (g) => g.call('prelude:ap', [g.call('prelude:fmap', [g.lambda(['a', 'b'], (l) => l.param(1)), g.param(0)]), g.param(1)]),
+  // when c act = select c act (pure ())
+  when: (g) => g.call('select', [g.param(0), g.param(1), g.call('prelude:pure', [g.call('prelude:unit', [])])]),
+  // replicateM n act = sequenceA (replicate n act)
+  replicateM: (g) => g.call('prelude:sequenceA', [g.call('prelude:replicate', [g.param(0), g.param(1)])]),
+  // return x = pure x;  m >> k = m >>= (\k x -> k);  join mm = mm >>= identity
+  returnM: (g) => g.call('prelude:pure', [g.param(0)]),
+  thenM: (g) => g.call('prelude:bind', [g.param(0), g.lambda(['k', 'x'], (l) => l.param(0), [g.param(1)])]),
+  joinM: (g) => g.call('prelude:bind', [g.param(0), g.call('identity', [null])]),
+  // (f >=> h) x = apply f x >>= h — Kleisli composition
+  kleisli: (g) => g.call('prelude:bind', [g.call('apply', [g.param(0), g.param(2)]), g.param(1)]),
+  // mapM_ f xs = foldr (\f x k -> apply f x >> k) (return ()) (toList xs)
+  mapM_: (g) => g.call('prelude:foldr', [
+    g.lambda(['f', 'x', 'k'], (l) => l.call('prelude:thenM', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    g.call('prelude:returnM', [g.call('prelude:unit', [])]),
+    g.call('prelude:toList', [g.param(1)]),
   ]),
-  // elem x xs = foldr (\x y acc -> x == y || acc) False xs
-  elem: (g) => g.call('prelude:foldr', [
-    g.lambda(['x', 'y', 'acc'], (l) => l.call('prelude:or', [l.call('eq', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
-    { lit: 'False' },
-    g.param(1),
-  ]),
-  // any p xs = foldr (\p x acc -> apply p x || acc) False xs;  all with (&&) and True
-  any: (g) => g.call('prelude:foldr', [
-    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:or', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
-    { lit: 'False' },
-    g.param(1),
-  ]),
-  all: (g) => g.call('prelude:foldr', [
-    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:and', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
-    { lit: 'True' },
-    g.param(1),
-  ]),
-  // sum xs = foldr (+) addZero xs;  product xs = foldr (*) mulOne xs
-  sum: (g) => g.call('prelude:foldr', [g.call('plus', [null, null]), g.call('addZero', []), g.param(0)]),
-  product: (g) => g.call('prelude:foldr', [g.call('times', [null, null]), g.call('mulOne', []), g.param(0)]),
+  // sequenceA xs = traverse identity xs;  for xs f = traverse f xs;  mapM f xs = traverse f xs
+  sequenceA: (g) => g.call('prelude:traverse', [g.call('identity', [null]), g.param(0)]),
+  forT: (g) => g.call('prelude:traverse', [g.param(1), g.param(0)]),
+  mapM: (g) => g.call('prelude:traverse', [g.param(0), g.param(1)]),
   // take n xs = foldr (\x r k -> select (0 >= k) [] (x : apply r (k - 1))) (\k -> []) xs `apply` n
   take: (g) => g.call('apply', [
     g.call('prelude:foldr', [

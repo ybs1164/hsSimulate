@@ -68,6 +68,21 @@ declareInstance('Semigroup', tcon('Ordering'))
 declareInstance('Monoid', tcon('Ordering'))
 declareInstance('Semigroup', tapp(app('Either', $a), $b))
 
+// Data.Monoid's wrappers (library.js): the ways one carrier combines,
+// told apart by type. Sum and Product take the additive and multiplicative
+// monoids of the numeric tower; Min and Max the order (a semigroup only:
+// an unbounded type has no identity — `Maybe (Max a)` adjoins one);
+// First and Last keep an end; Any and All are Bool's (||) and (&&);
+// Endo a is the monoid of a → a under composition (End(a) in the category).
+declareInstance('Semigroup', app('Sum', $a), [pred('AddSemigroup', $a)])
+declareInstance('Monoid', app('Sum', $a), [pred('AddMonoid', $a)])
+declareInstance('Semigroup', app('Product', $a), [pred('MulSemigroup', $a)])
+declareInstance('Monoid', app('Product', $a), [pred('MulMonoid', $a)])
+for (const w of ['Min', 'Max']) declareInstance('Semigroup', app(w, $a), [pred('Ord', $a)])
+for (const w of ['First', 'Last']) declareInstance('Semigroup', app(w, $a))
+for (const w of ['Any', 'All']) for (const cls of ['Semigroup', 'Monoid']) declareInstance(cls, tcon(w))
+for (const cls of ['Semigroup', 'Monoid']) declareInstance(cls, app('Endo', $a))
+
 /**
  * Classes a product (single-constructor record) may derive pointwise, by
  * the Lawvere-theory rule: a structure given by equations alone survives

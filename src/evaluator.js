@@ -309,11 +309,18 @@ export function createEvaluator(registry) {
       return go(xs)
     }],
     map: [2, (f, xs) => mapList(f, xs)],
-    length: [1, (xs) => {
+    // The Foldable functions (length, null, elem, any, all, sum, product,
+    // concat, concatMap, toList) run on the container's elements in order —
+    // a list as itself (lazily), any other container through its foldMap
+    // into the free monoid (listVia).
+    length: [1, (t, [d]) => {
       let n = 0
-      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) n++
+      for (let l = list(listVia(d, t)); l.ctorIndex === 1; l = list(l.args[1])) n++
       return n
     }],
+    toList: [1, (t, [d]) => force(listVia(d, t))],
+    singleton: [1, (x) => cons(x, now(nil))],
+    constFn: [2, (x) => force(x)],
     append: [2, (xs, ys) => appendList(xs, ys)],
     index: [2, (xs, i) => {
       let n = num(i)
@@ -325,7 +332,7 @@ export function createEvaluator(registry) {
       const l = list(xs)
       return l.ctorIndex === 0 ? nothing : just(now(pair(l.args[0], l.args[1])))
     }],
-    null: [1, (xs) => list(xs).ctorIndex === 0],
+    null: [1, (t, [d]) => list(listVia(d, t)).ctorIndex === 0],
     // foldl, strict in the accumulator (Data.List's foldl'): same result on total functions, no thunk chain.
     foldl: [3, (f, z, xs) => {
       let acc = z
@@ -346,14 +353,43 @@ export function createEvaluator(registry) {
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) acc = cons(l.args[0], now(acc))
       return acc
     }],
-    concat: [1, (xss) => concatMapList(null, xss)],
-    concatMap: [2, (f, xs) => concatMapList(f, xs)],
-    elem: [2, (x, xs, [d]) => anyOf(xs, (y) => bool(delay(() => invoke(d, 'eq', [x, y]))))],
-    any: [2, (p, xs) => anyOf(xs, (y) => bool(delay(() => applyValue(p, [y]))))],
-    all: [2, (p, xs) => !anyOf(xs, (y) => !bool(delay(() => applyValue(p, [y]))))],
-    // foldr (+) 0, as written (definitionViews.js): right-nested, for a monoid that isn't commutative.
-    sum: [1, (xs, [d]) => listItems(xs).reduceRight((acc, x) => invoke(toClass(d, 'AddSemigroup'), 'plus', [x, now(acc)]), invoke(toClass(d, 'AddMonoid'), 'addZero', []))],
-    product: [1, (xs, [d]) => listItems(xs).reduceRight((acc, x) => invoke(toClass(d, 'MulSemigroup'), 'times', [x, now(acc)]), invoke(toClass(d, 'MulMonoid'), 'mulOne', []))],
+    concat: [1, (t, [d]) => concatMapList(null, listVia(d, t))],
+    concatMap: [2, (f, t, [d]) => concatMapList(f, listVia(d, t))],
+    elem: [2, (x, t, [d, eq]) => anyOf(listVia(d, t), (y) => bool(delay(() => invoke(eq, 'eq', [x, y]))))],
+    any: [2, (p, t, [d]) => anyOf(listVia(d, t), (y) => bool(delay(() => applyValue(p, [y]))))],
+    all: [2, (p, t, [d]) => !anyOf(listVia(d, t), (y) => !bool(delay(() => applyValue(p, [y]))))],
+    // getSum . foldMap Sum, as written (definitionViews.js): right-nested, for a monoid that isn't commutative.
+    sum: [1, (t, [f, d]) => listItems(listVia(f, t)).reduceRight((acc, x) => invoke(toClass(d, 'AddSemigroup'), 'plus', [x, now(acc)]), invoke(toClass(d, 'AddMonoid'), 'addZero', []))],
+    product: [1, (t, [f, d]) => listItems(listVia(f, t)).reduceRight((acc, x) => invoke(toClass(d, 'MulSemigroup'), 'times', [x, now(acc)]), invoke(toClass(d, 'MulMonoid'), 'mulOne', []))],
+    // mconcat = foldr (<>) mempty
+    mconcat: [1, (xs, [d]) => foldList(xs, () => memptyAt(d), (x, rest) => mappendAt(d, x, rest))],
+
+    // Functor, Applicative, Monad, Traversable: the functions written with
+    // their methods (Data.Functor, Control.Applicative, Control.Monad).
+    fmapOp: [2, (f, x, [d]) => invoke(d, 'fmap', [f, x])],
+    constMap: [2, (x, t, [d]) => invoke(d, 'fmap', [now(fn('constFn', x)), t])],
+    liftA2: [3, (h, x, y, [d]) => invoke(d, 'ap', [delay(() => fmapAt(d, h, x)), y])],
+    thenA: [2, (x, y, [d]) => invoke(d, 'ap', [delay(() => fmapAt(d, now(fn('constFn', now(fn('identity')))), x)), y])],
+    returnM: [1, (x, [d]) => invoke(toClass(d, 'Applicative'), 'pure', [x])],
+    thenM: [2, (x, y, [d]) => invoke(d, 'bind', [x, now(fn('constFn', y))])],
+    kleisli: [3, (f, g, x, [d]) => invoke(d, 'bind', [delay(() => applyValue(f, [x])), g])],
+    joinM: [1, (mm, [d]) => invoke(d, 'bind', [mm, now(fn('identity'))])],
+    when: [2, (c, act, [d]) => (bool(c) ? force(act) : invoke(d, 'pure', [now(unit)]))],
+    mapM_: [2, (k, t, [f, d]) => {
+      const go = (u) => {
+        const l = list(u)
+        return l.ctorIndex === 0 ? invoke(toClass(d, 'Applicative'), 'pure', [now(unit)]) : invoke(d, 'bind', [delay(() => applyValue(k, [l.args[0]])), now(fn('constFn', delay(() => go(l.args[1]))))])
+      }
+      return go(listVia(f, t))
+    }],
+    sequenceA: [1, (t, [d, a]) => invoke(d, 'traverse', [now(fn('identity')), t], [a])],
+    forT: [2, (t, h, [d, a]) => invoke(d, 'traverse', [h, t], [a])],
+    mapM: [2, (h, t, [d, m]) => invoke(d, 'traverse', [h, t], [toClass(m, 'Applicative')])],
+    replicateM: [2, (n, act, [d]) => {
+      const go = (k) => (k <= 0 ? invoke(d, 'pure', [now(nil)]) : invoke(d, 'ap', [delay(() => fmapAt(d, now(fn('cons')), act)), delay(() => go(k - 1))]))
+      return go(num(n))
+    }],
+    unit: [0, () => unit],
     take: [2, (n, xs) => takeList(num(n), xs)],
     drop: [2, (n, xs) => dropList(num(n), xs)],
     splitAt: [2, (n, xs) => pair(delay(() => takeList(num(n), xs)), delay(() => dropList(num(n), xs)))],
@@ -456,6 +492,11 @@ export function createEvaluator(registry) {
   }
 
   const NO_SUBSCRIPTIONS = { kind: 'closure', callee: '#noSubscriptions', args: [null] }
+
+  // A Foldable's elements as a list (a thunk): a list is itself, anything
+  // else is folded into the free monoid — toList = foldMap singleton.
+  const LIST_MONOID = { kind: 'dict', key: 'Monoid@List', sub: [] }
+  const listVia = (d, t) => (d?.key === 'Foldable@List' ? t : delay(() => invoke(d, 'foldMap', [now(fn('singleton')), t], [LIST_MONOID])))
 
   function mapList(f, xs) {
     const go = (t) => {
@@ -864,7 +905,19 @@ export function createEvaluator(registry) {
   }
   const lazyMaybe = (t) => { const v = force(t); if (!isData(v) || v.type !== 'Maybe') throw new EvalError(`Expected a Maybe, got ${show(v)}`); return v }
   const foldList = (t, nilCase, consCase) => { const go = (u) => { const l = list(u); return l.ctorIndex === 0 ? nilCase() : consCase(l.args[0], delay(() => go(l.args[1]))) }; return go(t) }
+  // Data.Monoid's wrappers: combine what they wrap, and wrap it again.
+  const wrapped = (type, v) => ({ kind: 'data', type, ctor: type, ctorIndex: 0, args: [v] })
+  const inside = (t) => delay(() => force(force(t).args[0]))
   const PRIM = {
+    Sum: { mappend: ([x, y], d) => wrapped('Sum', delay(() => invoke(d.sub[0], 'plus', [inside(x), inside(y)]))), mempty: (_, d) => wrapped('Sum', delay(() => invoke(d.sub[0], 'addZero', []))) },
+    Product: { mappend: ([x, y], d) => wrapped('Product', delay(() => invoke(d.sub[0], 'times', [inside(x), inside(y)]))), mempty: (_, d) => wrapped('Product', delay(() => invoke(d.sub[0], 'mulOne', []))) },
+    Min: { mappend: ([x, y], d) => (leAt(d.sub[0], inside(x), inside(y)) ? force(x) : force(y)) },
+    Max: { mappend: ([x, y], d) => (leAt(d.sub[0], inside(x), inside(y)) ? force(y) : force(x)) },
+    First: { mappend: ([x]) => force(x) },
+    Last: { mappend: ([, y]) => force(y) },
+    Any: { mappend: ([x, y]) => wrapped('Any', delay(() => bool(inside(x)) || bool(inside(y)))), mempty: () => wrapped('Any', now(false)) },
+    All: { mappend: ([x, y]) => wrapped('All', delay(() => bool(inside(x)) && bool(inside(y)))), mempty: () => wrapped('All', now(true)) },
+    Endo: { mappend: ([x, y]) => wrapped('Endo', now(fn('compose', inside(x), inside(y)))), mempty: () => wrapped('Endo', now(fn('identity'))) },
     Char: { eq: NUM.eq, compare: NUM.compare, showsPrec: STOCK.showsPrec },
     StdGen: { showsPrec: STOCK.showsPrec },
     List: {

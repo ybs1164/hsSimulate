@@ -128,6 +128,6 @@ test('the definitions print as Haskell', () => {
     return printDefinition(view.viewId, { ...library, ...view.defs }, view.bodies)
   }
   assert.equal(print('filter'), 'filter p xs = foldr ((\\p x acc -> select (apply p x) (x : acc) acc) p) [] xs')
-  assert.equal(print('sum'), 'sum xs = foldr (+) addZero xs')
+  assert.equal(print('sum'), 'sum xs = getSum (foldMap Sum xs)')
   assert.equal(print('sort'), 'sort xs = sortBy compare xs')
 })

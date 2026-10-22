@@ -15,15 +15,17 @@ export const PRELUDE = [
   ['Comparing · Eq, Ord', [['neq', '(/=)', ['x', 'y']], ['compare', 'compare', ['x', 'y']], ['le', '(<=)', ['x', 'y']], ['lt', '(<)', ['x', 'y']], ['gt', '(>)', ['x', 'y']], ['max', 'max', ['x', 'y']], ['min', 'min', ['x', 'y']]]],
   ['Numbers · Num, Integral, Fractional', [['toInteger', 'toInteger', ['x']], ['fromInteger', 'fromInteger', ['n']], ['fromRational', 'fromRational', ['r']], ['properFraction', 'properFraction', ['x']], ['div', 'div', ['x', 'y']], ['mod', 'mod', ['x', 'y']], ['abs', 'abs', ['x']], ['fromIntegral', 'fromIntegral', ['x']], ['realToFrac', 'realToFrac', ['x']], ['truncate', 'truncate', ['x']], ['floor', 'floor', ['x']], ['ceiling', 'ceiling', ['x']], ['round', 'round', ['x']]]],
   ['Bool', [['and', '(&&)', ['p', 'q']], ['or', '(||)', ['p', 'q']], ['not', 'not', ['p']]]],
-  ['Lists', [['listOf', '[ , , ]', []], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['length', 'length', ['xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']], ['uncons', 'uncons', ['xs']], ['null', 'null', ['xs']], ['reverse', 'reverse', ['xs']], ['concat', 'concat', ['xss']], ['concatMap', 'concatMap', ['f', 'xs']], ['filter', 'filter', ['p', 'xs']], ['foldl', 'foldl', ['f', 'z', 'xs']]]],
+  ['Lists', [['listOf', '[ , , ]', []], ['nil', '[]', []], ['cons', '(:)', ['x', 'xs']], ['foldr', 'foldr', ['f', 'z', 'xs']], ['map', 'map', ['f', 'xs']], ['append', '(++)', ['xs', 'ys']], ['index', '(!?)', ['xs', 'i']], ['uncons', 'uncons', ['xs']], ['reverse', 'reverse', ['xs']], ['filter', 'filter', ['p', 'xs']], ['foldl', 'foldl', ['f', 'z', 'xs']]]],
   ['Sublists · Zips', [['take', 'take', ['n', 'xs']], ['drop', 'drop', ['n', 'xs']], ['splitAt', 'splitAt', ['n', 'xs']], ['replicate', 'replicate', ['n', 'x']], ['enumFromTo', 'enumFromTo', ['m', 'n']], ['zip', 'zip', ['xs', 'ys']], ['zipWith', 'zipWith', ['f', 'xs', 'ys']], ['lookup', 'lookup', ['key', 'pairs']]]],
-  ['List folds · Sorting', [['sum', 'sum', ['xs']], ['product', 'product', ['xs']], ['elem', 'elem', ['x', 'xs']], ['any', 'any', ['p', 'xs']], ['all', 'all', ['p', 'xs']], ['insertBy', 'insertBy', ['cmp', 'x', 'ys']], ['sortBy', 'sortBy', ['cmp', 'xs']], ['sort', 'sort', ['xs']]]],
+  ['Sorting', [['insertBy', 'insertBy', ['cmp', 'x', 'ys']], ['sortBy', 'sortBy', ['cmp', 'xs']], ['sort', 'sort', ['xs']]]],
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
-  ['Pairs', [['pair', '(,)', ['a', 'b']], ['fst', 'fst', ['p']], ['snd', 'snd', ['p']]]],
-  ['Combining · Semigroup, Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []]]],
+  ['Pairs · ()', [['pair', '(,)', ['a', 'b']], ['fst', 'fst', ['p']], ['snd', 'snd', ['p']], ['unit', '()', []]]],
+  ['Combining · Semigroup, Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']]]],
   ['Vectors · VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
-  ['Containers · Functor, Foldable, Traversable', [['fmap', 'fmap', ['f', 'xs']], ['foldMap', 'foldMap', ['f', 'xs']], ['traverse', 'traverse', ['f', 'xs']]]],
-  ['Chained computations · Applicative, Monad', [['pure', 'pure', ['x']], ['ap', '(<*>)', ['fs', 'xs']], ['bind', '(>>=)', ['m', 'k']]]],
+  ['Mapping · Functor', [['fmap', 'fmap', ['f', 'xs']], ['fmapOp', '(<$>)', ['f', 'x']], ['constMap', '(<$)', ['x', 'ys']]]],
+  ['Folding · Foldable', [['foldMap', 'foldMap', ['f', 'xs']], ['toList', 'toList', ['xs']], ['length', 'length', ['xs']], ['null', 'null', ['xs']], ['elem', 'elem', ['x', 'xs']], ['any', 'any', ['p', 'xs']], ['all', 'all', ['p', 'xs']], ['sum', 'sum', ['xs']], ['product', 'product', ['xs']], ['concat', 'concat', ['xss']], ['concatMap', 'concatMap', ['f', 'xs']]]],
+  ['Traversing · Traversable', [['traverse', 'traverse', ['f', 'xs']], ['sequenceA', 'sequenceA', ['xs']], ['forT', 'for', ['xs', 'f']], ['mapM', 'mapM', ['f', 'xs']]]],
+  ['Chained computations · Applicative, Monad', [['pure', 'pure', ['x']], ['ap', '(<*>)', ['fs', 'xs']], ['liftA2', 'liftA2', ['f', 'x', 'y']], ['thenA', '(*>)', ['x', 'y']], ['when', 'when', ['condition', 'action']], ['replicateM', 'replicateM', ['n', 'action']], ['bind', '(>>=)', ['m', 'k']], ['thenM', '(>>)', ['m', 'k']], ['returnM', 'return', ['x']], ['kleisli', '(>=>)', ['f', 'g', 'x']], ['joinM', 'join', ['mm']], ['mapM_', 'mapM_', ['f', 'xs']]]],
   ['Display · Show', [['show', 'show', ['x']], ['showsPrec', 'showsPrec', ['d', 'x']], ['showFFloat', 'showFFloat', ['digits', 'x']], ['showCompact', 'showCompact', ['x']]]],
   ['Random', [['mkStdGen', 'mkStdGen', ['seed']], ['randomR', 'randomR', ['range', 'gen']], ['randomRInt', 'randomRInt', ['range', 'gen']]]],
   ['Game', [['program', 'program', ['initial', 'view', 'handle', 'step']], ['setStepsPerSecond', 'set stepsPerSecond', ['n', 'program']], ['setMaxOffline', 'set maxOffline', ['seconds', 'program']], ['setSubscriptions', 'set subscriptions', ['subscriptions', 'program']], ['every', 'every', ['seconds', 'msg']], ['onKey', 'onKey', ['handler']], ['wText', 'text', ['s']], ['wButton', 'button', ['label', 'msg']], ['wColumn', 'column', ['widgets']], ['wRow', 'row', ['widgets']], ['wProgress', 'progress', ['fraction']], ['wHeading', 'heading', ['s']], ['wSpacer', 'spacer', ['px']], ['wColor', 'withColor', ['color', 'widget']], ['wDrawing', 'drawing', ['width', 'height', 'picture']]]],
@@ -56,7 +58,22 @@ data Color = RGB Double Double Double
 data Picture = Blank | Circle Double | CircleSolid Double | RectangleSolid Double Double | Translate Double Double Picture | Color Color Picture | Pictures Picture Picture
 data Widget e = Text String | Button String e | Column [Widget e] | Row [Widget e] | Progress Double | Heading String | Spacer Double | Tinted Color (Widget e) | Drawing Double Double Picture
 data Sub e = None | Every Double e | OnKey (String -> Maybe e) | Batch (Sub e) (Sub e)
-data Program m e = Program m (m -> Widget e) (e -> m -> m) (Double -> m -> m) Int Double (m -> Sub e)`
+data Program m e = Program m (m -> Widget e) (e -> m -> m) (Double -> m -> m) Int Double (m -> Sub e)
+newtype Sum a = Sum { getSum :: a }
+newtype Product a = Product { getProduct :: a }
+newtype Min a = Min { getMin :: a }
+newtype Max a = Max { getMax :: a }
+newtype First a = First { getFirst :: a }
+newtype Last a = Last { getLast :: a }
+newtype Any = Any { getAny :: Bool }
+newtype All = All { getAll :: Bool }
+newtype Endo a = Endo { appEndo :: a -> a }`
+//
+// The last nine are Data.Monoid's wrappers: one type, several ways to
+// combine it, each its own newtype — `Sum` adds, `Max` keeps the larger,
+// `Any` is (||), `Endo` composes updates (categoryClasses.js gives their
+// instances). They are folded through with foldMap: sum is
+// `getSum . foldMap Sum` (definitionViews.js).
 //
 // The product `(a, b)` is declared too, though its syntax isn't a
 // declaration's: `data (a, b) = (,) a b`, a single constructor (the
@@ -65,10 +82,13 @@ data Program m e = Program m (m -> Widget e) (e -> m -> m) (Double -> m -> m) In
 const PAIR = { name: '(,)', keyword: 'data', params: ['a', 'b'], constructors: [{ name: '(,)', record: false, fields: [{ name: null, type: tvar('a') }, { name: null, type: tvar('b') }] }], deriving: [], instances: [], source: 'data (a, b) = (,) a b' }
 export const preludeTypes = { ...declareTypes({}, PRELUDE_TYPES_SOURCE, { builtin: true }), '(,)': PAIR }
 const ABSTRACT = new Set(['Sub'])
+// The wrappers show just their constructor and projection (`Sum`, `getSum`): a setter or case of a one-field wrapper adds nothing.
+export const MONOID_WRAPPERS = ['Sum', 'Product', 'Min', 'Max', 'First', 'Last', 'Any', 'All', 'Endo']
+const wrapperExtra = (def) => MONOID_WRAPPERS.includes(def.derived.type) && ['set', 'over', 'case'].includes(def.derived.op)
 // uncurry :: (a → b → r) → (a, b) → r — the copairing of a one-constructor type.
 const relabel = (def) => (def.id === 'type:(,):case(,)' ? { ...def, id: 'type:(,):uncurry', label: 'uncurry', params: ['f', 'p'] } : def)
 export const preludeTypeDefs = Object.fromEntries(derivedDefinitions(preludeTypes)
-  .filter((def) => !(ABSTRACT.has(def.derived.type) && ['case', 'fold'].includes(def.derived.op)))
+  .filter((def) => !(ABSTRACT.has(def.derived.type) && ['case', 'fold'].includes(def.derived.op)) && !wrapperExtra(def))
   .map(relabel)
   .map((def) => [def.id, { ...def, color: '#5fa8e8' }]))
 // The primitives behind them (`Text#`, `caseMaybe#`, keyed `prim:type:…`):
