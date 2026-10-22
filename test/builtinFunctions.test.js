@@ -24,6 +24,9 @@ test('every builtin function sits in exactly one group, and every builtin class 
   const ids = BUILTIN_GROUPS.flatMap((g) => g.ids)
   assert.equal(new Set(ids).size, ids.length)
   for (const id of ids) assert.ok(builtinSchemes[id === 'add' ? 'succ' : id], id)
+  // What nothing calls, and the Int-only duplicates of (==) 0 and select, start folded.
+  const advanced = BUILTIN_GROUPS.filter((g) => g.advanced).flatMap((g) => g.ids).sort()
+  assert.deepEqual(advanced, ['add', 'addZero', 'ifThenElse', 'isZero', 'mulOne', 'sqrt', 'zero'])
   const listed = new Set(CLASS_GROUPS.flatMap((g) => g.names))
   for (const cls of classNames()) assert.ok(listed.has(cls), `${cls} has no palette group`)
   // The pieces of Num (what (+), (*) and their identities ask for) are explained, not hidden.

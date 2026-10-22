@@ -409,8 +409,11 @@ function renderFunctionLibrary() {
   // The builtins, grouped as the Prelude is (classGroups.js); one this version doesn't group goes last.
   const builtins = items.filter((n) => !n.custom)
   const grouped = new Set(BUILTIN_GROUPS.flatMap((g) => g.ids))
-  const groups = [...BUILTIN_GROUPS.map((g) => [g.group, g.ids.map((id) => builtins.find((n) => n.id === id)).filter(Boolean)]), ['Other', builtins.filter((n) => !grouped.has(n.id))]].filter(([, ns]) => ns.length)
-  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>Built-in functions</summary>${groups.map(([group, ns]) => `<div class="builtin-group">${escapeAttr(group)}</div>${ns.map(row).join('')}`).join('')}</details>`
+  const groups = [...BUILTIN_GROUPS.map((g) => [g.group, g.ids.map((id) => builtins.find((n) => n.id === id)).filter(Boolean), g.advanced]), ['Other', builtins.filter((n) => !grouped.has(n.id))]].filter(([, ns]) => ns.length)
+  const groupHtml = ([group, ns]) => `<div class="builtin-group">${escapeAttr(group)}</div>${ns.map(row).join('')}`
+  // The advanced ones (unused, or Int-only duplicates) fold away, as the class palette's do.
+  const advanced = groups.filter(([, , adv]) => adv)
+  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>Built-in functions</summary>${groups.filter(([, , adv]) => !adv).map(groupHtml).join('')}${advanced.length ? `<details class="builtin-advanced" data-disclosure="builtin-advanced"><summary><small>Advanced</small></summary>${advanced.map(groupHtml).join('')}</details>` : ''}</details>`
   restoreDisclosureState(functionLibrary)
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))

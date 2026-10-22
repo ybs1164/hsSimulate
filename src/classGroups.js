@@ -52,12 +52,17 @@ export const CLASS_GROUPS = [
 /**
  * The builtin functions (main.js `nodes`), grouped as the Prelude is. The
  * λ-calculus ones are fixed by CLAUDE.md; the rest are the methods of the
- * number and comparison classes, and Bool's eliminator.
+ * number and comparison classes, and Bool's eliminator. `advanced` groups
+ * start folded: builtins nothing (template or Prelude graph) calls — a
+ * literal 0 or 1 is what zero, addZero and mulOne stand for — and the
+ * Int-only isZero and ifThenElse, which (==) 0 and select say in general.
  */
 export const BUILTIN_GROUPS = [
-  { group: 'λ-calculus · fixed', ids: ['identity', 'apply', 'compose', 'zero', 'add', 'isZero', 'ifThenElse'] },
-  { group: 'Numbers · (+) (-) (*)', ids: ['plus', 'minus', 'negate', 'addZero', 'times', 'mulOne'] },
-  { group: 'Numbers · Fractional, Floating, Real', ids: ['divide', 'sqrt', 'toRational'] },
+  { group: 'λ-calculus', ids: ['identity', 'apply', 'compose'] },
+  { group: 'Numbers · (+) (-) (*)', ids: ['plus', 'minus', 'negate', 'times'] },
+  { group: 'Numbers · Fractional, Real', ids: ['divide', 'toRational'] },
   { group: 'Comparing · Eq, Ord', ids: ['eq', 'geq'] },
   { group: 'Bool', ids: ['select'] },
+  { group: 'Advanced · unused', ids: ['zero', 'add', 'addZero', 'mulOne', 'sqrt'], advanced: true },
+  { group: 'Advanced · Int-only (use (==) 0, select)', ids: ['isZero', 'ifThenElse'], advanced: true },
 ]
