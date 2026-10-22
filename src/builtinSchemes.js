@@ -176,6 +176,8 @@ export const builtinSchemes = {
   join: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
   meet: scheme(['a'], [pred('Lattice', a)], tfun(a, tfun(a, a))),
   scale: scheme(['a'], [pred('VectorSpace', a)], tfun(Double, tfun(a, a))),
+  // lerp t a b = a + t *^ (b - a): the point a fraction t of the way from a to b.
+  lerp: scheme(['a'], [pred('VectorSpace', a)], tfun(Double, tfun(a, tfun(a, a)))),
   // Applicative, Monad, Traversable (base), over `f :: * -> *`.
   pure: scheme(['f', 'a'], [pred('Applicative', f)], tfun(a, ap(f, a))),
   ap: scheme(['f', 'a', 'b'], [pred('Applicative', f)], tfun(ap(f, tfun(a, b)), tfun(ap(f, a), ap(f, b)))),

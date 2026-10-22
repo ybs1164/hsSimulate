@@ -55,6 +55,12 @@ export function samplesOf(type, types, fns, depth = 0) {
       for (let u = type; u.kind === 'app'; u = u.fn) args.unshift(u.arg)
       return declSamples(types[h.name], args, types, fns, depth)
     }
+    if (isCon(h, '(,)') && type.fn.kind === 'app') { // pairs: the i-th sample of each side, rotating
+      const left = samplesOf(type.fn.arg, types, fns, depth + 1)
+      const right = samplesOf(type.arg, types, fns, depth + 1)
+      if (!left || !right) return null
+      return spread(Array.from({ length: Math.max(left.length, right.length) }, (_, i) => ({ kind: 'data', type: '(,)', ctor: '(,)', ctorIndex: 0, args: [left[i % left.length], right[(i + 1) % right.length]] })))
+    }
     const inner = samplesOf(argOf(type), types, fns, depth + 1)
     if (!inner) return null
     if (isCon(h, 'List')) return [nilV, consV(inner[0], nilV), consV(inner[1 % inner.length], consV(inner[2 % inner.length], nilV))]

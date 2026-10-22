@@ -21,7 +21,7 @@ export const PRELUDE = [
   ['Maybe', [['nothing', 'Nothing', []], ['just', 'Just', ['x']], ['maybe', 'maybe', ['default', 'f', 'm']]]],
   ['Pairs · ()', [['pair', '(,)', ['a', 'b']], ['fst', 'fst', ['p']], ['snd', 'snd', ['p']], ['unit', '()', []]]],
   ['Combining · Semigroup, Monoid', [['mappend', '(<>)', ['x', 'y']], ['mempty', 'mempty', []], ['mconcat', 'mconcat', ['xs']]]],
-  ['Vectors · VectorSpace', [['scale', '(*^)', ['k', 'v']]]],
+  ['Vectors · VectorSpace', [['scale', '(*^)', ['k', 'v']], ['lerp', 'lerp', ['t', 'a', 'b']]]],
   ['Mapping · Functor', [['fmap', 'fmap', ['f', 'xs']], ['fmapOp', '(<$>)', ['f', 'x']], ['constMap', '(<$)', ['x', 'ys']]]],
   ['Folding · Foldable', [['foldMap', 'foldMap', ['f', 'xs']], ['toList', 'toList', ['xs']], ['length', 'length', ['xs']], ['null', 'null', ['xs']], ['elem', 'elem', ['x', 'xs']], ['any', 'any', ['p', 'xs']], ['all', 'all', ['p', 'xs']], ['sum', 'sum', ['xs']], ['product', 'product', ['xs']], ['concat', 'concat', ['xss']], ['concatMap', 'concatMap', ['f', 'xs']]]],
   ['Traversing · Traversable', [['traverse', 'traverse', ['f', 'xs']], ['sequenceA', 'sequenceA', ['xs']], ['forT', 'for', ['xs', 'f']], ['mapM', 'mapM', ['f', 'xs']]]],

@@ -7,7 +7,7 @@
 - `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블.
 - `src/classEnv.js`: 클래스 환경과 제약 해소 엔진(문맥 있는 인스턴스, entailment, context reduction, 디폴팅, 인스턴스 키 `Cls@Head`와 모든 클래스의 사전 증거 생성).
 - `src/numericClasses.js`: 숫자 타입클래스 계층과 인스턴스 선언.
-- `src/categoryClasses.js`: 카테고리 클래스(Semigroup, Monoid, PartialOrd, Lattice, VectorSpace, Functor, Foldable, Traversable, Applicative, Monad) 선언과 인스턴스, Data.Monoid 래퍼(`Sum`, `Product`, `Min`, `Max`, `First`, `Last`, `Any`, `All`, `Endo` — 타입은 library.js)의 인스턴스.
+- `src/categoryClasses.js`: 카테고리 클래스(Semigroup, Monoid, PartialOrd, Lattice, VectorSpace, Functor, Foldable, Traversable, Applicative, Monad) 선언과 인스턴스, Data.Monoid 래퍼(`Sum`, `Product`, `Min`, `Max`, `First`, `Last`, `Any`, `All`, `Endo` — 타입은 library.js)와 `State s` 모나드의 인스턴스, 쌍 `(a, b)`의 성분별 벡터 구조, `Functor Widget`(메시지 바꾸기).
 - `src/classGroups.js`: 클래스를 보여주는 방식(작업별 그룹, 숫자 계층의 하스켈 이름 별칭 `Ring`→`Num` 등 — 표시 전용, 엔진은 구조적 이름 유지).
 - `src/prelude.js`: 모든 클래스·인스턴스 선언을 불러오고 해소 엔진을 다시 내보내는 진입점.
 - `src/typeDecls.js`: 사용자 타입 선언(하스켈 `data`/`newtype`, 타입 매개변수 포함, 매개변수의 kind 추론)과 그로부터 유도되는 함수·인스턴스.

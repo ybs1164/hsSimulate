@@ -390,6 +390,11 @@ export function createEvaluator(registry) {
       return go(num(n))
     }],
     unit: [0, () => unit],
+    lerp: [3, (t, x, y, [d]) => {
+      const plus = (p, q) => invoke(toClass(d, 'AddSemigroup'), 'plus', [p, q])
+      return plus(x, delay(() => invoke(d, 'scale', [t, delay(() => plus(y, delay(() => invoke(toClass(d, 'AddGroup'), 'negate', [x]))))])))
+    }],
+    widgetMap: [2, (f, t) => widgetMap(f, t)],
     // Control.Monad.State. A State value wraps its s → (a, s) function; the
     // st* builtins are those functions, for closures built here.
     state: [1, (f) => wrapped('State', f)],
@@ -523,6 +528,14 @@ export function createEvaluator(registry) {
   // A Foldable's elements as a list (a thunk): a list is itself, anything
   // else is folded into the free monoid — toList = foldMap singleton.
   const LIST_MONOID = { kind: 'dict', key: 'Monoid@List', sub: [] }
+  // fmap on a widget tree: every Button's message goes through f, the rest keeps its shape.
+  function widgetMap(f, t) {
+    const w = force(t)
+    if (w.ctor === 'Button') return { ...w, args: [w.args[0], delay(() => applyValue(f, [w.args[1]]))] }
+    if (w.ctor === 'Column' || w.ctor === 'Row') return { ...w, args: [delay(() => mapList(now(fn('widgetMap', f)), w.args[0]))] }
+    if (w.ctor === 'Tinted') return { ...w, args: [w.args[0], delay(() => widgetMap(f, w.args[1]))] }
+    return w
+  }
   // runState m s, as a thunk of the (a, s) pair.
   const runStateOf = (m, st) => delay(() => applyValue(force(m).args[0], [st]))
   const listVia = (d, t) => (d?.key === 'Foldable@List' ? t : delay(() => invoke(d, 'foldMap', [now(fn('singleton')), t], [LIST_MONOID])))
@@ -1001,6 +1014,7 @@ export function createEvaluator(registry) {
     Picture: { mappend: ([x, y]) => picture('Pictures', 6, [x, y]), mempty: () => picture('Blank', 0, []) }, // gloss: drawn one over the other
     // Subscriptions: listening to both; fmap relabels messages with a hidden Map.
     Sub: { mappend: ([x, y]) => sub('Batch', 3, [x, y]), mempty: () => sub('None', 0, []), fmap: ([f, t]) => sub('Map', 4, [f, t]) },
+    Widget: { fmap: ([f, t]) => widgetMap(f, t) },
   }
   /** The primitive implementing method `m` of builtin instance `key`, or undefined. */
   function prim(key, m) {

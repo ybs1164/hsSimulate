@@ -215,6 +215,8 @@ const GRAPHS = {
   // evalState m s = fst (apply (runState m) s);  execState with snd
   evalState: (g) => g.call('prelude:fst', [g.call('apply', [g.call('type:State:runState', [g.param(0)]), g.param(1)])]),
   execState: (g) => g.call('prelude:snd', [g.call('apply', [g.call('type:State:runState', [g.param(0)]), g.param(1)])]),
+  // lerp t a b = a + t *^ (b - a)
+  lerp: (g) => g.call('plus', [g.param(1), g.call('prelude:scale', [g.param(0), g.call('minus', [g.param(2), g.param(1)])])]),
   // sequenceA xs = traverse identity xs;  for xs f = traverse f xs;  mapM f xs = traverse f xs
   sequenceA: (g) => g.call('prelude:traverse', [g.call('identity', [null]), g.param(0)]),
   forT: (g) => g.call('prelude:traverse', [g.param(1), g.param(0)]),

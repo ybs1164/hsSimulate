@@ -11,6 +11,7 @@
 //   Traversable,
 //   Applicative, Monad
 import { declareClass, declareInstance } from './classEnv.js'
+import { BUILTIN_SHAPES } from './dataTypes.js'
 import { pred, tapp, tcon, tlist, ttuple, tvar } from './typeSystem.js'
 
 declareClass('Semigroup', [])
@@ -50,11 +51,25 @@ for (const t of ['Bool', 'Int', 'Integer', 'Word', 'Natural', 'Float', 'Double',
   declareInstance('Lattice', tcon(t))
 }
 for (const t of ['Float', 'Double']) declareInstance('VectorSpace', tcon(t))
+// A pair of vectors is a vector, componentwise — the product (a biproduct)
+// of abelian groups, and so of vector spaces: a 2D position or velocity is
+// `(Double, Double)`, added with (+) and scaled with (*^).
+{
+  const $x = tvar('$a')
+  const $y = tvar('$b')
+  const pointwise = { how: 'pointwise', type: '(,)', shape: BUILTIN_SHAPES['(,)'] }
+  for (const cls of ['AddSemigroup', 'AddMonoid', 'AddCommutativeMonoid', 'AddGroup', 'AddAbelianGroup', 'VectorSpace']) {
+    declareInstance(cls, ttuple($x, $y), [pred(cls, $x), pred(cls, $y)], pointwise)
+  }
+}
 
 // Subscriptions: listening to two things is their monoid product; fmap relabels messages.
 declareInstance('Semigroup', app('Sub', $a))
 declareInstance('Monoid', app('Sub', $a))
 declareInstance('Functor', tcon('Sub'))
+// Widgets: fmap relabels every button's message (Elm's Html.map), so a
+// view written for one message type is embedded in another's.
+declareInstance('Functor', tcon('Widget'))
 
 // The containers: lists, Maybe, `Either e` and `(,) w` (the writer, an
 // applicative and a monad when w is a monoid), as in base.
