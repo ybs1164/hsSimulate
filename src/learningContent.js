@@ -49,11 +49,3 @@ export const syntaxLessons = [
     explanation: '[]는 빈 리스트와 맞습니다. (x:_)는 비어 있지 않은 리스트에서 첫 원소를 x에 담고, _로 나머지를 사용하지 않음을 나타냅니다.',
   },
 ]
-
-export const exampleProblems = [
-  { id: 'sum', title: '두 수 더하기' },
-  { id: 'zero', title: '0인지 판별하기' },
-  { id: 'choose', title: '조건에 따라 값 선택하기' },
-  { id: 'partial', title: '부분 적용 함수 만들기' },
-  { id: 'compose', title: '함수 합성하기' },
-]

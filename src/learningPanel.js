@@ -1,37 +1,12 @@
-import { syntaxLessons, exampleProblems } from './learningContent.js'
+import { syntaxLessons } from './learningContent.js'
 
 // This module owns only learning UI state; it never receives or mutates a graph.
-export function initLearningPanel({ workspace, onModalOpen }) {
-  let selectedExample = null
+// The lessons list renders into `host` (the practice panel's 문법 tab).
+export function initLearningPanel({ host, onModalOpen }) {
   let returnFocus = null
-  const panel = document.createElement('aside')
-  panel.className = 'learning-panel syntax-panel'
-  panel.setAttribute('aria-label', '문법 패널')
-  panel.innerHTML = `
-    <header class="learning-header">
-      <div class="learning-heading"><span class="learning-eyebrow">HASKELL</span><h2 id="syntax-heading">문법</h2></div>
-      <button type="button" class="learning-toggle" aria-expanded="true" aria-controls="syntax-section" aria-label="문법 패널 접기" title="문법 패널 접기">‹</button>
-    </header>
-      <section id="syntax-section" class="learning-section" aria-labelledby="syntax-heading">
-        <div class="learning-section-heading"><p>짧은 설명과 코드로 익혀 보세요.</p></div>
-        <ul class="learning-list syntax-list" aria-label="문법 목록"></ul>
-      </section>`
-  workspace.insertBefore(panel, workspace.querySelector('.sidebar'))
-
-  const examplesPanel = document.createElement('aside')
-  examplesPanel.className = 'learning-panel examples-panel'
-  examplesPanel.setAttribute('aria-label', '예제 문제 패널')
-  examplesPanel.innerHTML = `
-    <header class="learning-header">
-      <div class="learning-heading"><span class="learning-eyebrow">PRACTICE</span><h2 id="examples-heading">예제 문제</h2></div>
-      <button type="button" class="learning-toggle" aria-expanded="true" aria-controls="examples-section" aria-label="예제 문제 패널 접기" title="예제 문제 패널 접기">‹</button>
-    </header>
-      <section id="examples-section" class="learning-section" aria-labelledby="examples-heading">
-        <div class="learning-section-heading"><p>관심 있는 문제를 선택해 보세요.</p></div>
-        <ul class="learning-list example-list" aria-label="예제 문제 목록"></ul>
-        <p class="learning-footnote">지금은 문제 선택만 할 수 있어요.</p>
-      </section>`
-  workspace.prepend(examplesPanel)
+  host.innerHTML = `
+    <div class="learning-section-heading"><p>짧은 설명과 코드로 익혀 보세요.</p></div>
+    <ul class="learning-list syntax-list" aria-label="문법 목록"></ul>`
 
   const dialog = document.createElement('dialog')
   dialog.className = 'syntax-dialog'
@@ -85,39 +60,9 @@ export function initLearningPanel({ workspace, onModalOpen }) {
   }
 
   syntaxLessons.forEach((lesson, index) => {
-    const button = appendItem(panel.querySelector('.syntax-list'), lesson.title, index, (trigger) => openLesson(lesson, trigger))
+    const button = appendItem(host.querySelector('.syntax-list'), lesson.title, index, (trigger) => openLesson(lesson, trigger))
     button.setAttribute('aria-haspopup', 'dialog')
   })
-  const exampleButtons = new Map()
-  exampleProblems.forEach((problem, index) => {
-    const button = appendItem(examplesPanel.querySelector('.example-list'), problem.title, index, () => {
-      selectedExample = problem.id
-      exampleButtons.forEach((item, id) => item.setAttribute('aria-pressed', String(id === selectedExample)))
-    })
-    button.setAttribute('aria-pressed', 'false')
-    exampleButtons.set(problem.id, button)
-  })
-
-  function bindToggle(targetPanel, name, className, closeIcon, openIcon) {
-    let collapsed = false
-    const toggle = targetPanel.querySelector('.learning-toggle')
-    toggle.addEventListener('click', () => {
-      collapsed = !collapsed
-      workspace.classList.toggle(className, collapsed)
-      targetPanel.classList.toggle('is-collapsed', collapsed)
-      targetPanel.querySelector('.learning-section').hidden = collapsed
-      toggle.setAttribute('aria-expanded', String(!collapsed))
-      const label = `${name} 패널 ${collapsed ? '펼치기' : '접기'}`
-      toggle.setAttribute('aria-label', label)
-      toggle.title = label
-      toggle.textContent = collapsed ? openIcon : closeIcon
-      // Keep the control reachable when the narrow workspace scrolls sideways.
-      toggle.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-    })
-  }
-  bindToggle(panel, '문법', 'syntax-collapsed', '‹', '›')
-  bindToggle(examplesPanel, '예제 문제', 'examples-collapsed', '‹', '›')
-
   closeButton.addEventListener('click', () => dialog.close())
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); dialog.close() })
   dialog.addEventListener('close', () => {

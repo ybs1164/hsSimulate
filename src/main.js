@@ -1,5 +1,7 @@
 import './style.css'
 import { initLearningPanel } from './learningPanel.js'
+import { initExercisePanel } from './exercisePanel.js'
+import { findExerciseFunction } from './grader.js'
 import { applySubst, classShown, constructorArity, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
@@ -38,42 +40,42 @@ app.innerHTML = `
   <main class="shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark">λ</span><span>hs / simulate</span><span class="beta">BETA</span></div>
-      <div class="top-actions"><button class="tool-button" id="help">Help</button><button class="tool-button" id="toggle-inspector" aria-controls="inspector-panel" aria-expanded="true">Inspector</button></div>
+      <div class="top-actions"><button class="tool-button" id="help">도움말</button><button class="tool-button" id="toggle-inspector" aria-controls="inspector-panel" aria-expanded="true">속성 패널</button></div>
     </header>
     <section class="workspace">
       <aside class="sidebar">
-        <div class="side-heading"><div><span class="eyebrow">WORKSPACE</span><h1>Untitled graph</h1></div></div>
-        <div class="search"><span>⌕</span><input aria-label="Search nodes" placeholder="Search nodes" /><kbd data-shortcut="K"></kbd></div>
+        <div class="side-heading"><div><span class="eyebrow">작업 공간</span><h1>이름 없는 그래프</h1></div></div>
+        <div class="search"><span>⌕</span><input aria-label="블록 검색" placeholder="블록 검색" /><kbd data-shortcut="K"></kbd></div>
         <nav class="node-library">
-          <div class="library-title"><span>ADD A VALUE</span></div>
+          <div class="library-title"><span>값 추가</span></div>
           <div id="value-library">
-          <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>Numbers</b><small>Int · Double · Rational …</small></span></button>
-          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String = [Char]</small></span></button>
-          <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>Lists</b><small>[a, b, c]</small></span></button>
-          <button class="library-item" data-type="lambda"><span class="lib-icon function-icon">λ</span><span><b>Lambda</b><small>\\x -> … (anonymous function)</small></span></button>
-          <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Booleans</b><small>True · False</small></span></button></div>
-          <div class="library-title" id="parameter-title" hidden><span>PARAMETERS</span></div>
+          <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>수</b><small>Int · Double · Rational …</small></span></button>
+          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>문자열</b><small>String = [Char]</small></span></button>
+          <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>리스트</b><small>[a, b, c]</small></span></button>
+          <button class="library-item" data-type="lambda"><span class="lib-icon function-icon">λ</span><span><b>람다</b><small>\\x -> … (이름 없는 함수)</small></span></button>
+          <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Bool</b><small>True · False</small></span></button></div>
+          <div class="library-title" id="parameter-title" hidden><span>매개변수</span></div>
           <div id="parameter-library"></div>
-          <div class="library-title"><span>FUNCTIONS · OPEN / ADD</span><button class="add-node" aria-label="Create function" title="Create function">+</button></div>
+          <div class="library-title"><span>함수 · 열기 / 추가</span><button class="add-node" aria-label="함수 만들기" title="함수 만들기">+</button></div>
           <div id="function-library"></div>
-          <details class="library-section" id="types-section"><summary>Types</summary><div class="library-title types-title"><span>DECLARE A TYPE</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
+          <details class="library-section" id="types-section"><summary>타입</summary><div class="library-title types-title"><span>타입 선언</span><button class="add-type" aria-label="타입 선언" title="타입 선언 — 생성자 함수로 정의해요">+</button></div>
           <div id="type-palette"></div>
           <div id="type-library"></div></details>
-          <details class="library-section" id="classes-section"><summary>Classes</summary><div class="library-title types-title"><span>DECLARE A CLASS</span><button class="add-class" aria-label="Declare a class" title="Declare a class — methods each instance implements">+</button></div>
+          <details class="library-section" id="classes-section"><summary>클래스</summary><div class="library-title types-title"><span>클래스 선언</span><button class="add-class" aria-label="클래스 선언" title="클래스 선언 — 인스턴스마다 구현할 메서드">+</button></div>
           <div id="class-palette"></div>
           <div id="class-library"></div></details>
-          <details class="library-section" id="prelude-section"><summary>Add from library</summary>
+          <details class="library-section" id="prelude-section"><summary>Prelude 함수</summary>
           <div id="prelude-library"></div></details>
 
         </nav>
 
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo" disabled>↷</button><details class="project-menu"><summary class="tool-button">Project</summary><div class="project-menu-items"><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Save project (.json)</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Open project</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option><option value="blackjack">Blackjack (lists)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Export game (.html)</span></button><button class="tool-button" id="reset">↺ <span>Reset project</span></button></div></details><button class="tool-button primary" id="run">▶ <span>Run add</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Open every function: show what is plugged into its slots on the canvas">⤢</button><button id="fold-all" title="Fold every function: keep what is plugged in inside its slots">⤡</button></div></div>
-        <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd data-shortcut="Enter"></kbd><span id="run-shortcut-label">Run add</span></span></footer>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>그래프</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>방금 저장됨</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="실행 취소" disabled>↶</button><button class="tool-button icon-only" id="redo" title="다시 실행" disabled>↷</button><details class="project-menu"><summary class="tool-button">프로젝트</summary><div class="project-menu-items"><button class="tool-button" id="export" title="프로젝트를 JSON으로 내려받기">⤓ <span>프로젝트 저장 (.json)</span></button><button class="tool-button" id="import" title="프로젝트 JSON 파일 불러오기">⤒ <span>프로젝트 열기</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="템플릿에서 시작 (실행 취소 가능)"><option value="">✦ 템플릿…</option><option value="clickCounter">클릭 카운터</option><option value="blankGame">빈 게임</option><option value="dice">주사위 (난수 · 그림)</option><option value="blackjack">블랙잭 (리스트)</option></select><button class="tool-button" id="export-game" title="게임을 독립 HTML 파일 하나로 내려받기">⬇ <span>게임 내보내기 (.html)</span></button><button class="tool-button" id="reset">↺ <span>프로젝트 초기화</span></button></div></details><button class="tool-button primary" id="run">▶ <span>실행 add</span></button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div class="canvas-empty" hidden><b>빈 그래프예요</b><span>왼쪽 <i>연습 문제</i>에서 문제를 고르거나, 사이드바에서 값·함수를 끌어다 놓으세요.</span><span><kbd data-shortcut="K"></kbd> 블록 검색 · <i>프로젝트 › 템플릿</i>으로 예제 열기</span></div><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="모든 함수 펼치기: 슬롯에 꽂힌 것을 캔버스에 보여요">⤢</button><button id="fold-all" title="모든 함수 접기: 꽂힌 것을 슬롯 안에 넣어요">⤡</button></div></div>
+        <footer class="canvas-footer"><span>블록 <b id="node-count">2</b>개</span><span>연결 <b id="connection-count">0</b>개</span><span class="footer-spacer"></span><span class="shortcut"><kbd data-shortcut="Enter"></kbd><span id="run-shortcut-label">실행 add</span></span></footer>
       </section>
-      <aside class="inspector" id="inspector-panel"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector" aria-label="Close inspector">×</button></div><div id="inspector-content"></div></aside>
+      <aside class="inspector" id="inspector-panel"><div class="inspector-title"><span>속성</span><button class="close-inspector" aria-label="속성 패널 닫기">×</button></div><div id="inspector-content"></div></aside>
     </section>
   </main>
 `
@@ -97,11 +99,6 @@ function toggleInspector(open) {
   document.querySelector('.inspector').hidden = !open
   document.querySelector('.workspace').classList.toggle('inspector-hidden', !open)
   document.querySelector('#toggle-inspector').setAttribute('aria-expanded', String(open))
-  const reopen = document.querySelector('.inspector-reopen')
-  if (reopen) {
-    reopen.hidden = open
-    reopen.setAttribute('aria-expanded', String(open))
-  }
   window.dispatchEvent(new Event('resize'))
 }
 // The top bar: the inspector toggle (collapsed on narrow screens), help, and
@@ -114,7 +111,8 @@ function setupTopBar() {
   document.querySelector('#help').onclick = () => {
     const dialog = document.createElement('dialog')
     dialog.className = 'help-dialog'
-    dialog.innerHTML = `<h2>Working with graphs</h2><ul><li>Open a function by its name. Use its + button to add a call.</li><li>Add values from the sidebar. Drag the right-hand output port onto an input slot or Output.</li><li>Click an empty input slot to enter a value.</li><li>Drag empty canvas to pan; scroll to zoom.</li><li>The top Run button names the project entry. Run this node evaluates your selection.</li><li>In the type editor, click + to choose a type or drag one from Types. Click a name to rename it.</li></ul><p>${shortcutModifier} K: search and add · ${shortcutModifier} Enter: run · ${shortcutModifier} Z: undo</p><p>Projects save automatically in this browser. The JavaScript evaluator runs locally.</p><form method="dialog"><button class="tool-button">Close</button></form>`
+    dialog.innerHTML = `<h2>그래프 다루기</h2><ul><li>함수 이름을 눌러 본체를 열고, + 버튼으로 호출을 추가해요.</li><li>사이드바에서 값을 추가해요. 블록 오른쪽 출력 포트를 입력 슬롯이나 Output으로 끌어 이어요.</li><li>빈 입력 슬롯을 누르면 값을 적을 수 있어요.</li><li>빈 캔버스를 끌면 이동, 스크롤하면 확대·축소해요.</li><li>위쪽 실행 버튼에는 프로젝트의 시작 함수 이름이 나와요. 연습 문제의 본체 안에서는 채점 버튼이 돼요.</li><li>타입 편집기에서는 +를 눌러 타입을 고르거나 타입 목록에서 끌어 와요. 이름을 누르면 바꿀 수 있어요.</li></ul><p>${shortcutModifier} K: 검색해서 추가 · ${shortcutModifier} Enter: 실행 · ${shortcutModifier} Z: 실행 취소</p><p>프로젝트는 이 브라우저에 자동으로 저장돼요. 실행기는 이 컴퓨터에서 돌아가요.</p><form method="dialog"><button class="tool-button">닫기</button></form>`
+
     document.body.append(dialog)
     dialog.addEventListener('close', () => dialog.remove())
     dialog.showModal()
@@ -159,7 +157,7 @@ const nodes = {
 function activeNodes() { return state.activeFunction ? allBodies[state.activeFunction] : nodes }
 // A read-only definition view (or a λ inside one) is on screen: look, don't touch.
 function viewingReadonly() { return Boolean(state.activeFunction && !functionBodies[state.activeFunction] && viewBodies[state.activeFunction]) }
-function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : nodes[state.activeFunction]?.library ? ' · taken over' : '') : '⌂ top level' }
+function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : nodes[state.activeFunction]?.library ? ' · taken over' : '') : '⌂ 최상위' }
 const functionBodies = {
   add: {
     inputX: { id: 'add-input-x', type: 'parameter', typeName: 'Int', x: 110, y: 180, label: 'x', value: 'x', color: '#4f8ef7' },
@@ -413,7 +411,7 @@ function renderFunctionLibrary() {
   const groupHtml = ([group, ns]) => `<div class="builtin-group">${escapeAttr(group)}</div>${ns.map(row).join('')}`
   // The advanced ones (unused, or Int-only duplicates) fold away, as the class palette's do.
   const advanced = groups.filter(([, , adv]) => adv)
-  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>Built-in functions</summary>${groups.filter(([, , adv]) => !adv).map(groupHtml).join('')}${advanced.length ? `<details class="builtin-advanced" data-disclosure="builtin-advanced"><summary><small>Advanced</small></summary>${advanced.map(groupHtml).join('')}</details>` : ''}</details>`
+  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>기본 함수</summary>${groups.filter(([, , adv]) => !adv).map(groupHtml).join('')}${advanced.length ? `<details class="builtin-advanced" data-disclosure="builtin-advanced"><summary><small>고급</small></summary>${advanced.map(groupHtml).join('')}</details>` : ''}</details>`
   restoreDisclosureState(functionLibrary)
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
@@ -462,7 +460,7 @@ function createLambda() {
   functionBodies[id] = createFunctionBody(id, ['x'])
   addFunctionCall(id)
   renderFunctionLibrary()
-  showToast('λ added — double-click it (or Open body) to define it; plug outer values into its slots to capture them')
+  showToast('λ를 추가했어요 — 더블클릭(또는 본체 열기)해서 정의하고, 바깥 값을 슬롯에 꽂으면 캡처해요')
 }
 // The name always opens the definition; the separate + always inserts a call.
 function onLibraryFunction(id) {
@@ -545,13 +543,25 @@ function applySearch() {
     }
   })
   if (!q) searchExpansion.clear()
+  // A group heading shows only while some row under it does.
+  document.querySelectorAll('.node-library .builtin-group').forEach((heading) => {
+    let rows = 0, shown = 0
+    for (let el = heading.nextElementSibling; el && !el.matches('.builtin-group'); el = el.nextElementSibling) {
+      if (!el.matches('.function-library-row')) continue
+      rows++
+      if (!el.hidden) shown++
+    }
+    heading.hidden = rows > 0 && shown === 0
+  })
+  const valueTitle = document.querySelector('#value-library').previousElementSibling
+  valueTitle.hidden = [...document.querySelectorAll('#value-library .library-item')].every((item) => item.hidden)
 }
 function setupSearch() {
   searchInput.addEventListener('input', applySearch)
   searchInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       const hit = searchHits()[0]
-      if (!hit) return showToast(`Nothing matches "${searchInput.value}"`)
+      if (!hit) return showToast(`"${searchInput.value}"와 맞는 블록이 없어요`)
       if (hit.matches('.function-library-item')) addFunctionCall(hit.dataset.functionId)
       else hit.click()
       searchInput.value = ''
@@ -1327,7 +1337,7 @@ function classPaletteHtml() {
   const groupHtml = (g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.map(classLabel).join(', ')} ⇒ ` : ''}${it.label} :: ${it.kind}${it.label !== it.name ? ` (structurally ${it.name})` : ''}${CLASS_NOTES[it.name] ? ` — ${CLASS_NOTES[it.name]}` : ''} — drag onto a type variable of a signature to constrain it; click to open the class (its methods and instances)`)}"><span class="tn tn-class"><b>${escapeAttr(it.label)}</b></span></span>`).join('')}</div>`
   const groups = classPalette()
   const advanced = groups.filter((g) => g.advanced)
-  return groups.filter((g) => !g.advanced).map(groupHtml).join('') + (advanced.length ? `<details class="cchip-advanced"><summary><small>Advanced</small></summary>${advanced.map(groupHtml).join('')}</details>` : '')
+  return groups.filter((g) => !g.advanced).map(groupHtml).join('') + (advanced.length ? `<details class="cchip-advanced"><summary><small>고급</small></summary>${advanced.map(groupHtml).join('')}</details>` : '')
 }
 function renderClassLibrary() {
   document.querySelector('#class-palette').innerHTML = classPaletteHtml()
@@ -1423,11 +1433,15 @@ function createCustomFunction() {
   }
 }
 
+// A fit asked for while the canvas had no size (another column showing on a
+// phone) waits for the canvas to be shown again.
+let fitPending = false
 function resize() {
   const dpr = window.devicePixelRatio || 1
   canvas.width = Math.round(canvas.clientWidth * dpr)
   canvas.height = Math.round(canvas.clientHeight * dpr)
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  if (fitPending && canvas.clientWidth) { fitPending = false; return fitToView() }
   draw()
 }
 // --- Node geometry --------------------------------------------------------
@@ -1569,6 +1583,7 @@ function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)
 // reset to a hardcoded zoom/offset and left anything below the fold (e.g.
 // the lower rows of the 15-node main graph) cut off below the canvas edge.
 function fitToView() {
+  if (!canvas.clientWidth) { fitPending = true; return draw() }
   placeNewArguments() // measure where new arguments will actually be drawn
   const w = canvas.clientWidth, h = canvas.clientHeight
   const bounds = graphBounds()
@@ -1799,7 +1814,7 @@ function wireChain(el, info) {
       constrain: (path, cls) => constrainAt(info, i, path, cls),
     })
     seg.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
-    seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('Drag a type from TYPES in the workspace onto this chevron (or onto a part of it) — _ leaves it to inference. A class from CLASSES dropped on a type variable constrains it') })
+    seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('작업 공간의 타입 목록에서 타입을 이 자리(또는 그 일부)에 끌어다 놓으세요 — _는 추론에 맡겨요. 클래스 목록의 클래스를 타입 변수에 놓으면 제약이 돼요') })
   })
   if (!info.opts.context) return
   const { pinned, inferred } = contextParts(info.opts)
@@ -1903,7 +1918,7 @@ function drawSignatureBar() {
   signatureBar.hidden = !info
   if (!info) return
   const names = [...bodyParams(fnId).map((p) => p.label), 'result']
-  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'Function signature'}</span>`
+  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "Prelude의 타입 — 유지됨" : '함수 시그니처'}</span>`
   wireChain(signatureBar, info)
 }
 
@@ -1967,7 +1982,7 @@ function endTypeDrag(event) {
   if (drop && cls) drop.zone.constrain ? drop.zone.constrain(drop.path, cls) : showToast(`A class constrains a type variable of a signature — drop ${cls} on one`)
   else if (drop) dropType(drop.zone, drop.path, sub)
   else if (event && !moved && cls) openClassEditor(cls) // a click: the class itself — its methods and instances
-  else if (event && !moved) showToast('Drag a type onto a chevron of a signature to pin it')
+  else if (event && !moved) showToast('타입을 시그니처의 자리에 끌어다 놓아 고정하세요')
 }
 function setupTypeDrag() {
   document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
@@ -2251,6 +2266,7 @@ function drawReferenceLinks() {
 function draw() {
   foldedTexts = new Map()
   updateRunLabel()
+  document.querySelector('.canvas-empty').hidden = !!state.activeFunction || Object.values(activeNodes()).some(isVisible)
   elaborationCache = null // something may have changed
   projectPassCache = null
   labelNamer = createNamer()
@@ -2278,7 +2294,7 @@ function draw() {
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
   document.querySelector('#back-graph').hidden = !state.activeFunction
-  document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
+  document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : '최상위'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
   if (!state.drag && !state.wire) scheduleCheckpoint()
@@ -2999,7 +3015,7 @@ function updateInspector() {
     const label = fnRename.value.trim()
     const problem = label === n.label ? null : functionNameProblem(label, n.id)
     if (problem) showToast(problem)
-    else if (label !== n.label) { renameFunction({ nodes, functionBodies }, n.id, label); showToast(`Renamed to ${label} — every call follows`) }
+    else if (label !== n.label) { renameFunction({ nodes, functionBodies }, n.id, label); showToast(`${label}(으)로 이름을 바꿨어요 — 모든 호출이 따라가요`) }
     renderFunctionLibrary(); updateInspector(); draw()
   }
   const resetCustom = document.querySelector('#reset-derived')
@@ -3063,14 +3079,14 @@ function updateInspector() {
 // can be plugged in and played again later.
 function executeFunction(fn) {
   if (!isFunction(fn)) return
-  if (viewingReadonly()) return showToast('This is a read-only definition — play the function where it is used')
+  if (viewingReadonly()) return showToast('읽기 전용 정의예요 — 이 함수를 쓰는 곳에서 실행하세요')
   const graph = activeNodes()
   const pass = typePass(graph)
   const entry = pass.perNode.get(fn.id)
   const bad = entry?.invalidSlots?.[0]
   if (bad !== undefined) return showToast(`"${fn.params[bad]}" doesn't fit ${paramDisplayName(fn, bad)} :: ${expectedParamType(fn, bad, graph)}`)
   const ambiguous = runBlocker(graph, fn.id)
-  if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
+  if (ambiguous) return showToast(`실행할 수 없어요 — ${ambiguous}`)
   let result
   try {
     result = evaluator.run(graph, fn.id)
@@ -3241,7 +3257,7 @@ function finishConnection(dragged) {
     dragged.mountedTo = null
     dragged.connected = false
     projectPassCache = null
-    showToast(`Not connected — ${why}`)
+    showToast(`연결되지 않았어요 — ${why}`)
     return false
   }
   if (dragged.type === 'function') dragged.composedInto = targetNode.id
@@ -3427,22 +3443,41 @@ function setupBackButton() {
     renderFunctionLibrary(); updateInspector(); fitToView()
   }
 }
+// The practice panel (exercisePanel.js), once set up.
+let exercisePanel = null
+// Inside the body of the build exercise on screen, Run grades it instead:
+// there is nothing to play in a body, and the entry lives at top level.
+function gradingExercise() {
+  const exercise = exercisePanel?.currentBuild()
+  const fn = exercise && state.activeFunction && nodes[state.activeFunction]
+  return fn && fn.custom && fn.label === exercise.name ? exercise : null
+}
 // Plays the entry function (always in `main`), falling back to whichever
 // function is selected when no entry has been set.
 function updateRunLabel() {
+  const button = document.querySelector('#run')
+  const exercise = gradingExercise()
+  if (exercise) {
+    const label = `채점 ${exercise.name}`
+    button.querySelector('span').textContent = label
+    button.title = `연습 문제 ${exercise.name} 채점 (${shortcutModifier} Enter)`
+    button.disabled = false
+    document.querySelector('#run-shortcut-label').textContent = label
+    return
+  }
   const entry = entryId && nodes[entryId]
   const selected = activeNodes()[state.selected]
   const target = entry || (selected && isFunction(selected) ? selected : null)
-  const label = target ? `Run ${target.label}${entry ? '' : ' (selected)'}` : 'Select a function'
-  const button = document.querySelector('#run')
+  const label = target ? `실행 ${target.label}${entry ? '' : ' (선택)'}` : '함수를 선택하세요'
   button.querySelector('span').textContent = label
-  button.title = `${entry ? 'Project entry' : 'Selected node'}: ${target?.label || 'none'} (${shortcutModifier} Enter)`
+  button.title = `${entry ? '프로젝트 시작 함수' : '선택한 블록'}: ${target?.label || '없음'} (${shortcutModifier} Enter)`
   button.disabled = !target
   document.querySelector('#run-shortcut-label').textContent = label
 }
 function runEntry() {
+  if (gradingExercise()) { exercisePanel.grade(); return showMobileView('examples') }
   const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
-  if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
+  if (ambiguous) return showToast(`실행할 수 없어요 — ${ambiguous}`)
   if (entryId && nodes[entryId] && startGameIfProgram(entryId)) return
   if (entryId && nodes[entryId]) {
     if (state.activeFunction) { state.activeFunction = null; renderFunctionLibrary(); fitToView() }
@@ -3450,7 +3485,7 @@ function runEntry() {
   }
   const selected = activeNodes()[state.selected]
   if (selected && isFunction(selected)) return executeFunction(selected)
-  showToast('Select a function, or make one the Run graph entry in the inspector')
+  showToast('함수를 선택하거나, 속성 패널에서 시작 함수로 지정하세요')
 }
 function setupRunButton() {
   document.querySelector('#run').onclick = runEntry
@@ -3747,7 +3782,7 @@ function persist(snapshot) {
   const status = document.querySelector('#saved-status span')
   try {
     localStorage.setItem(STORAGE_KEY, snapshot)
-    status.textContent = `Saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    status.textContent = `저장됨 ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
   } catch {
     status.textContent = 'Not saved (storage unavailable)'
   }
@@ -3789,9 +3824,9 @@ function setupProjectActions() {
       state.activeFunction = null
       loadProject(mergeBuiltins(upgradeProject(parseProject(await file.text())), builtinNodes, builtinBodies))
       fitToView()
-      showToast(`Imported ${file.name}`)
+      showToast(`${file.name}을(를) 불러왔어요`)
     } catch (error) {
-      if (error instanceof ProjectError) return showToast(`Import failed: ${error.message}`)
+      if (error instanceof ProjectError) return showToast(`불러오기 실패: ${error.message}`)
       throw error
     }
   }
@@ -3809,7 +3844,7 @@ function copySelection() {
   const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])) }
   roots.forEach(visit)
   clipboard = [...take.values()]
-  showToast(`Copied ${clipboard.length} node${clipboard.length > 1 ? 's' : ''}`)
+  showToast(`블록 ${clipboard.length}개를 복사했어요`)
 }
 function pasteClipboard() {
   if (!clipboard || readonlyBlocked()) return
@@ -3892,9 +3927,44 @@ function setupSidebarButtons() {
     draw()
   }))
 }
+// The practice panel grades against the live project; a build exercise's
+// function is created (named and with the asked parameters) or opened here.
+function openExerciseFunction(exercise) {
+  let fn = findExerciseFunction(nodes, exercise.name)
+  if (!fn) {
+    const problem = functionNameProblem(exercise.name)
+    if (problem) return showToast(problem)
+    const id = `custom-${Date.now()}`
+    const params = [...exercise.params]
+    fn = nodes[id] = { id, type: 'function', ...freePosition(nodes, 120 + params.length * SLOT_STRIDE), label: exercise.name, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
+    functionBodies[id] = createFunctionBody(id, params)
+    delete functionBodies[id].output.source // an empty body: the learner builds it
+    functionBodies[id].output.value = 'open'
+    showToast(`ƒ ${exercise.name}를 만들었어요 — 시그니처를 적고 본체를 만드세요`)
+  }
+  state.activeFunction = null
+  enterFunction(fn.id)
+  // The signature is written by dragging from Types: have them in view.
+  document.querySelector('#types-section').open = true
+  showMobileView('canvas')
+}
 function setupLearningPanel() {
-  initLearningPanel({
+  exercisePanel = initExercisePanel({
     workspace: document.querySelector('.workspace'),
+    project: () => ({ registry: definitions, functionBodies, userNodes: nodes, types, classes, instances }),
+    schemeOf: (name) => builtinSchemes[name],
+    openFunction: openExerciseFunction,
+    onChange: () => updateRunLabel(),
+    reveal: (name) => {
+      const input = document.querySelector('.sidebar .search input')
+      input.value = name
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      showMobileView('sidebar')
+      input.focus()
+    },
+  })
+  initLearningPanel({
+    host: exercisePanel.syntaxHost,
     onModalOpen: () => {
       endDrag()
       endWire()
@@ -3906,28 +3976,46 @@ function setupLearningPanel() {
     },
   })
 }
-// Inspector visibility has its own column and controls, independent of learning panels.
+// The inspector opens and closes from the top bar's Inspector button (one
+// control, not one per place it could be reopened from) and its own ×.
 function setupInspectorButtons() {
-  const inspectorPanel = document.querySelector('.inspector')
   const closeInspector = document.querySelector('.close-inspector')
-  closeInspector.setAttribute('aria-label', 'Inspector 닫기')
-  const reopenInspector = document.createElement('button')
-  reopenInspector.type = 'button'
-  reopenInspector.className = 'tool-button inspector-reopen'
-  reopenInspector.textContent = 'Inspector'
-  reopenInspector.setAttribute('aria-label', 'Inspector 열기')
-  reopenInspector.setAttribute('aria-controls', inspectorPanel.id)
-  reopenInspector.setAttribute('aria-expanded', String(!inspectorPanel.hidden))
-  reopenInspector.hidden = !inspectorPanel.hidden
-  document.querySelector('.toolbar-actions').prepend(reopenInspector)
+  closeInspector.setAttribute('aria-label', '속성 패널 닫기')
   closeInspector.addEventListener('click', () => {
     toggleInspector(false)
-    reopenInspector.focus({ preventScroll: true })
+    document.querySelector('#toggle-inspector').focus({ preventScroll: true })
   })
-  reopenInspector.addEventListener('click', () => {
-    toggleInspector(true)
-    closeInspector.focus({ preventScroll: true })
+}
+// On a phone-width screen the workspace shows one column at a time, picked
+// from a tab bar at the bottom: the learning panel, the blocks, the canvas,
+// or the inspector. Actions that lead to another column switch to it.
+const mobileQuery = matchMedia('(max-width:680px)')
+const MOBILE_VIEWS = [['examples', '연습'], ['sidebar', '블록'], ['canvas', '캔버스'], ['inspector', '속성']]
+function showMobileView(view) {
+  if (!mobileQuery.matches) return
+  const workspace = document.querySelector('.workspace')
+  workspace.dataset.view = view
+  document.querySelectorAll('.mobile-tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === view)))
+  if (view === 'inspector') toggleInspector(true)
+  const panel = document.querySelector('.examples-panel')
+  if (view === 'examples' && panel.classList.contains('is-collapsed')) panel.querySelector('.learning-toggle').click()
+}
+function setupMobileTabs() {
+  const bar = document.createElement('nav')
+  bar.className = 'mobile-tabs'
+  bar.setAttribute('role', 'tablist')
+  bar.setAttribute('aria-label', '화면')
+  bar.innerHTML = MOBILE_VIEWS.map(([view, label]) => `<button type="button" role="tab" data-view="${view}" aria-selected="false">${label}</button>`).join('')
+  document.querySelector('.shell').append(bar)
+  bar.querySelectorAll('button').forEach((b) => { b.onclick = () => showMobileView(b.dataset.view) })
+  document.querySelector('.workspace').dataset.view = 'canvas'
+  showMobileView('canvas')
+  mobileQuery.addEventListener('change', () => showMobileView(document.querySelector('.workspace').dataset.view))
+  // Adding a block from the sidebar, or opening a function, lands on the canvas.
+  document.querySelector('.sidebar').addEventListener('click', (event) => {
+    if (event.target.closest('.library-item, .add-call, .derived-item')) setTimeout(() => showMobileView('canvas'))
   })
+  document.querySelector('#toggle-inspector').addEventListener('click', () => showMobileView('inspector'))
 }
 // Restore the autosaved project, if any, then start history from whatever
 // is on screen.
@@ -3964,6 +4052,7 @@ function main() {
   setupSidebarButtons()
   setupLearningPanel()
   setupInspectorButtons()
+  setupMobileTabs()
   restoreSavedProject()
 }
 main()

@@ -48,13 +48,12 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .avatar{border:0;border-radius:var(--radius-full);width:30px;height:30px;background:var(--ink);color:#fff;font:600 10px 'DM Mono';cursor:pointer}
 
 /* ----- Workspace layout ----- */
-.workspace{--sidebar-width:200px;--syntax-space:220px;--examples-space:220px;--inspector-space:250px;--syntax-width:var(--syntax-space);--examples-width:var(--examples-space);--inspector-width:var(--inspector-space);display:grid;grid-template-columns:var(--examples-width) var(--syntax-width) var(--sidebar-width) minmax(calc(360px + var(--syntax-space) - var(--syntax-width) + var(--examples-space) - var(--examples-width) + var(--inspector-space) - var(--inspector-width)),1fr) var(--inspector-width);flex:1;min-height:0;overflow-x:auto;overflow-y:hidden}
+.workspace{--sidebar-width:200px;--examples-space:280px;--inspector-space:250px;--examples-width:var(--examples-space);--inspector-width:var(--inspector-space);display:grid;grid-template-columns:var(--examples-width) var(--sidebar-width) minmax(calc(360px + var(--examples-space) - var(--examples-width) + var(--inspector-space) - var(--inspector-width)),1fr) var(--inspector-width);flex:1;min-height:0;overflow-x:auto;overflow-y:hidden}
 .workspace > *{grid-row:1;min-width:0}
 .examples-panel{grid-column:1}
-.syntax-panel{grid-column:2}
-.sidebar{grid-column:3}
-.canvas-panel{grid-column:4}
-.inspector{grid-column:5}
+.sidebar{grid-column:2}
+.canvas-panel{grid-column:3}
+.inspector{grid-column:4}
 .sidebar,.inspector{background:var(--panel)}
 .sidebar{border-right:1px solid var(--line);display:flex;flex-direction:column;padding:28px 18px 18px;min-height:0}
 .node-library{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--muted-2) transparent}
@@ -245,7 +244,6 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .learning-item[aria-pressed="true"] .learning-item-number{color:var(--accent-ink)}
 .learning-footnote{flex:none;padding:12px 8px 0;font-size:10px}
 .learning-item:focus-visible,.learning-toggle:focus-visible,.syntax-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.workspace.syntax-collapsed{--syntax-width:44px}
 .workspace.examples-collapsed{--examples-width:44px}
 .learning-panel.is-collapsed .learning-header{padding:0;justify-content:center}
 .learning-panel.is-collapsed .learning-heading{display:none}
@@ -264,14 +262,14 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .syntax-dialog-content code{font:12px/1.8 'DM Mono',monospace}
 .syntax-dialog-content .syntax-note{margin:22px 0 0;border-top:1px solid var(--line);padding-top:14px;font-size:11px;color:#767086}
 @media (max-width:1400px){
-  .workspace{--sidebar-width:180px;--syntax-space:190px;--examples-space:190px;--inspector-space:220px}
+  .workspace{--sidebar-width:180px;--examples-space:250px;--inspector-space:220px}
   .canvas-toolbar{padding:0 12px;gap:8px}
   .breadcrumbs{gap:6px}
   .saved{display:none}
   .tool-button{padding:8px}
 }
 @media (max-width:1000px){
-  .workspace{--sidebar-width:160px;--syntax-space:170px;--examples-space:180px;--inspector-space:200px}
+  .workspace{--sidebar-width:160px;--examples-space:220px;--inspector-space:200px}
   .sidebar{padding-left:10px;padding-right:10px}
   .inspector{padding-left:12px;padding-right:12px}
   .learning-header{padding-left:8px;padding-right:8px}
@@ -611,3 +609,104 @@ dialog::backdrop{background:#211d3466}
 }
 
 .add-class{display:grid;place-items:center;width:24px;height:24px;border:0;border-radius:50%;font-size:16px;color:var(--accent-ink);background:var(--accent-soft);cursor:pointer}
+
+/* Practice panel (exercisePanel.js): the course list, and one exercise with its grading. */
+.exercise-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--muted-2) transparent}
+.exercise-progress{height:6px;margin-top:10px;border-radius:var(--radius-full);background:var(--accent-soft-2);overflow:hidden}
+.exercise-progress span{display:block;height:100%;background:var(--success);transition:width .3s}
+.exercise-progress-text{display:block;margin-top:5px;font:10px 'DM Mono',monospace;color:#767086}
+.exercise-units{flex:none;overflow:visible}
+.exercise-unit + .exercise-unit{margin-top:14px}
+.exercise-unit h3{display:flex;justify-content:space-between;align-items:baseline;padding:0 8px;font-size:12px;color:var(--accent-ink)}
+.exercise-unit h3 small{font:10px 'DM Mono',monospace;color:#8c83a4}
+.exercise-unit ul{list-style:none;margin:0;padding:0}
+.exercise-unit li + li{margin-top:2px}
+.exercise-item{padding:8px;gap:7px}
+.exercise-item-title{flex:1;min-width:0}
+.exercise-kind{flex:none;padding:1px 6px;border-radius:var(--radius-full);font:500 9px 'DM Mono',monospace}
+.exercise-kind.kind-type{background:#e5efff;color:#2f6fd6}
+.exercise-kind.kind-choice{background:#fff1dc;color:#b36b00}
+.exercise-kind.kind-build{background:#e3f7ef;color:#1b8a62}
+.exercise-check{flex:none;width:12px;color:var(--success);font-weight:700}
+.exercise-item.solved .exercise-item-title{color:#5d566f}
+.exercise-detail{display:flex;flex-direction:column;gap:10px;padding:0 6px 12px;font-size:12px;line-height:1.65}
+.exercise-detail h3{margin:0;font-size:16px}
+.exercise-detail p{margin:0;word-break:keep-all;overflow-wrap:anywhere}
+.exercise-detail code{font:12px 'DM Mono',monospace;overflow-wrap:anywhere}
+.exercise-back{align-self:flex-start;border:0;background:none;color:var(--accent-ink);font:600 12px 'DM Sans',sans-serif;cursor:pointer;padding:2px 0}
+.exercise-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:10px;color:#767086}
+.exercise-solved{color:var(--success);font-weight:700}
+.exercise-intro{padding:10px;border-radius:var(--radius-sm);background:var(--accent-soft);color:#4b4560}
+.exercise-type-row{display:flex;align-items:center;gap:6px;padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel)}
+.exercise-type-row code{flex:none;max-width:45%;color:var(--accent-ink)}
+.exercise-answer{flex:1;min-width:0;border:1px solid var(--accent-soft-2);border-radius:8px;padding:6px 8px;font:12px 'DM Mono',monospace;color:var(--ink);background:#fcfbff}
+.exercise-answer:focus{outline:2px solid var(--accent);outline-offset:1px}
+.exercise-note{color:#767086;font-size:10px}
+.exercise-options{display:flex;flex-direction:column;gap:5px}
+.exercise-option{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel);cursor:pointer}
+.exercise-option:has(input:checked){border-color:#c6b9f5;background:var(--accent-soft)}
+.exercise-target{display:flex;flex-direction:column;gap:2px;padding:10px;border:1px solid #c6b9f5;border-radius:var(--radius-sm);background:#f7f5ff}
+.exercise-target small{font-size:10px;color:#767086}
+.exercise-target code{font-size:13px;font-weight:500;color:var(--accent-ink)}
+.exercise-steps{margin:0;padding-left:18px;color:#4b4560}
+.exercise-steps li + li{margin-top:3px}
+.exercise-tests summary{cursor:pointer;color:var(--accent-ink);font-weight:600}
+.exercise-tests ul{margin:6px 0 0;padding-left:16px}
+.exercise-actions{display:flex;gap:6px}
+.exercise-hint{padding:8px 10px;border-radius:var(--radius-sm);background:#fff8e6;color:#6b5420}
+.exercise-feedback{padding:9px 10px;border-radius:var(--radius-sm);font-weight:600}
+.exercise-feedback.ok{background:#e3f7ef;color:#16754f}
+.exercise-feedback.bad{background:#fdecef;color:#b3364f}
+.exercise-checks{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
+.exercise-checks li{display:flex;gap:7px;align-items:flex-start}
+.exercise-checks li b{flex:none;width:12px}
+.exercise-checks li.ok b{color:var(--success)}
+.exercise-checks li.bad b{color:#d14a64}
+.exercise-checks li span{display:flex;flex-direction:column;min-width:0}
+.exercise-checks li small{color:#767086;font-size:11px;overflow-wrap:anywhere}
+.exercise-explain{padding:10px;border-left:3px solid var(--success);background:#f3fbf8;color:#3f5a4f}
+.exercise-next{align-self:stretch}
+.exercise-use{border:0;padding:0;background:none;cursor:pointer;font:inherit}
+.exercise-use code{border-bottom:1px dashed var(--accent-ink)}
+.exercise-use:hover code{background:var(--accent-soft)}
+.exercise-checks li.skipped{color:var(--muted)}
+.exercise-checks li.skipped b{color:var(--muted)}
+.learning-tabs{display:flex;gap:2px;margin-top:5px}
+.learning-tab{border:0;border-radius:8px;background:none;padding:4px 8px;font:700 14px 'DM Sans',sans-serif;color:var(--muted);cursor:pointer}
+.learning-tab:first-child{margin-left:-8px}
+.learning-tab[aria-selected="true"]{color:var(--ink);background:var(--accent-soft)}
+.learning-tab:hover{color:var(--ink)}
+.learning-tab:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.syntax-host{display:flex;flex-direction:column;flex:1;min-height:0}
+.syntax-host[hidden],.exercise-body[hidden]{display:none}
+/* The sidebar never scrolls sideways: long rows shrink and wrap instead. */
+.node-library{overflow-x:hidden}
+#value-library>.library-item{min-width:0;gap:5px;padding:7px 4px}
+#value-library .library-item b{font-size:11px}
+#value-library .lib-icon{width:22px;height:22px;font-size:11px}
+.library-item b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node-library .type-chain{flex-wrap:wrap;min-width:0}
+.canvas-empty{position:absolute;z-index:2;inset:0;margin:auto;width:max-content;max-width:min(360px,calc(100% - 32px));height:max-content;display:flex;flex-direction:column;gap:8px;padding:20px 22px;border:1.5px dashed var(--accent-soft-2);border-radius:var(--radius-lg);background:#fffffff0;color:var(--muted);font-size:12px;line-height:1.6;text-align:center;pointer-events:none}
+.canvas-empty[hidden]{display:none}
+.canvas-empty b{color:var(--ink);font-size:14px}
+.canvas-empty i{font-style:normal;color:var(--accent-ink);font-weight:600}
+.canvas-empty kbd{font:10px 'DM Mono',monospace;padding:1px 5px;border:1px solid var(--line);border-radius:5px}
+/* ----- Phone width: one column at a time, picked from a bottom tab bar ----- */
+.mobile-tabs{display:none}
+@media(max-width:680px){
+  .workspace{display:block;position:relative;overflow:hidden}
+  .workspace > *{display:none !important;height:100%;width:100%;border-right:0}
+  .workspace[data-view="examples"] > .examples-panel,
+  .workspace[data-view="sidebar"] > .sidebar,
+  .workspace[data-view="canvas"] > .canvas-panel{display:flex !important}
+  .workspace[data-view="sidebar"] > .sidebar{flex-direction:column}
+  .workspace[data-view="inspector"] > .inspector{display:block !important}
+  .examples-panel .learning-toggle{display:none}
+  .mobile-tabs{display:flex;flex:none;height:52px;border-top:1px solid var(--line);background:var(--panel);padding-bottom:env(safe-area-inset-bottom)}
+  .mobile-tabs button{flex:1;border:0;background:none;font:600 12px 'DM Sans',sans-serif;color:var(--muted);cursor:pointer;border-top:2px solid transparent}
+  .mobile-tabs button[aria-selected="true"]{color:var(--accent-ink);border-top-color:var(--accent)}
+  .mobile-tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+  #toggle-inspector{display:none}
+  .shell{height:100dvh}
+  #value-library{grid-template-columns:1fr 1fr}
+}

@@ -195,11 +195,11 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   for (let i = 0; i < 60; i++) { try { await fetch(`http://127.0.0.1:${PORT}/`); break } catch { await sleep(250) } }
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` })
   // A cold Vite start can take a while to serve the app: wait for it to render.
-  for (let i = 0; i < 120 && !(await js(`!!document.querySelector('.add-type')`).catch(() => false)); i++) await sleep(250)
+  for (let i = 0; i < 480 && !(await js(`!!document.querySelector('.exercise-item')`).catch(() => false)); i++) await sleep(250)
   await sleep(500)
   console.log('Learning panels:')
-  await check('independent panels preserve the graph, search and example selection in all four layouts', async () => {
-    await js(`document.querySelector('.example-list button').click()`)
+  await check('the learning panel: tabs and collapsing keep the graph, search and exercise selection', async () => {
+    await js(`document.querySelector('.exercise-item').click()`)
     await setField('.search input', 'identity', 'input')
     const before = JSON.stringify(await project())
     const snapshot = () => js(`JSON.stringify({
@@ -207,31 +207,32 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       inspector: document.querySelector('#inspector-content').innerHTML,
       zoom: document.querySelector('#zoom-level').textContent,
       search: document.querySelector('.search input').value,
-      example: document.querySelector('.example-list [aria-pressed="true"]').textContent
+      example: document.querySelector('.exercise-detail h3').textContent
     })`)
     const initial = await snapshot()
     const widths = []
-    for (const toggle of [null, '.examples-panel', '.syntax-panel', '.examples-panel', '.syntax-panel']) {
-      if (toggle) { await js(`document.querySelector('${toggle} .learning-toggle').click()`); await sleep(150) }
+    for (const action of [null, '[data-tab="syntax"]', '[data-tab="practice"]', '.learning-toggle', '.learning-toggle']) {
+      if (action) { await js(`document.querySelector('.examples-panel ${action}').click()`); await sleep(150) }
       const layout = await js(`[...document.querySelector('.workspace').children].map((e) => ({
         name: e.className, x: e.getBoundingClientRect().x, right: e.getBoundingClientRect().right, width: e.getBoundingClientRect().width
       }))`)
-      expect(['examples-panel', 'syntax-panel', 'sidebar', 'canvas-panel', 'inspector'].every((name, i) => layout[i].name.includes(name)), 'panel order changed')
+      expect(['examples-panel', 'sidebar', 'canvas-panel', 'inspector'].every((name, i) => layout[i].name.includes(name)), 'panel order changed')
       expect(layout.slice(1).every((r, i) => Math.abs(r.x - layout[i].right) < 1), 'panels overlap or leave gaps')
-      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'panel toggle changed the graph or selection')
-      widths.push(layout[3].width)
+      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'a tab or toggle changed the graph or selection')
+      widths.push(layout[2].width)
     }
-    expect(widths[1] > widths[0] && widths[2] > widths[1] && widths[3] === widths[1] && widths[4] === widths[0], `canvas widths: ${widths}`)
+    expect(await js(`document.querySelectorAll('.syntax-list .learning-item').length > 0`), 'the syntax tab has no lessons')
+    // Switching tabs keeps the panel's width; collapsing it widens the canvas.
+    expect(widths[0] === widths[1] && widths[1] === widths[2] && widths[3] > widths[2] && widths[4] === widths[0], `canvas widths: ${widths}`)
     await setField('.search input', '', 'input')
-    // Use the compact learning rails for the large game below. Both expanded
-    // and collapsed layouts were checked above; no graph state is reset.
-    await js(`document.querySelectorAll('.learning-toggle').forEach((button) => button.click())`)
+    // Use the compact learning rail for the large game below.
+    await js(`document.querySelector('.examples-panel .learning-toggle').click()`)
     await sleep(200)
     return `canvas widths ${widths.join(' → ')}`
   })
 
   await check('UI controls: explicit run target, inspector toggle, platform shortcuts, help and project menu', async () => {
-    expect(await js(`document.querySelector('#run').textContent.includes('Run add')`), 'entry name missing')
+    expect(await js(`document.querySelector('#run').textContent.includes('실행 add')`), 'entry name missing')
     expect(await js(`document.querySelector('.search kbd').textContent.includes(/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl')`), 'wrong shortcut modifier')
     await js(`document.querySelector('.close-inspector').click()`)
     expect(await js(`getComputedStyle(document.querySelector('.inspector')).display === 'none'`), 'inspector did not close')
@@ -776,6 +777,43 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(await js(`[...document.querySelectorAll('#inspector-content details')].every(el => !el.open)`), 'advanced details should be collapsed by default')
     writeFileSync(join(tmpdir(), 'hs-ui-body.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
   })
+  await check('practice: a type answer and a build exercise solved through the UI are graded', async () => {
+    await js(`(() => { const p = document.querySelector('.exercise-panel'); if (p.classList.contains('is-collapsed')) p.querySelector('.learning-toggle').click() })()`)
+    await js(`document.querySelector('.exercise-back')?.click()`)
+    const result = () => js(`document.querySelector('.exercise-result').innerText`)
+    const failing = () => js(`[...document.querySelectorAll('.exercise-checks li.bad code')].map((e) => e.textContent).join(' | ')`)
+    // A type answer, compared as a type: renamed variables are the same answer.
+    await js(`document.querySelector('.exercise-item[data-id="logic-eq-type"]').click()`)
+    await setField('.exercise-answer', 'Eq t => t -> t -> t', 'input')
+    await js(`document.querySelector('.exercise-grade').click()`)
+    expect(/모양/.test(await result()), `wrong answer: ${await result()}`)
+    await setField('.exercise-answer', 'Eq t => t -> t -> Bool', 'input')
+    await js(`document.querySelector('.exercise-grade').click()`)
+    expect(/정답/.test(await result()), `right answer: ${await result()}`)
+    // double :: Int -> Int, built on the canvas.
+    await js(`document.querySelector('.exercise-back').click()`)
+    await js(`document.querySelector('.exercise-item[data-id="arith-double"]').click()`)
+    await js(`document.querySelector('.exercise-open-fn').click()`); await sleep(600)
+    const fnId = Object.values((await project()).nodes).find((n) => n.custom && n.label === 'double').id
+    // Inside the exercise's body, Run grades it: an empty body stops at the
+    // body check, and its tests are skipped.
+    expect(await js(`document.querySelector('#run').textContent.includes('채점 double')`), 'Run should grade inside the exercise body')
+    await js(`document.querySelector('#run').click()`)
+    const unsolved = await failing()
+    expect(unsolved === '본체 연결' && await js(`!!document.querySelector('.exercise-checks li.skipped')`), `an empty body should fail the body check and skip the tests: ${unsolved}`)
+    const seg = (i) => `document.querySelectorAll('#signature-bar .type-chain > .tc-seg.editable')[${i}]`
+    await dragType('data-con="Int"', seg(0)); await sleep(200)
+    await dragType('data-con="Int"', seg(1)); await sleep(200)
+    const times = await add('main', '(*)')
+    await plug(`input-${fnId}-0`, times, 0)
+    await fill(times, 1, '2')
+    await toOutput(times)
+    await js(`document.querySelector('.exercise-grade').click()`)
+    expect(!(await failing()) && /모든 검사를 통과/.test(await result()), `double: ${await failing()} / ${await result()}`)
+    expect(await js(`JSON.parse(localStorage.getItem('hs-simulate:exercises'))['arith-double'] === true`), 'progress not saved')
+    await back()
+    return 'logic-eq-type, arith-double'
+  })
   await check('narrow layouts keep project and run controls accessible; inspector remains reopenable', async () => {
     for (const width of [900, 560]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false })
@@ -785,6 +823,13 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       expect(await js(`document.querySelector('#run').getBoundingClientRect().right <= innerWidth`), 'run button overflows')
       await js(`document.querySelector('#toggle-inspector').click()`)
       expect(await js(`getComputedStyle(document.querySelector('.inspector')).display !== 'none'`), 'inspector cannot reopen')
+      if (width <= 680) {
+        // A phone width shows one column at a time, picked from the bottom tabs.
+        for (const [view, panel] of [['examples', '.examples-panel'], ['sidebar', '.sidebar'], ['canvas', '.canvas-panel']]) {
+          await js(`document.querySelector('.mobile-tabs [data-view="${view}"]').click()`); await sleep(100)
+          expect(await js(`(() => { const r = document.querySelector('${panel}').getBoundingClientRect(); return r.x === 0 && Math.round(r.width) === innerWidth })()`), `${view} should fill the screen`)
+        }
+      }
       const shot = join(tmpdir(), `hs-ui-${width}.png`)
       writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
     }
