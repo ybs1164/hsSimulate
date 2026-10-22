@@ -1483,8 +1483,7 @@ function slotWorldCenter(node, index) { return { x: node.x + SLOT_START + index 
 function slotScreenCenter(node, index) { return toScreen(slotWorldCenter(node, index)) }
 function functionBlockLeft(node) { return node.x - FN_LEFT }
 // A folded call shows no slots: just its head and, where they were, the
-// expression it stands for (`add 3 (mul x 2)`) — cut with an ellipsis past
-// CHIP_MAX_W, like a chip's text.
+// whole expression it stands for (`add 3 (mul x 2)`) — the block grows to fit it.
 function isFolded(node) { return !!node.folded && node.params.length > 0 }
 const FOLDED_W = 124     // world px from node.x to a folded call's right edge, at least
 const FOLDED_TEXT_X = 37 // world px from node.x to the start of a folded call's expression
@@ -1499,7 +1498,7 @@ function foldedWidth(node) {
   ctx.font = `600 ${CHIP_FONT}px ui-monospace, monospace`
   const text = ctx.measureText(foldedText(node)).width
   ctx.restore()
-  return Math.min(CHIP_MAX_W, Math.max(FOLDED_W, FOLDED_TEXT_X + text + FOLDED_TAIL))
+  return Math.max(FOLDED_W, FOLDED_TEXT_X + text + FOLDED_TAIL)
 }
 function functionBlockRight(node) {
   if (isFolded(node)) return node.x + foldedWidth(node)
@@ -2299,13 +2298,7 @@ function drawFunctionBlock(node, pass, selected) {
   ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('ƒ', p.x, p.y + 1)
   if (isFolded(node)) {
     ctx.textAlign = 'left'; ctx.fillStyle = '#211d34'; ctx.font = `600 ${CHIP_FONT * state.zoom}px ui-monospace, monospace`
-    const textX = p.x + FOLDED_TEXT_X * state.zoom, room = rect.right - textX - FOLDED_TAIL * state.zoom
-    let content = foldedText(node)
-    if (ctx.measureText(content).width > room) {
-      while (content.length > 1 && ctx.measureText(`${content}…`).width > room) content = content.slice(0, -1)
-      content = `${content}…`
-    }
-    ctx.fillText(content, textX, p.y + 1)
+    ctx.fillText(foldedText(node), p.x + FOLDED_TEXT_X * state.zoom, p.y + 1)
     ctx.textAlign = 'center'
   }
   const playX = rect.right - 24 * state.zoom, playY = rect.top + 2 * state.zoom
