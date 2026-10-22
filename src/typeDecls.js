@@ -30,6 +30,7 @@
 // `*`. Its derived functions are then polymorphic in them, and its instances
 // carry a context, as GHC infers for stock deriving: `deriving Eq` on
 // `Pair a` is `instance Eq a => Eq (Pair a)`.
+import { canonicalClass } from './classGroups.js'
 import { classArity, classClosure, entails, isClass, productLiftable, withDynamicInstances } from './prelude.js'
 import { STAR, applySubst, constructorArity, constructorKind, instantiate, wellKinded, withUserKinds, karrow, kindOfArity, pred, scheme, showQual, showType, tapp, tcon, tfun, tlist, ttuple, tvar, unify } from './typeSystem.js'
 
@@ -188,7 +189,7 @@ function parser(tokens) {
     /** A context `C a` or `(C a, D b)`: `[{ cls, var }]`. */
     context() {
       const one = () => {
-        const cls = upper('a class name')
+        const cls = canonicalClass(upper('a class name'))
         const v = next()
         if (!isLower(v)) throw new DeclError(`Expected a type variable after ${cls}, found ${v ? `"${v}"` : 'the end'}`)
         return { cls, var: v }

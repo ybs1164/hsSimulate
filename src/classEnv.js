@@ -12,7 +12,7 @@
 // THIH: `instance Monoid a => Monoid (Maybe a)` is
 // `{ cls: 'Monoid', head: Maybe $a, context: [Monoid $a] }`, and using it
 // leaves the context's predicates as new obligations.
-import { pred, showType, tcon } from './typeSystem.js'
+import { classShown, pred, showType, tcon } from './typeSystem.js'
 
 const staticClasses = new Map() // name -> { supers: string[], numeric: boolean, arity }
 let dynamicClasses = new Map() // user-declared classes (classDecls.js), replaced wholesale
@@ -155,7 +155,7 @@ export function listInstances() {
 
 export class ContextError extends Error {
   constructor(p) {
-    super(`No instance for ${p.cls} ${showType(p.type)}`)
+    super(`No instance for ${classShown(p.cls)} ${showType(p.type)}`)
     this.pred = p
   }
 }

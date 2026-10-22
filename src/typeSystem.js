@@ -285,6 +285,15 @@ export function showType(type, namer = createNamer()) {
   return go(type, false, false)
 }
 
+// The name a class is printed under. Identity unless the app installs its
+// display aliases (classGroups.js: `Ring` shown as Haskell's `Num`), so the
+// engine and its tests keep the structural names.
+let classLabeler = (cls) => cls
+/** Print classes through `fn` (the app's display aliases). */
+export function setClassLabels(fn) { classLabeler = fn }
+/** The name class `cls` is printed under. */
+export const classShown = (cls) => classLabeler(cls)
+
 /**
  * Prints a qualified type Haskell-style: `AddGroup a => a -> a -> a`,
  * `(EuclideanRing a, Ring b) => a -> b`. Pass the same `namer` used for the body
@@ -294,7 +303,7 @@ export function showType(type, namer = createNamer()) {
 export function showQual(preds, type, namer = createNamer()) {
   const body = showType(type, namer)
   if (!preds.length) return body
-  const parts = preds.map((p) => `${p.cls} ${showType(p.type, namer)}`)
+  const parts = preds.map((p) => `${classShown(p.cls)} ${showType(p.type, namer)}`)
   const context = parts.length > 1 ? `(${parts.join(', ')})` : parts[0]
   return `${context} ⇒ ${body}`
 }

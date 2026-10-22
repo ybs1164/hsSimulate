@@ -1,6 +1,6 @@
 import './style.css'
 import { initLearningPanel } from './learningPanel.js'
-import { applySubst, constructorArity, ftv, generalize, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
+import { applySubst, classShown, constructorArity, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
@@ -28,6 +28,9 @@ import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
 const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
+import { classLabel } from './classGroups.js'
+// Classes print under their Haskell names (Ring as Num, …) everywhere the app shows a type.
+setClassLabels(classLabel)
 
 const app = document.querySelector('#app')
 
@@ -1068,7 +1071,7 @@ function renderClassEditor(error = '') {
       <div class="property"><label>INSTANCES</label>
         ${d.instances.map((inst, ii) => {
           const ctx = inst.context || []
-          const chips = ctx.map((q, k) => `<span class="cc pinned" data-ci="${k}" title="${escapeAttr(`${q.cls} ${q.var} — drop another class here to change it, _ to remove it`)}">${escapeAttr(`${q.cls} ${q.var}`)}<button class="cc-x" title="Remove ${escapeAttr(`${q.cls} ${q.var}`)}">×</button></span>`)
+          const chips = ctx.map((q, k) => `<span class="cc pinned" data-ci="${k}" title="${escapeAttr(`${classShown(q.cls)} ${q.var} — drop another class here to change it, _ to remove it`)}">${escapeAttr(`${classShown(q.cls)} ${q.var}`)}<button class="cc-x" title="Remove ${escapeAttr(`${classShown(q.cls)} ${q.var}`)}">×</button></span>`)
           const context = chips.length ? `<span class="tc-ctx ce-ctx">${chips.length > 1 ? '<i>(</i>' : ''}${chips.join('<i>,</i> ')}${chips.length > 1 ? '<i>)</i>' : ''} ⇒</span>` : ''
           const w = written.find((x) => x.headName === inst.head)
           const incomplete = w && writtenMinimalProblem(w)
@@ -1194,7 +1197,11 @@ const classLibrary = document.querySelector('#class-library')
 // Classes in the workspace, as nodes: drag one onto a type variable of a
 // signature to constrain it (`Ord a ⇒`) — see constrainVariable.
 function classPaletteHtml() {
-  return classPalette().map((g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.join(', ')} ⇒ ` : ''}${it.name} :: ${it.kind} — drag onto a type variable of a signature to constrain it; click to open the class (its methods and instances)`)}"><span class="tn tn-class"><b>${escapeAttr(it.name)}</b></span></span>`).join('')}</div>`).join('')
+  // Grouped by task (classGroups.js); the numeric tower under its Haskell names, the structural building blocks folded away.
+  const groupHtml = (g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.map(classLabel).join(', ')} ⇒ ` : ''}${it.label} :: ${it.kind}${it.label !== it.name ? ` (structurally ${it.name})` : ''} — drag onto a type variable of a signature to constrain it; click to open the class (its methods and instances)`)}"><span class="tn tn-class"><b>${escapeAttr(it.label)}</b></span></span>`).join('')}</div>`
+  const groups = classPalette()
+  const advanced = groups.filter((g) => g.advanced)
+  return groups.filter((g) => !g.advanced).map(groupHtml).join('') + (advanced.length ? `<details class="cchip-advanced"><summary><small>Advanced</small></summary>${advanced.map(groupHtml).join('')}</details>` : '')
 }
 function renderClassLibrary() {
   document.querySelector('#class-palette').innerHTML = classPaletteHtml()
@@ -1571,7 +1578,7 @@ function contextHtml(opts, namer) {
   const { pinned, inferred } = contextParts(opts)
   const text = (p) => showQual([p], tcon('_'), namer).split(' ⇒ ')[0]
   const chips = [
-    ...pinned.map((q, k) => `<span class="cc pinned${opts.contextBad ? ' bad' : ''}" data-ci="${k}" title="${escapeAttr(opts.contextBad || `Pinned: ${q.cls} ${q.var} — drop another class here to change it, _ to un-pin`)}">${escapeAttr(q.varId ? text(pred(q.cls, tvar(q.varId))) : `${q.cls} ${q.var}`)}<button class="cc-x" data-ci="${k}" title="Un-pin ${escapeAttr(`${q.cls} ${q.var}`)}">×</button></span>`),
+    ...pinned.map((q, k) => `<span class="cc pinned${opts.contextBad ? ' bad' : ''}" data-ci="${k}" title="${escapeAttr(opts.contextBad || `Pinned: ${classShown(q.cls)} ${q.var} — drop another class here to change it, _ to un-pin`)}">${escapeAttr(q.varId ? text(pred(q.cls, tvar(q.varId))) : `${classShown(q.cls)} ${q.var}`)}<button class="cc-x" data-ci="${k}" title="Un-pin ${escapeAttr(`${classShown(q.cls)} ${q.var}`)}">×</button></span>`),
     ...inferred.map((p, k) => `<span class="cc${opts.context ? ' inferred' : ''}" data-pi="${k}"${opts.context ? ` title="Inferred — what the body needs. Click to pin it in the signature"` : ''}>${escapeAttr(text(p))}</span>`),
   ]
   if (!chips.length) return ''
@@ -1659,13 +1666,13 @@ function wireChain(el, info) {
   el.querySelectorAll('.tc-ctx .cc.pinned').forEach((chip) => {
     const q = pinned[Number(chip.dataset.ci)]
     const same = (c) => c.cls === q.cls && c.var === q.var
-    const unpin = () => editContext(info.fnId, (ctx) => ctx.filter((c) => !same(c)), `${q.cls} ${q.var} is un-pinned`)
+    const unpin = () => editContext(info.fnId, (ctx) => ctx.filter((c) => !same(c)), `${classShown(q.cls)} ${q.var} is un-pinned`)
     stop(chip)
     dropZone(chip, {
       take: (sub) => (isHole(sub) ? unpin() : showToast('Drop a class here to change this constraint, or _ to un-pin it')),
       constrain: (_, cls) => {
         if (classArity(cls) !== classArity(q.cls)) return showToast(`${cls} and ${q.cls} constrain different kinds of type — drop ${cls} on a type variable instead`)
-        editContext(info.fnId, (ctx) => ctx.filter((c) => !(c.cls === cls && c.var === q.var)).map((c) => (same(c) ? { cls, var: q.var } : c)), `${q.cls} ${q.var} is now ${cls} ${q.var}`)
+        editContext(info.fnId, (ctx) => ctx.filter((c) => !(c.cls === cls && c.var === q.var)).map((c) => (same(c) ? { cls, var: q.var } : c)), `${classShown(q.cls)} ${q.var} is now ${classShown(cls)} ${q.var}`)
       },
     })
     chip.querySelector('.cc-x').addEventListener('click', (event) => { event.stopPropagation(); unpin() })
@@ -1881,7 +1888,7 @@ function commitSignature(fnId, edits, context, messages) {
   }
   if (Object.entries(before).every(([id, text]) => body[id]?.annotation === text) && JSON.stringify(output.context) === JSON.stringify(contextBefore)) return ''
   renderFunctionLibrary(); updateInspector(); draw()
-  showToast(`${messages.done()}${gone.length ? ` (${gone.map((q) => `${q.cls} ${q.var}`).join(', ')} went with it)` : ''}`)
+  showToast(`${messages.done()}${gone.length ? ` (${gone.map((q) => `${classShown(q.cls)} ${q.var}`).join(', ')} went with it)` : ''}`)
   return ''
 }
 function canConnect(source, target, index) {

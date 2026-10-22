@@ -51,7 +51,7 @@
 //   must satisfy it) even where the body doesn't need it. Constraints the
 //   body needs beyond those are still inferred (an extra-constraints
 //   wildcard, `(Ord a, _) =>`).
-import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, tvar, unify, scheme } from './typeSystem.js'
+import { applySubst, classShown, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, tvar, unify, scheme } from './typeSystem.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { classArity, evidence, isClass, isUserClass, literalClass, pickDefault, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
@@ -154,7 +154,7 @@ function annotate(ctx, graph, memo, predsStart) {
     const own = ctx.preds.slice(predsStart)
     const missing = own.find((p) => satisfiable([p], ctx.subst) && !satisfiable([p], next))
     if (missing) {
-      problems[n.id] = `${n.annotation} can't be ${what(n)}: the body needs ${missing.cls} of it, which ${show(applySubst(next, missing.type))} doesn't have`
+      problems[n.id] = `${n.annotation} can't be ${what(n)}: the body needs ${classShown(missing.cls)} of it, which ${show(applySubst(next, missing.type))} doesn't have`
       continue
     }
     ctx.subst = next
@@ -169,7 +169,7 @@ function annotate(ctx, graph, memo, predsStart) {
   for (const q of output?.context || []) {
     const v = names.get(q.var)
     if (!isClass(q.cls)) problems.context ??= `There is no class ${q.cls}`
-    else if (!v) problems.context ??= `${q.cls} ${q.var}: ${q.var} isn't a variable of the signature`
+    else if (!v) problems.context ??= `${classShown(q.cls)} ${q.var}: ${q.var} isn't a variable of the signature`
     else if (!usedAtKind(graph, q.var, classArity(q.cls))) problems.context ??= `${q.cls} ${q.var}: ${q.cls} is a class of ${classArity(q.cls) ? 'type constructors (like Maybe)' : 'types'}, but the signature uses ${q.var} as ${classArity(q.cls) ? 'a type' : 'a type constructor'}`
     else if (satisfiable([...ctx.preds.slice(predsStart), pred(q.cls, v)], ctx.subst)) ctx.preds.push(pred(q.cls, v))
     else problems.context ??= `${q.cls} ${q.var} can't hold: the body makes ${q.var} ${show(applySubst(ctx.subst, v))}`
@@ -356,7 +356,7 @@ function ambiguitiesIn(preds, visible, origins) {
   for (const v of new Set(bad.flatMap(hidden))) {
     const constraints = reduced.filter((p) => ftv(p.type).has(v))
     const namer = createNamer()
-    const shown = constraints.map((p) => `${p.cls} ${showType(p.type, namer)}`).join(', ')
+    const shown = constraints.map((p) => `${classShown(p.cls)} ${showType(p.type, namer)}`).join(', ')
     const userClass = constraints.some((p) => isUserClass(p.cls))
     const culprits = origins.filter((o) => o.preds.some((p) => ftv(p.type).has(v)))
     const names = [...new Set(culprits.map((o) => o.label))].map((l) => `‘${l}’`).join(', ')
@@ -410,7 +410,7 @@ function elaborateCalls(calls, given, ctx, selfId = null, subst = ctx.subst) {
     if (!call.preds.length) continue
     out[call.id] = call.preds.map((q) => {
       const p = pred(q.cls, applySubst(subst, q.type))
-      return evidence(given, p) || { error: `No instance for ${p.cls} ${showType(p.type)}${p.type.kind === 'var' ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` }
+      return evidence(given, p) || { error: `No instance for ${classShown(p.cls)} ${showType(p.type)}${p.type.kind === 'var' ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` }
     })
   }
   return out
