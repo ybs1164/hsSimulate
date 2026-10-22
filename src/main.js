@@ -38,42 +38,95 @@ app.innerHTML = `
   <main class="shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark">λ</span><span>hs / simulate</span><span class="beta">BETA</span></div>
-      <div class="top-actions"><span class="status-dot"></span><span>LOCAL RUNTIME</span><button class="icon-button" aria-label="Settings">⚙</button><button class="avatar">YS</button></div>
+      <div class="top-actions"><button class="tool-button" id="help">Help</button><button class="tool-button" id="toggle-inspector" aria-controls="inspector-panel" aria-expanded="true">Inspector</button></div>
     </header>
     <section class="workspace">
       <aside class="sidebar">
-        <div class="side-heading"><div><span class="eyebrow">WORKSPACE</span><h1>Untitled graph</h1></div><button class="more">•••</button></div>
-        <div class="search"><span>⌕</span><input aria-label="Search nodes" placeholder="Search nodes" /><kbd>⌘ K</kbd></div>
+        <div class="side-heading"><div><span class="eyebrow">WORKSPACE</span><h1>Untitled graph</h1></div></div>
+        <div class="search"><span>⌕</span><input aria-label="Search nodes" placeholder="Search nodes" /><kbd data-shortcut="K"></kbd></div>
         <nav class="node-library">
-          <div class="library-title" id="parameter-title" hidden><span>PARAMETERS</span></div>
-          <div id="parameter-library"></div>
-          <div class="library-title"><span>NODES</span><button class="add-node" aria-label="Add node">+</button></div>
-          <div id="function-library"></div>
-          <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
-          <div id="type-palette"></div>
-          <div id="type-library"></div>
-          <div class="library-title types-title"><span>CLASSES</span><button class="add-class" aria-label="Declare a class" title="Declare a class — methods each instance implements">+</button></div>
-          <div id="class-palette"></div>
-          <div id="class-library"></div>
-          <div class="library-title types-title"><span>PRELUDE</span></div>
-          <div id="prelude-library"></div>
+          <div class="library-title"><span>ADD A VALUE</span></div>
+          <div id="value-library">
           <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>Numbers</b><small>Int · Double · Rational …</small></span></button>
           <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String = [Char]</small></span></button>
           <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>Lists</b><small>[a, b, c]</small></span></button>
           <button class="library-item" data-type="lambda"><span class="lib-icon function-icon">λ</span><span><b>Lambda</b><small>\\x -> … (anonymous function)</small></span></button>
-          <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Booleans</b><small>True · False</small></span></button>
+          <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Booleans</b><small>True · False</small></span></button></div>
+          <div class="library-title" id="parameter-title" hidden><span>PARAMETERS</span></div>
+          <div id="parameter-library"></div>
+          <div class="library-title"><span>FUNCTIONS · OPEN / ADD</span><button class="add-node" aria-label="Create function" title="Create function">+</button></div>
+          <div id="function-library"></div>
+          <details class="library-section" id="types-section"><summary>Types</summary><div class="library-title types-title"><span>DECLARE A TYPE</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
+          <div id="type-palette"></div>
+          <div id="type-library"></div></details>
+          <details class="library-section" id="classes-section"><summary>Classes</summary><div class="library-title types-title"><span>DECLARE A CLASS</span><button class="add-class" aria-label="Declare a class" title="Declare a class — methods each instance implements">+</button></div>
+          <div id="class-palette"></div>
+          <div id="class-library"></div></details>
+          <details class="library-section" id="prelude-section"><summary>Add from library</summary>
+          <div id="prelude-library"></div></details>
+
         </nav>
-        <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong>GHC 9.6.3 <i>●</i></strong></div></div>
+
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option><option value="blackjack">Blackjack (lists)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Drag a node's right-end port onto a slot to connect</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Open every function: show what is plugged into its slots on the canvas">⤢</button><button id="fold-all" title="Fold every function: keep what is plugged in inside its slots">⤡</button></div></div>
-        <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo" disabled>↷</button><details class="project-menu"><summary class="tool-button">Project</summary><div class="project-menu-items"><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Save project (.json)</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Open project</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option><option value="blackjack">Blackjack (lists)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Export game (.html)</span></button><button class="tool-button" id="reset">↺ <span>Reset project</span></button></div></details><button class="tool-button primary" id="run">▶ <span>Run add</span></button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Open every function: show what is plugged into its slots on the canvas">⤢</button><button id="fold-all" title="Fold every function: keep what is plugged in inside its slots">⤡</button></div></div>
+        <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd data-shortcut="Enter"></kbd><span id="run-shortcut-label">Run add</span></span></footer>
       </section>
-      <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
+      <aside class="inspector" id="inspector-panel"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector" aria-label="Close inspector">×</button></div><div id="inspector-content"></div></aside>
     </section>
   </main>
 `
+
+const disclosureState = new Map()
+function restoreDisclosureState(root) {
+  root.querySelectorAll('details').forEach((el) => {
+    const key = el.dataset.disclosure || `${root.id}:${el.querySelector('summary')?.textContent}`
+    el.open = disclosureState.get(key) ?? el.open
+    el.addEventListener('toggle', () => { if (el.isConnected && !document.querySelector('.search input')?.value) disclosureState.set(key, el.open) })
+  })
+}
+const shortcutModifier = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'
+// Shortcut hints name this platform's modifier key.
+function setupShortcutHints() {
+  document.querySelector('#undo').title = `Undo (${shortcutModifier} Z)`
+  document.querySelector('#redo').title = `Redo (${shortcutModifier} Shift Z)`
+  document.querySelectorAll('[data-shortcut]').forEach((el) => { el.textContent = `${shortcutModifier} ${el.dataset.shortcut}` })
+}
+function toggleInspector(open) {
+  document.querySelector('.inspector').hidden = !open
+  document.querySelector('.workspace').classList.toggle('inspector-hidden', !open)
+  document.querySelector('#toggle-inspector').setAttribute('aria-expanded', String(open))
+  const reopen = document.querySelector('.inspector-reopen')
+  if (reopen) {
+    reopen.hidden = open
+    reopen.setAttribute('aria-expanded', String(open))
+  }
+  window.dispatchEvent(new Event('resize'))
+}
+// The top bar: the inspector toggle (collapsed on narrow screens), help, and
+// the Project menu, which closes after use.
+function setupTopBar() {
+  document.querySelector('#toggle-inspector').onclick = () => toggleInspector(document.querySelector('.workspace').classList.contains('inspector-hidden'))
+  if (matchMedia('(max-width:1050px)').matches) {
+    toggleInspector(false)
+  }
+  document.querySelector('#help').onclick = () => {
+    const dialog = document.createElement('dialog')
+    dialog.className = 'help-dialog'
+    dialog.innerHTML = `<h2>Working with graphs</h2><ul><li>Open a function by its name. Use its + button to add a call.</li><li>Add values from the sidebar. Drag the right-hand output port onto an input slot or Output.</li><li>Click an empty input slot to enter a value.</li><li>Drag empty canvas to pan; scroll to zoom.</li><li>The top Run button names the project entry. Run this node evaluates your selection.</li><li>In the type editor, click + to choose a type or drag one from Types. Click a name to rename it.</li></ul><p>${shortcutModifier} K: search and add · ${shortcutModifier} Enter: run · ${shortcutModifier} Z: undo</p><p>Projects save automatically in this browser. The JavaScript evaluator runs locally.</p><form method="dialog"><button class="tool-button">Close</button></form>`
+    document.body.append(dialog)
+    dialog.addEventListener('close', () => dialog.remove())
+    dialog.showModal()
+  }
+  // File actions close their menu after use; the import picker keeps its input alive.
+  document.addEventListener('click', (event) => { if (!event.target.closest('.project-menu')) document.querySelector('.project-menu').open = false })
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') document.querySelector('.project-menu').open = false })
+  document.querySelector('.project-menu').addEventListener('click', (event) => {
+    if (event.target.closest('button')) document.querySelector('.project-menu').open = false
+  })
+  document.querySelector('#template').addEventListener('change', () => { document.querySelector('.project-menu').open = false })
+}
 
 const canvas = document.querySelector('#graph-canvas')
 const ctx = canvas.getContext('2d')
@@ -344,15 +397,19 @@ const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
 function renderFunctionLibrary() {
-  functionLibrary.innerHTML = Object.values(nodes).filter((n) => isFunction(n) && !isHiddenDefinition(n)).map((node) => `
-    <button class="library-item function-library-item ${state.activeFunction === node.id ? 'active' : ''}" data-function-id="${node.id}">
+  const items = Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !isHiddenDefinition(n))
+  const row = (node) => `
+    <div class="function-library-row"><button class="library-item function-library-item ${state.activeFunction === node.id ? 'active' : ''}" data-function-id="${node.id}" title="Open ${escapeAttr(node.label)} definition">
       <span class="lib-icon function-icon">ƒ</span>
-      <span><b>${node.label}</b><small>${functionChainHtml(node, nodes)}</small></span>
-    </button>
-  `).join('')
+      <span><b>${escapeAttr(node.label)}</b><small>${functionChainHtml(node, nodes)}</small></span>
+    </button><button class="add-call" data-add-function="${node.id}" aria-label="Add call to ${escapeAttr(node.label)}" title="Add call to ${escapeAttr(node.label)}">+</button></div>
+  `
+  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>Built-in functions</summary>${items.filter((n) => !n.custom).map(row).join('')}</details>`
+  restoreDisclosureState(functionLibrary)
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
   })
+  functionLibrary.querySelectorAll('[data-add-function]').forEach((button) => { button.onclick = () => addFunctionCall(button.dataset.addFunction) })
   renderParameterLibrary()
   renderTypeLibrary()
   renderClassLibrary()
@@ -398,11 +455,10 @@ function createLambda() {
   renderFunctionLibrary()
   showToast('λ added — double-click it (or Open body) to define it; plug outer values into its slots to capture them')
 }
-// Clicking a function in the library: a custom function opens its body when
-// you're on `main`; anything else (or inside a body) drops a call to it.
+// The name always opens the definition; the separate + always inserts a call.
 function onLibraryFunction(id) {
-  if (!state.activeFunction && nodes[id]?.custom) enterFunction(id)
-  else addFunctionCall(id)
+  if (nodes[id]?.custom) enterFunction(id)
+  else openDefinitionView(id)
 }
 function renderPreludeLibrary() {
   document.querySelector('#prelude-library').innerHTML = PRELUDE.map(([group, fns]) => `<div class="prelude-group">${group}</div>${fns.map(([builtin]) => {
@@ -419,6 +475,22 @@ function renderPreludeLibrary() {
   const head = (d) => (d.name === '(,)' ? '(a, b)' : [d.name, ...d.params].join(' '))
   const takeOver = (d) => (TAKEABLE_TYPES.includes(d.name) ? `<button class="derived-edit prelude-take-type" data-type-name="${escapeAttr(d.name)}" title="Take the declaration over: edit it in the type editor">✎</button>` : '')
   document.querySelector('#prelude-library').insertAdjacentHTML('beforeend', Object.values(preludeTypes).map((d) => types[d.name] ? `<div class="prelude-group" title="Your declaration is in TYPES">${d.keyword} ${escapeAttr(head(d))} <i class="customized">✎ yours</i></div>` : `<div class="derived-row"><div class="prelude-group" title="${escapeAttr(d.source)}">${d.keyword} ${escapeAttr(head(d))}</div>${takeOver(d)}</div>${(byType[d.name] || []).map((def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎ custom</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="${nodes[def.id]?.override ? 'Open its custom body' : 'Customize: redefine it with a body of your own'}">✎</button></div>`).join('')}`).join(''))
+  const preludeLibrary = document.querySelector('#prelude-library')
+  let group = null
+  for (const child of [...preludeLibrary.children]) {
+    const heading = child.matches('.prelude-group') ? child : child.querySelector('.prelude-group')
+    if (heading) {
+      group = document.createElement('details')
+      group.className = 'library-group'
+      const summary = document.createElement('summary')
+      summary.textContent = heading.textContent
+      group.append(summary)
+      preludeLibrary.insertBefore(group, child)
+      heading.remove()
+      if (child !== heading && child.childElementCount) group.append(child)
+    } else if (group) group.append(child)
+  }
+  restoreDisclosureState(preludeLibrary)
   document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
   document.querySelectorAll('#prelude-library .derived-edit[data-edit-id]').forEach((item) => { item.onclick = () => editDerived(item.dataset.editId) })
   document.querySelectorAll('#prelude-library .prelude-take-type').forEach((item) => { item.onclick = () => takeOverPreludeType(item.dataset.typeName) })
@@ -430,12 +502,17 @@ function renderPreludeLibrary() {
 // you're looking at (a custom function on `main` opens its body instead).
 const searchInput = document.querySelector('.search input')
 function searchHits() {
-  return [...document.querySelectorAll('.function-library-item, #type-library .derived-item, #class-library .derived-item, #prelude-library .derived-item')].filter((item) => !item.hidden)
+  return [...document.querySelectorAll('#value-library .library-item, .function-library-item, #type-library .derived-item, #class-library .derived-item, #prelude-library .derived-item')].filter((item) => !item.hidden && !item.closest('[hidden]'))
 }
+const searchExpansion = new Map()
 function applySearch() {
   const q = searchInput.value.trim().toLowerCase()
-  const matches = (el) => !q || el.textContent.toLowerCase().includes(q)
-  document.querySelectorAll('.function-library-item, #prelude-library .derived-item').forEach((item) => { item.hidden = !matches(item) })
+  const matches = (el) => !q || (el?.textContent || '').toLowerCase().includes(q)
+  document.querySelectorAll('#value-library .library-item, .function-library-item, #prelude-library .derived-item').forEach((item) => {
+    item.hidden = !matches(item)
+    const row = item.closest('.function-library-row, .derived-row')
+    if (row) row.hidden = item.hidden
+  })
   document.querySelectorAll('#type-library .type-entry, #class-library .type-entry').forEach((entry) => {
     const typeHit = matches(entry.querySelector('.type-item'))
     const items = [...entry.querySelectorAll('.derived-item')]
@@ -446,29 +523,38 @@ function applySearch() {
     })
     entry.hidden = !typeHit && items.every((item) => item.hidden)
   })
-  // A Prelude group heading shows only while one of its entries does.
-  document.querySelectorAll('#prelude-library .prelude-group').forEach((heading) => {
-    let el = heading.nextElementSibling
-    let any = false
-    while (el && !el.classList.contains('prelude-group')) { if (!el.hidden) any = true; el = el.nextElementSibling }
-    heading.hidden = !any
+  document.querySelectorAll('.node-library details').forEach((group) => {
+    const items = [...group.querySelectorAll('.function-library-item, .derived-item, .type-item')]
+    const any = items.some((item) => !item.hidden && !item.closest('.type-entry[hidden]'))
+    group.hidden = !!q && !any
+    if (q) {
+      if (!searchExpansion.has(group)) searchExpansion.set(group, group.open)
+      if (any) group.open = true
+    } else if (searchExpansion.has(group)) {
+      group.open = searchExpansion.get(group)
+      searchExpansion.delete(group)
+    }
+  })
+  if (!q) searchExpansion.clear()
+}
+function setupSearch() {
+  searchInput.addEventListener('input', applySearch)
+  searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      const hit = searchHits()[0]
+      if (!hit) return showToast(`Nothing matches "${searchInput.value}"`)
+      if (hit.matches('.function-library-item')) addFunctionCall(hit.dataset.functionId)
+      else hit.click()
+      searchInput.value = ''
+      applySearch()
+      searchInput.blur()
+    } else if (event.key === 'Escape') {
+      searchInput.value = ''
+      applySearch()
+      searchInput.blur()
+    }
   })
 }
-searchInput.addEventListener('input', applySearch)
-searchInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    const hit = searchHits()[0]
-    if (!hit) return showToast(`Nothing matches "${searchInput.value}"`)
-    hit.click()
-    searchInput.value = ''
-    applySearch()
-    searchInput.blur()
-  } else if (event.key === 'Escape') {
-    searchInput.value = ''
-    applySearch()
-    searchInput.blur()
-  }
-})
 const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
   document.querySelector('#type-palette').innerHTML = typePaletteHtml()
@@ -679,6 +765,31 @@ function createMethodFunction(method, typeName, params = METHOD_PARAMS[method]) 
   return id
 }
 
+function chooseType(title, commit, { variable = false, initial = '' } = {}) {
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker'
+  const choices = variable ? ['a', 'b', 'c', 'd', 'e', 'f'] : [...new Set(typePalette().flatMap((g) => g.items.map((it) => typeText(constructorWithHoles(it.name))))), 'a', 'b', '_']
+  dialog.innerHTML = `<form><h2>${escapeAttr(title)}</h2><label for="pick-type">${variable ? 'Type variable' : 'Type'}</label><input id="pick-type" name="type" value="${escapeAttr(initial)}" placeholder="${variable ? 'a' : 'Int, Maybe Int, [a]…'}" autocomplete="off" required /><div class="type-choices">${choices.map((type) => `<button type="button" data-choice="${escapeAttr(type)}">${escapeAttr(type)}</button>`).join('')}</div><p class="type-error" role="alert"></p><div class="dialog-actions"><button type="button" data-cancel>Cancel</button><button type="submit">Apply</button></div></form>`
+  document.body.append(dialog)
+  const form = dialog.querySelector('form')
+  const input = form.elements.type
+  dialog.querySelectorAll('[data-choice]').forEach((button) => { button.onclick = () => { input.value = button.dataset.choice; input.focus() } })
+  const close = () => { dialog.close(); dialog.remove() }
+  dialog.querySelector('[data-cancel]').onclick = close
+  dialog.addEventListener('close', () => dialog.remove())
+  form.onsubmit = (event) => {
+    event.preventDefault()
+    try {
+      const type = typeFromText(input.value.trim())
+      if (variable && type.kind !== 'var') throw new Error('Use a type variable such as a or b.')
+      commit(type)
+      close()
+    } catch (error) { dialog.querySelector('.type-error').textContent = error.message }
+  }
+  dialog.showModal()
+  input.focus()
+}
+
 function renderTypeEditor(error = '') {
   if (!typeEditor) return
   const d = typeEditor.draft
@@ -693,7 +804,7 @@ function renderTypeEditor(error = '') {
   const fieldType = (f) => { try { return typeFromText(f.type || '_') } catch { return null } }
   const derivingText = applied ? applied.deriving.filter((c) => c.classes.length).map((c) => `deriving${c.strategy === 'stock' ? '' : ` ${c.strategy}`} (${c.classes.join(', ')})`).join(' ') : ''
   // A name is a token of the declaration, renamed by double-clicking it — names are the only thing typed here.
-  const ident = (kind, name, title, data = '') => `<span class="te-ident te-ident-${kind}" data-ident="${kind}"${data} title="${escapeAttr(title)} — double-click to rename">${escapeAttr(name)}</span>`
+  const ident = (kind, name, title, data = '') => `<button class="te-ident te-ident-${kind}" data-ident="${kind}"${data} title="${escapeAttr(title)} — click to rename">${escapeAttr(name)}</button>`
   const field = (ci, f, fi, record) => {
     const t = fieldType(f)
     return `<span class="te-field">${record ? `${ident('field', f.name, 'Field name', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`
@@ -710,7 +821,7 @@ function renderTypeEditor(error = '') {
           <button class="te-keyword" data-te="keyword" title="${d.keyword === 'data' ? 'data: any constructors — click for newtype (exactly one constructor with one field)' : 'newtype: exactly one constructor with one field — click for data'}">${d.keyword}</button>
           ${ident('type', d.name, 'Type name')}
           ${(d.params || []).map((v, pi) => `<span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span><button class="te-x" data-te="drop-param" data-pi="${pi}" title="Remove this type parameter">−</button></span>`).join('')}
-          <span class="te-drop te-add-param" data-te="add-param" title="Drag a type variable (a, b, …) from TYPES here to add a parameter: data Pair a = Pair a a">+</span>
+          <button class="te-drop te-add-param" data-te="add-param" title="Add type parameter — click to choose or drop a variable" aria-label="Add type parameter">+</button>
         </div>
         ${d.constructors.map((c, ci) => {
           const record = c.fields.some((f) => f.name)
@@ -718,7 +829,7 @@ function renderTypeEditor(error = '') {
         <div class="hs-line te-ctor" data-ci="${ci}">
           <span class="hs-op">${ci ? '|' : '='}</span>
           ${ident('ctor', c.name, `Constructor — a value of ${d.name} is made by exactly one of its constructors`, ` data-ci="${ci}"`)}
-          ${record ? '<span class="hs-punct">{</span>' : ''}${c.fields.map((f, fi) => field(ci, f, fi, record)).join(record ? '<span class="hs-punct">,</span>' : '')}<span class="te-drop te-add" data-te="add-field" title="Drag a type from TYPES here to add a field of that type">+</span>${record ? '<span class="hs-punct">}</span>' : ''}
+          ${record ? '<span class="hs-punct">{</span>' : ''}${c.fields.map((f, fi) => field(ci, f, fi, record)).join(record ? '<span class="hs-punct">,</span>' : '')}<button class="te-drop te-add" data-te="add-field" title="Add field — click to choose or drop a type" aria-label="Add field">+</button>${record ? '<span class="hs-punct">}</span>' : ''}
           ${c.fields.length ? `<button class="te-mode${record ? ' on' : ''}" data-te="toggle-record" title="${record ? 'Record syntax: Con { name :: A } — click for unnamed fields, Con A' : 'Unnamed fields: Con A — click for record syntax, Con { name :: A }'}">{ record }</button>` : ''}
           ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
           <span class="hs-comment te-sig">-- ${escapeAttr(c.name)} ::&nbsp;${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</span>
@@ -727,7 +838,7 @@ function renderTypeEditor(error = '') {
         <div class="hs-line"><span class="hs-op">|</span><button class="te-drop te-add-ctor" data-te="add-ctor" title="Another constructor (a value is one of them): drag a type here for one holding a field of it, or click for one without fields">+ constructor</button></div>
         ${derivingText ? `<div class="hs-line hs-deriving" title="Derived by itself whenever the fields allow">${escapeAttr(derivingText)}</div>` : ''}
       </div>
-      <p class="te-hint">Like a Haskell <code>data</code> declaration: a value of ${escapeAttr(d.name)} is made by one of its constructors (<code>|</code> — a sum), each holding its fields (a product). A constructor is also the function that builds the value, shown in its comment. Everything is dragged from TYPES in the workspace: a type onto a <b>+</b> adds a field, onto a field changes it, onto <b>+ constructor</b> adds a constructor holding it; a type variable onto the <b>+</b> after the name adds a parameter. Double-click a name to rename it.</p>
+      <p class="te-hint">Click a name to rename it. Click + to choose a type, or drag one from Types.</p>
       ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => {
         const custom = nodes[def.id]?.override
         const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
@@ -756,8 +867,8 @@ function renderTypeEditor(error = '') {
     field: (name, el) => { d.constructors[Number(el.dataset.ci)].fields[Number(el.dataset.fi)].name = name },
   }
   typePanel.querySelectorAll('.te-ident').forEach((el) => {
-    el.onclick = () => showToast('Double-click a name to rename it')
-    el.ondblclick = () => {
+    el.onclick = el.ondblclick = () => {
+      if (!el.isConnected) return
       const input = document.createElement('input')
       input.className = `te-rename te-ident-${el.dataset.ident}`
       input.value = el.textContent
@@ -783,7 +894,10 @@ function renderTypeEditor(error = '') {
   })
   $('[data-te="keyword"]').onclick = () => update(() => { d.keyword = d.keyword === 'data' ? 'newtype' : 'data'; if (d.keyword !== 'newtype') d.deriving.newtype = [] })
   const addParam = $('[data-te="add-param"]')
-  addParam.onclick = () => showToast('Drag a type variable (a, b, …) from TYPES in the workspace onto + to add a parameter')
+  addParam.onclick = () => chooseType('Add type parameter', (type) => {
+    if ((d.params || []).includes(type.id)) throw new Error(`${type.id} is already a parameter`)
+    update(() => { d.params = [...(d.params || []), type.id] })
+  }, { variable: true })
   dropZone(addParam, {
     shown: hole(),
     current: hole,
@@ -802,7 +916,13 @@ function renderTypeEditor(error = '') {
       const fl = c.fields[Number(slot.dataset.fi)]
       let shown = hole()
       try { shown = typeFromText(fl.type || '_') } catch {}
-      dropZone(slot, { shown, current: () => shown, commit: (type) => update(() => { fl.type = typeText(type); addParamsOf(type) }) })
+      const changeType = (type) => update(() => { fl.type = typeText(type); addParamsOf(type) })
+      dropZone(slot, { shown, current: () => shown, commit: changeType })
+      slot.tabIndex = 0
+      slot.setAttribute('role', 'button')
+      slot.title = 'Change field type — click to choose or drop a type'
+      slot.onclick = () => chooseType('Change field type', changeType, { initial: fl.type })
+      slot.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); slot.click() } }
     })
     row.querySelector('[data-te="toggle-record"]')?.addEventListener('click', () => update(() => {
       const record = c.fields.some((f) => f.name)
@@ -816,18 +936,15 @@ function renderTypeEditor(error = '') {
     }))
     row.querySelectorAll('[data-te="drop-field"]').forEach((b) => { b.onclick = () => update(() => { c.fields.splice(Number(b.dataset.fi), 1) }) })
     const addField = row.querySelector('[data-te="add-field"]')
-    addField.onclick = () => showToast('Drag a type from TYPES in the workspace onto + to add a field of that type')
-    dropZone(addField, {
-      shown: hole(),
-      current: hole,
-      commit: (type) => update(() => {
+    const appendField = (type) => update(() => {
         const record = c.fields.some((f) => f.name)
         let k = c.fields.length + 1
         while (c.fields.some((f) => f.name === `field${k}`)) k++
         c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: typeText(type) })
         addParamsOf(type)
-      }),
-    })
+      })
+    addField.onclick = () => chooseType('Add field', appendField)
+    dropZone(addField, { shown: hole(), current: hole, commit: appendField })
     row.querySelector('[data-te="drop-ctor"]')?.addEventListener('click', () => update(() => { d.constructors.splice(Number(row.dataset.ci), 1) }))
   })
   const addCtor = (type) => update(() => {
@@ -1762,7 +1879,7 @@ function drawSignatureBar() {
   signatureBar.hidden = !info
   if (!info) return
   const names = [...bodyParams(fnId).map((p) => p.label), 'result']
-  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'drag a type from TYPES onto a block, a class from CLASSES onto a type variable'}</span>`
+  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'Function signature'}</span>`
   wireChain(signatureBar, info)
 }
 
@@ -1828,10 +1945,12 @@ function endTypeDrag(event) {
   else if (event && !moved && cls) openClassEditor(cls) // a click: the class itself — its methods and instances
   else if (event && !moved) showToast('Drag a type onto a chevron of a signature to pin it')
 }
-document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
-window.addEventListener('pointermove', (event) => { if (typeDrag) moveTypeDrag(event) })
-window.addEventListener('pointerup', (event) => { if (typeDrag) endTypeDrag(event) })
-window.addEventListener('pointercancel', () => { if (typeDrag) endTypeDrag(null) })
+function setupTypeDrag() {
+  document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
+  window.addEventListener('pointermove', (event) => { if (typeDrag) moveTypeDrag(event) })
+  window.addEventListener('pointerup', (event) => { if (typeDrag) endTypeDrag(event) })
+  window.addEventListener('pointercancel', () => { if (typeDrag) endTypeDrag(null) })
+}
 // Put `sub` at `path` of what a drop zone holds (see typeExpr.js' pinAt).
 function dropType(zone, path, sub) {
   if (zone.take) return zone.take(sub)
@@ -2106,6 +2225,7 @@ function drawReferenceLinks() {
   ctx.restore()
 }
 function draw() {
+  updateRunLabel()
   elaborationCache = null // something may have changed
   projectPassCache = null
   labelNamer = createNamer()
@@ -2551,8 +2671,8 @@ function renderValueInspector(n) {
   const annotateRow = isNumber
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
-  if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' || n.type === 'literal' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
+  if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b></div></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(n.label)}</b></div></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' || n.type === 'literal' || n.type === 'value' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
 }
 // Why `n` can't be deleted, or null if it can. Builtins are the language
 // itself; a function's Output and parameters are its signature, changed
@@ -2581,7 +2701,7 @@ function functionLawsPanel(n) {
     const status = !r ? '' : r.ok ? `<span class="law ok">✓ ${escapeAttr(r.law)}</span>` : `<span class="law bad">✗ ${escapeAttr(r.law)} — <em>${escapeAttr(r.counterexample)}</em></span>`
     return `<div class="law-row"><button class="law-check" data-law="${law}">${law}</button><button class="law-check" data-pin="${law}" title="Pin this claim on the canvas (re-checked after every edit)">📌</button>${status}</div>`
   })
-  return `<div class="property"><label>LAWS</label>${rows.join('')}</div>`
+  return `<details class="property" data-disclosure="laws:${escapeAttr(n.id)}"><summary>Law checks</summary>${rows.join('')}</details>`
 }
 function runFunctionLaw(n, law) {
   lawResults.set(n.id, { ...(lawResults.get(n.id) || {}), [law]: computeFunctionLaw(n, law) })
@@ -2636,7 +2756,7 @@ function definitionBlock(id, title = 'DEFINITION') {
   if (!tokens) return ''
   const type = def.scheme ? showQual(def.scheme.preds, def.scheme.type) : functionSignature(def, nodes)
   const note = def.note ? `\n-- ${def.note}` : ''
-  return `<div class="property definition"><label>${escapeAttr(title)}</label><pre class="haskell">${escapeAttr(`${def.label} :: ${asciiType(type)}`)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></div>`
+  return `<details class="property definition" data-disclosure="definition:${escapeAttr(id)}"><summary>${escapeAttr(title)}</summary><pre class="haskell">${escapeAttr(`${def.label} :: ${asciiType(type)}`)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></details>`
 }
 // A call's DEFINITION: your own function's, or the definition graph of a
 // library one — with the way into it.
@@ -2719,10 +2839,10 @@ function readonlyInspector(n) {
     const editable = def?.view && isEditableView(active, viewDefs)
     return `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>${escapeAttr(def?.label ?? '')}</b><small>Definition · read-only</small></div><span class="live">VIEW</span></div>${definitionBlock(active)}${editable ? '<button class="evaluate" id="edit-definition">✎ &nbsp; Edit definition</button>' : ''}<div class="inspector-note">${editable ? (def.note ? `A primitive of the runtime. Edit definition makes it your own graph, starting as the primitive itself (${escapeAttr(primLabel(def.label))}) — wrap or replace it; every call then runs yours, checked against the same type.` : 'How the Prelude defines it. Edit definition makes it your own graph — every call then runs yours, checked against the same type.') : 'A read-only definition: nodes can be moved to look, not changed.'}</div>`
   }
-  return `<div class="selected-node"><span class="selected-icon">${n.type === 'function' ? 'ƒ' : '·'}</span><div><b>${escapeAttr(nodeDisplayText(n))}</b><small>${escapeAttr(nodeTypeLabel(n))} · read-only</small></div></div><div class="property"><label>TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${n.type === 'function' ? callDefinitionBlock(n) : ''}${definitions[n.sourceFunctionId]?.lambda ? '<button class="use-again" id="open-body">Open body →</button>' : ''}`
+  return `<div class="selected-node"><span class="selected-icon">${n.type === 'function' ? 'ƒ' : '·'}</span><div><b>${escapeAttr(nodeDisplayText(n))}</b><small>Read-only definition</small></div></div><div class="property"><label>TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${n.type === 'function' ? callDefinitionBlock(n) : ''}${definitions[n.sourceFunctionId]?.lambda ? '<button class="use-again" id="open-body">Open body →</button>' : ''}`
 }
 function useAgainButton(n) {
-  return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
+  return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again</button>'
 }
 function deleteButton(n) {
   return deleteBlocker(n) ? '' : '<button class="delete-node" id="delete-node">Delete node <kbd>Del</kbd></button>'
@@ -2785,28 +2905,53 @@ function inspectorChainHtml(n) {
   inspectorChainInfo = info
   return info ? chainHtml(info.segments, createNamer(), info.opts) : '?'
 }
-// The whole signature of custom function `fnId` (as on its definition), pinnable segment by segment.
-function signatureChainHtml(fnId) {
-  const def = nodes[fnId]
-  const info = def && chainInfo(def, typePass(nodes))
-  inspectorChainInfo = info
-  return info ? chainHtml(info.segments, createNamer(), info.opts) : '?'
-}
 // Inside a body, whatever is selected, the body's own definition is shown
 // too (its tokens marking the selection) — the way back to any other node.
 function enclosingDefinition(n) {
   const fn = state.activeFunction
-  if (!fn || n.type === 'output' || definitions[fn]?.lambda) return ''
+  if (!fn || n.type === 'output' || definitions[fn]?.lambda || (n.sourceFunctionId || n.id) === fn) return ''
   return definitionBlock(fn, `DEFINITION · ƒ ${definitions[fn]?.label ?? ''}`)
+}
+function parameterControls(n) {
+  if (!n.params.length) return ''
+  const editable = nodes[n.id] === n && n.custom
+  return `<div class="property"><label>INPUTS</label>${n.params.map((value, i) => {
+    const source = n.mounted[i] && activeNodes()[n.mounted[i]]
+    return `<div class="port-row">${editable ? `<input class="param-rename" aria-label="Parameter ${i + 1} name" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" />${i ? `<button class="param-move" data-index="${i}" title="Move parameter left">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}</span>`}${source ? `<button class="input-source" data-select-input="${i}" title="Select connected value">${escapeAttr(nodeDisplayText(source))}</button><button class="disconnect-input" data-disconnect-input="${i}" title="Disconnect input" aria-label="Disconnect ${escapeAttr(paramDisplayName(n, i))}">×</button>` : '<small>Not connected</small>'}</div>`
+  }).join('')}</div>`
+}
+function scopeControls(n) {
+  const options = (value) => ['local', 'main', 'shared'].map((scope) => `<option ${value === scope ? 'selected' : ''}>${scope}</option>`).join('')
+  return `<details class="property" data-disclosure="scopes"><summary>Scope settings</summary><label for="function-scope">Function scope</label><select class="scope-select" id="function-scope">${options(n.scope)}</select>${n.params.map((_, i) => `<label class="scope-row">${escapeAttr(paramDisplayName(n, i))}<select class="param-scope" data-index="${i}">${options(n.paramScopes[i])}</select></label>`).join('')}</details>`
+}
+function renderFunctionInspector(n) {
+  const problem = callProblem(n)
+  const editable = nodes[n.id] === n && n.custom
+  return `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${escapeAttr(n.label)}</b><small>${editable ? 'Function definition' : 'Function call'}</small></div></div>
+    ${functionNameRow(n)}${ambiguityRow(n)}
+    ${problem ? `<div class="property broken-call"><label>CONNECTION ERROR</label><div class="connection-tag">${escapeAttr(problem)}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}
+    <div class="property"><label>${isSignatureEditable(n) === 'signature' ? 'FUNCTION SIGNATURE' : 'TYPE AFTER CONNECTIONS'}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>
+    ${parameterControls(n)}
+    <button class="evaluate" id="evaluate">▶ Run this node</button>
+    ${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}
+    ${useAgainButton(n)}
+    ${nodes[n.id] === n ? `<div class="property"><label>PROJECT ENTRY</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Project entry · unset' : 'Set as project entry'}</button></div>` : ''}
+    ${callDefinitionBlock(n)}${customizedRow(n)}${editable ? functionLawsPanel(n) : ''}${scopeControls(n)}${deleteButton(n)}`
 }
 function updateInspector() {
   const n = activeNodes()[state.selected]
-  if (!n) return
+  inspectorChainInfo = null
+  if (!n) { inspector.innerHTML = '<p class="inspector-empty">Select a node to edit its inputs and inspect its type.</p>'; return }
   inspector.innerHTML = (viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `${nodes[state.activeFunction]?.library || nodes[state.activeFunction]?.override ? customizedRow(nodes[state.activeFunction]) : ''}<div class="property"><label>SIGNATURE${nodes[state.activeFunction]?.library ? ' — the Prelude\'s, kept' : ' — drag a type onto a chevron to pin it'}</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
-    : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE${isSignatureEditable(n) === 'signature' ? ' — drag a type onto a chevron to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${callDefinitionBlock(n)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />${i ? `<button class="param-move" data-index="${i}" title="Move this parameter one place left — the body, the definition and every call follow">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
-    : renderValueInspector(n)) + enclosingDefinition(n)
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div></div><div class="property"><label>RESULT TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div><div class="property"><label>RETURN VALUE</label><div class="connection-tag">${n.source ? escapeAttr(nodeDisplayText(activeNodes()[n.source]) || n.value) : 'Connect a node to Output'}</div></div>${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}${state.activeFunction ? `${nodes[state.activeFunction]?.library || nodes[state.activeFunction]?.override ? customizedRow(nodes[state.activeFunction]) : ''}${definitionBlock(state.activeFunction)}` : ''}`
+    : n.type === 'function' ? renderFunctionInspector(n) : renderValueInspector(n)) + enclosingDefinition(n)
+  restoreDisclosureState(inspector)
+  inspector.querySelectorAll('[data-select-input]').forEach((button) => { button.onclick = () => { state.selected = n.mounted[Number(button.dataset.selectInput)]; updateInspector(); draw() } })
+  inspector.querySelectorAll('[data-disconnect-input]').forEach((button) => { button.onclick = () => {
+    const i = Number(button.dataset.disconnectInput)
+    const source = activeNodes()[n.mounted[i]]
+    if (source) { detachMounted(n, i); source.placed = true; source.x = n.x + 100; source.y = n.y + 120; updateInspector(); draw() }
+  } })
   const chain = inspector.querySelector('.inspector-chain')
   if (chain && inspectorChainInfo) wireChain(chain, inspectorChainInfo)
   wireDefinitionTokens()
@@ -2870,6 +3015,17 @@ function updateInspector() {
   // alone is enough to keep the canvas label live; the inspector's own TYPE
   // line catches up next time something reselects this node.
   if (valueInput && (n.type === 'number' || n.type === 'text' || n.type === 'literal')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
+  // A data value is edited as Haskell text, read back at its type (valueParser.js).
+  if (valueInput && n.type === 'value') valueInput.onchange = () => {
+    try { n.data = parseValue(valueInput.value, resolvedValueQual(n).type, types) } catch (error) {
+      if (!(error instanceof ParseError)) throw error
+      valueInput.value = nodeDisplayText(n)
+      return showToast(`Not a ${showQual([], resolvedValueQual(n).type)} — ${error.message}`)
+    }
+    const at = slotHost(n)
+    if (at) at.host.params[at.index] = nodeDisplayText(n)
+    updateInspector(); draw()
+  }
 }
 // Plays `fn`: evaluates it as a value (callee applied to its applied slots —
 // see src/evaluator.js) and drops the result next to it. A fully-applied
@@ -2894,9 +3050,20 @@ function executeFunction(fn) {
     throw error
   }
   state.running = true
-  const id = `output-${++outputId}`
-  const position = { x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45 }
+  const position = { x: functionBlockRight(fn) + 90, y: fn.y + ((outputId + 1) % 2) * 45 }
   const valueType = entry ? valueTypeOfEntry(entry) : null
+  // A function value comes back as a call you can keep editing and play again.
+  const rebuilt = isClosure(result) && rebuildCall(result, graph, position)
+  if (rebuilt) {
+    // Its arguments sit to its left: move the whole tree clear of `fn`.
+    const tree = [graph[rebuilt], ...pluggedDescendants(graph[rebuilt], graph)]
+    const left = Math.min(...tree.map((k) => (isFunction(k) ? functionBlockLeft(k) : k.x - chipHalfWidth(k))))
+    tree.forEach((k) => { k.x += position.x - left })
+    state.selected = rebuilt; updateInspector(); draw()
+    setTimeout(() => { state.running = false; draw() }, 300)
+    return
+  }
+  const id = `output-${++outputId}`
   if (isClosure(result)) {
     const appliedCount = entry?.applied?.filter(Boolean).length ?? 0
     // Keep the residual's class constraints with it (`Semiring a ⇒ a → a`,
@@ -2920,6 +3087,50 @@ function executeFunction(fn) {
   }
   state.selected = id; updateInspector(); draw()
   setTimeout(() => { state.running = false; draw() }, 300)
+}
+// A closure (a Play result with open slots) as an ordinary call of its
+// callee: each filled argument plugged back in — a number, Bool, Char or
+// String as a literal, other data as a value node, a function as a call
+// rebuilt the same way (or the stored closure, when it can't be) — and the
+// open slots left open. The call's own type is inferred again like any
+// other, so it can be edited, filled and played. Null when the callee isn't
+// a definition a call can name.
+function rebuildCall(closure, graph, position) {
+  const def = definitions[closure.callee]
+  if (!def?.params || viewDefs[closure.callee] || def.builtin === 'listOf' || def.params.length !== closure.args.length) return null
+  const id = `output-${++outputId}`
+  const node = graph[id] = {
+    id, type: 'function', sourceFunctionId: closure.callee, ...position,
+    label: def.label, params: def.params.map(() => ''),
+    mounted: def.params.map(() => null), paramScopes: def.params.map(() => 'local'),
+    scope: 'local', color: def.color,
+  }
+  closure.args.forEach((arg, i) => {
+    if (arg === null) return
+    const child = argumentNode(arg, graph, position)
+    Object.assign(graph[child], { mountedTo: `${id}:${i}`, connected: true, placed: true })
+    if (graph[child].type === 'function') graph[child].composedInto = id
+    node.mounted[i] = child
+    node.params[i] = nodeDisplayText(graph[child], graph)
+  })
+  layoutTree(node, graph)
+  return id
+}
+// One argument of a rebuilt call, as a new node (see rebuildCall).
+function argumentNode(value, graph, position) {
+  if (isClosure(value)) {
+    const rebuilt = rebuildCall(value, graph, position)
+    if (rebuilt) return rebuilt
+    const id = `output-${++outputId}`
+    graph[id] = { id, type: 'curried', closure: value, ...position, label: definitions[value.callee]?.label ?? value.callee, value: 'ƒ', remaining: value.args.filter((a) => a === null).length, color: '#a96ef0' }
+    return id
+  }
+  const id = `output-${++outputId}`
+  // A numeric literal still waiting for its dictionary (evaluator.js literalAt) keeps its text.
+  const text = value?.kind === 'literal' ? value.text : showValue(value, types)
+  if (parseLiteral(text)) graph[id] = { id, type: 'literal', label: 'literal', value: text, color: '#4f8ef7', ...position }
+  else graph[id] = { id, type: 'value', data: value, ...position, label: 'value', color: '#3cbe9e' }
+  return id
 }
 // The node under a canvas point (hidden ones — inside a folded call — have no hitbox).
 function hitNode(x, y) {
@@ -3059,111 +3270,113 @@ function setZoom(nextZoom, clientX = canvas.clientWidth / 2, clientY = canvas.cl
   document.querySelector('#zoom-level').textContent = `${Math.round(state.zoom * 100)}%`
   draw()
 }
-canvas.addEventListener('pointerdown', (event) => {
-  if (state.editingLiteral) finishLiteralEdit(state.editingLiteral) // clicking away is done typing
-  const p = canvasPoint(event), node = hitNode(p.x, p.y)
-  canvas.setPointerCapture(event.pointerId)
-  if (node) {
-    // Shift+click adds to / removes from a multi-selection (moved, deleted and copied together).
-    if (event.shiftKey) {
-      if (state.multi.size === 0 && state.selected && activeNodes()[state.selected]) state.multi.add(state.selected)
-      state.multi.has(node.id) ? state.multi.delete(node.id) : state.multi.add(node.id)
-    } else if (!state.multi.has(node.id)) state.multi.clear()
-    state.selected = node.id
-    if (node.type === 'output') {
-      updateInspector()
+function setupCanvasInput() {
+  canvas.addEventListener('pointerdown', (event) => {
+    if (state.editingLiteral) finishLiteralEdit(state.editingLiteral) // clicking away is done typing
+    const p = canvasPoint(event), node = hitNode(p.x, p.y)
+    canvas.setPointerCapture(event.pointerId)
+    if (node) {
+      // Shift+click adds to / removes from a multi-selection (moved, deleted and copied together).
+      if (event.shiftKey) {
+        if (state.multi.size === 0 && state.selected && activeNodes()[state.selected]) state.multi.add(state.selected)
+        state.multi.has(node.id) ? state.multi.delete(node.id) : state.multi.add(node.id)
+      } else if (!state.multi.has(node.id)) state.multi.clear()
+      state.selected = node.id
+      if (node.type === 'output') {
+        updateInspector()
+        draw()
+        return
+      }
+      beginDrag(node, p)
+      updateInspector(); draw()
+    } else {
+      if (!event.shiftKey) state.multi.clear()
+      state.pan = { x: event.clientX, y: event.clientY, offsetX: state.offset.x, offsetY: state.offset.y }
+      canvas.classList.add('panning')
+    }
+  })
+  // pointermove/pointerup/pointercancel live on `window`, not `canvas`, because
+  // a drag can now also START on a DOM slot chip (see updatePortEditor's
+  // detach handler) — that pointerdown's target is a sibling overlay element,
+  // not a descendant of canvas, so canvas-scoped listeners would never see the
+  // rest of that drag. Both drag origins funnel through the same state.drag,
+  // so one pair of window listeners drives them identically.
+  window.addEventListener('pointermove', (event) => {
+    if (state.wire) {
+      state.wire.at = canvasPoint(event)
+      if (!state.wire.moved && Math.hypot(event.movementX, event.movementY) > 2) { state.wire.moved = true; unplug(state.wire.node) }
+      if (state.wire.moved) state.snapTarget = findWireTarget(state.wire.node, state.wire.at)
       draw()
+    } else if (state.drag) {
+      const p = canvasPoint(event)
+      if (Math.hypot(event.movementX, event.movementY) > 2) state.drag.moved = true
+      const dx = p.x - state.drag.dx - state.drag.node.x, dy = p.y - state.drag.dy - state.drag.node.y
+      // the rest of a multi-selection moves with it, and everything plugged into what moves
+      const moving = new Set([state.drag.node])
+      if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m) moving.add(m) })
+      ;[...moving].forEach((m) => pluggedDescendants(m, activeNodes(), moving))
+      moving.forEach((m) => { m.x += dx; m.y += dy })
+      draw()
+    } else if (state.pan) {
+      state.offset.x = state.pan.offsetX + event.clientX - state.pan.x
+      state.offset.y = state.pan.offsetY + event.clientY - state.pan.y
+      draw()
+    }
+  })
+  window.addEventListener('pointerup', (event) => {
+    if (state.wire) {
+      // Released over nothing, a moved wire stays pulled out: disconnected.
+      if (state.wire.moved) finishConnection(state.wire.node)
+      endWire(); updateInspector(); draw()
       return
     }
-    beginDrag(node, p)
-    updateInspector(); draw()
-  } else {
-    if (!event.shiftKey) state.multi.clear()
-    state.pan = { x: event.clientX, y: event.clientY, offsetX: state.offset.x, offsetY: state.offset.y }
-    canvas.classList.add('panning')
-  }
-})
-// pointermove/pointerup/pointercancel live on `window`, not `canvas`, because
-// a drag can now also START on a DOM slot chip (see updatePortEditor's
-// detach handler) — that pointerdown's target is a sibling overlay element,
-// not a descendant of canvas, so canvas-scoped listeners would never see the
-// rest of that drag. Both drag origins funnel through the same state.drag,
-// so one pair of window listeners drives them identically.
-window.addEventListener('pointermove', (event) => {
-  if (state.wire) {
-    state.wire.at = canvasPoint(event)
-    if (!state.wire.moved && Math.hypot(event.movementX, event.movementY) > 2) { state.wire.moved = true; unplug(state.wire.node) }
-    if (state.wire.moved) state.snapTarget = findWireTarget(state.wire.node, state.wire.at)
-    draw()
-  } else if (state.drag) {
+    if (!state.drag && !state.pan) return
+    if (!state.drag) {
+      state.pan = null
+      canvas.classList.remove('panning')
+      return
+    }
+    const wasDragged = state.drag.moved
+    endDrag(); updateInspector(); draw()
+    if (wasDragged) {
+      state.suppressClick = true
+      event.stopPropagation()
+    }
+  })
+  window.addEventListener('pointercancel', () => { endDrag(); endWire(); state.pan = null; canvas.classList.remove('panning'); draw() })
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault()
+    setZoom(state.zoom + (event.deltaY < 0 ? .1 : -.1), event.clientX, event.clientY)
+  }, { passive: false })
+  canvas.addEventListener('click', (event) => {
+    if (state.suppressClick) {
+      state.suppressClick = false
+      return
+    }
     const p = canvasPoint(event)
-    if (Math.hypot(event.movementX, event.movementY) > 2) state.drag.moved = true
-    const dx = p.x - state.drag.dx - state.drag.node.x, dy = p.y - state.drag.dy - state.drag.node.y
-    // the rest of a multi-selection moves with it, and everything plugged into what moves
-    const moving = new Set([state.drag.node])
-    if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m) moving.add(m) })
-    ;[...moving].forEach((m) => pluggedDescendants(m, activeNodes(), moving))
-    moving.forEach((m) => { m.x += dx; m.y += dy })
-    draw()
-  } else if (state.pan) {
-    state.offset.x = state.pan.offsetX + event.clientX - state.pan.x
-    state.offset.y = state.pan.offsetY + event.clientY - state.pan.y
-    draw()
-  }
-})
-window.addEventListener('pointerup', (event) => {
-  if (state.wire) {
-    // Released over nothing, a moved wire stays pulled out: disconnected.
-    if (state.wire.moved) finishConnection(state.wire.node)
-    endWire(); updateInspector(); draw()
-    return
-  }
-  if (!state.drag && !state.pan) return
-  if (!state.drag) {
-    state.pan = null
-    canvas.classList.remove('panning')
-    return
-  }
-  const wasDragged = state.drag.moved
-  endDrag(); updateInspector(); draw()
-  if (wasDragged) {
-    state.suppressClick = true
-    event.stopPropagation()
-  }
-})
-window.addEventListener('pointercancel', () => { endDrag(); endWire(); state.pan = null; canvas.classList.remove('panning'); draw() })
-canvas.addEventListener('wheel', (event) => {
-  event.preventDefault()
-  setZoom(state.zoom + (event.deltaY < 0 ? .1 : -.1), event.clientX, event.clientY)
-}, { passive: false })
-canvas.addEventListener('click', (event) => {
-  if (state.suppressClick) {
-    state.suppressClick = false
-    return
-  }
-  const p = canvasPoint(event)
-  const fn = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
-  if (fn) {
-    executeFunction(fn)
-    return
-  }
-})
-// A single click only selects (so the inspector shows the function);
-// double-clicking a custom function — its definition or a call to it — on
-// `main` opens its body, as does the inspector's "Open body". Double-clicking
-// a call to anything else opens its definition (a read-only view, or what
-// you took over), as does "Open definition".
-canvas.addEventListener('dblclick', (event) => {
-  const p = canvasPoint(event)
-  const literal = Object.values(activeNodes()).find((n) => n.type === 'literal' && isVisible(n) && pointInValueBlock(n, p.x, p.y))
-  if (literal) return startLiteralEdit(literal)
-  const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
-  const definitionId = selected && (selected.sourceFunctionId || selected.id)
-  if (selected && definitions[definitionId]?.lambda) enterFunction(definitionId)
-  else if (selected && nodes[definitionId]?.library) enterFunction(definitionId)
-  else if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
-  else if (selected && !definitions[definitionId]?.custom) openDefinitionView(definitionId, selected.params.length)
-})
+    const fn = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
+    if (fn) {
+      executeFunction(fn)
+      return
+    }
+  })
+  // A single click only selects (so the inspector shows the function);
+  // double-clicking a custom function — its definition or a call to it — on
+  // `main` opens its body, as does the inspector's "Open body". Double-clicking
+  // a call to anything else opens its definition (a read-only view, or what
+  // you took over), as does "Open definition".
+  canvas.addEventListener('dblclick', (event) => {
+    const p = canvasPoint(event)
+    const literal = Object.values(activeNodes()).find((n) => n.type === 'literal' && isVisible(n) && pointInValueBlock(n, p.x, p.y))
+    if (literal) return startLiteralEdit(literal)
+    const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
+    const definitionId = selected && (selected.sourceFunctionId || selected.id)
+    if (selected && definitions[definitionId]?.lambda) enterFunction(definitionId)
+    else if (selected && nodes[definitionId]?.library) enterFunction(definitionId)
+    else if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
+    else if (selected && !definitions[definitionId]?.custom) openDefinitionView(definitionId, selected.params.length)
+  })
+}
 function enterFunction(id) {
   if (nodes[id]?.readonly) return
   const view = !functionBodies[id] && viewBodies[id]
@@ -3178,13 +3391,26 @@ function enterFunction(id) {
   updateInspector()
   fitToView()
 }
-document.querySelector('#back-graph').onclick = () => {
-  state.activeFunction = state.functionStack.pop() || null
-  state.selected = state.activeFunction ? 'output' : 'add'
-  renderFunctionLibrary(); updateInspector(); fitToView()
+function setupBackButton() {
+  document.querySelector('#back-graph').onclick = () => {
+    state.activeFunction = state.functionStack.pop() || null
+    state.selected = state.activeFunction ? 'output' : 'add'
+    renderFunctionLibrary(); updateInspector(); fitToView()
+  }
 }
 // Plays the entry function (always in `main`), falling back to whichever
 // function is selected when no entry has been set.
+function updateRunLabel() {
+  const entry = entryId && nodes[entryId]
+  const selected = activeNodes()[state.selected]
+  const target = entry || (selected && isFunction(selected) ? selected : null)
+  const label = target ? `Run ${target.label}${entry ? '' : ' (selected)'}` : 'Select a function'
+  const button = document.querySelector('#run')
+  button.querySelector('span').textContent = label
+  button.title = `${entry ? 'Project entry' : 'Selected node'}: ${target?.label || 'none'} (${shortcutModifier} Enter)`
+  button.disabled = !target
+  document.querySelector('#run-shortcut-label').textContent = label
+}
 function runEntry() {
   const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
   if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
@@ -3197,7 +3423,9 @@ function runEntry() {
   if (selected && isFunction(selected)) return executeFunction(selected)
   showToast('Select a function, or make one the Run graph entry in the inspector')
 }
-document.querySelector('#run').onclick = runEntry
+function setupRunButton() {
+  document.querySelector('#run').onclick = runEntry
+}
 // --- Playing a Program ------------------------------------------------------
 // When the entry point evaluates to a `Program m e` (see builtinSchemes.js'
 // `program` and src/runtime.js), Run graph plays it: the view is rendered in
@@ -3383,16 +3611,18 @@ function renderPlay() {
     return li
   }))
 }
-window.addEventListener('beforeunload', saveGame)
-// Keys go to the game's onKey subscriptions while it's playing (not while typing in a field).
-window.addEventListener('keydown', (event) => {
-  if (!play || play.editing || event.target.closest?.('input, select, textarea')) return
-  try {
-    if (play.game.keyPressed(event.key)) { event.preventDefault(); renderPlay() }
-  } catch (error) {
-    gameError(error)
-  }
-})
+function setupPlayInput() {
+  window.addEventListener('beforeunload', saveGame)
+  // Keys go to the game's onKey subscriptions while it's playing (not while typing in a field).
+  window.addEventListener('keydown', (event) => {
+    if (!play || play.editing || document.querySelector('dialog[open]') || event.target.closest?.('input, select, textarea')) return
+    try {
+      if (play.game.keyPressed(event.key)) { event.preventDefault(); renderPlay() }
+    } catch (error) {
+      gameError(error)
+    }
+  })
+}
 // Lay a template's custom functions out in a grid to the right of the
 // builtins (the template can't know where the builtins sit).
 function layoutCustomDefinitions() {
@@ -3409,31 +3639,35 @@ function layoutCustomDefinitions() {
   draw()
 }
 const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame], dice: ['the dice roller', buildDice], blackjack: ['the blackjack game', buildBlackjack] }
-document.querySelector('#template').onchange = (event) => {
-  const [name, build] = TEMPLATES[event.target.value] || []
-  event.target.value = ''
-  if (!build) return
-  stopGame()
-  state.activeFunction = null
-  loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
-  layoutCustomDefinitions()
-  fitToView()
-  showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
+function setupTemplates() {
+  document.querySelector('#template').onchange = (event) => {
+    const [name, build] = TEMPLATES[event.target.value] || []
+    event.target.value = ''
+    if (!build) return
+    stopGame()
+    state.activeFunction = null
+    loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
+    layoutCustomDefinitions()
+    fitToView()
+    showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
+  }
 }
 // Download the entry point's game as one HTML file that runs without the
 // editor: the player modules plus every definition, body and type it needs.
-document.querySelector('#export-game').onclick = () => {
-  const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
-  if (ambiguous) return showToast(`Can't export — ${ambiguous}`)
-  const info = entryId && nodes[entryId] ? programInfo(entryId) : null
-  if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
-  const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
-  const data = { title, definitions: { ...libraryDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
-  const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
-  const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
-  link.click()
-  URL.revokeObjectURL(url)
-  showToast(`Exported ${link.download} — open it in any browser to play`)
+function setupGameExport() {
+  document.querySelector('#export-game').onclick = () => {
+    const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
+    if (ambiguous) return showToast(`Can't export — ${ambiguous}`)
+    const info = entryId && nodes[entryId] ? programInfo(entryId) : null
+    if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
+    const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
+    const data = { title, definitions: { ...libraryDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
+    const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
+    const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
+    link.click()
+    URL.revokeObjectURL(url)
+    showToast(`Exported ${link.download} — open it in any browser to play`)
+  }
 }
 // --- Toasts ---------------------------------------------------------------
 let toastTimer = null
@@ -3506,30 +3740,32 @@ function redo() {
   if (snapshot) { restoreSnapshot(snapshot); persist(snapshot) }
   updateHistoryButtons()
 }
-document.querySelector('#undo').onclick = undo
-document.querySelector('#redo').onclick = redo
-// Reset is an ordinary (undoable) edit back to the built-in starting graph.
-document.querySelector('#reset').onclick = () => { state.activeFunction = null; restoreSnapshot(defaultSnapshot); fitToView() }
-document.querySelector('#export').onclick = () => {
-  const url = URL.createObjectURL(new Blob([currentSnapshot()], { type: 'application/json' }))
-  const link = Object.assign(document.createElement('a'), { href: url, download: 'hs-simulate-project.json' })
-  link.click()
-  URL.revokeObjectURL(url)
-}
-const importFile = document.querySelector('#import-file')
-document.querySelector('#import').onclick = () => importFile.click()
-importFile.onchange = async () => {
-  const file = importFile.files[0]
-  importFile.value = ''
-  if (!file) return
-  try {
-    state.activeFunction = null
-    loadProject(mergeBuiltins(upgradeProject(parseProject(await file.text())), builtinNodes, builtinBodies))
-    fitToView()
-    showToast(`Imported ${file.name}`)
-  } catch (error) {
-    if (error instanceof ProjectError) return showToast(`Import failed: ${error.message}`)
-    throw error
+function setupProjectActions() {
+  document.querySelector('#undo').onclick = undo
+  document.querySelector('#redo').onclick = redo
+  // Reset is an ordinary (undoable) edit back to the built-in starting graph.
+  document.querySelector('#reset').onclick = () => { state.activeFunction = null; restoreSnapshot(defaultSnapshot); fitToView() }
+  document.querySelector('#export').onclick = () => {
+    const url = URL.createObjectURL(new Blob([currentSnapshot()], { type: 'application/json' }))
+    const link = Object.assign(document.createElement('a'), { href: url, download: 'hs-simulate-project.json' })
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+  const importFile = document.querySelector('#import-file')
+  document.querySelector('#import').onclick = () => importFile.click()
+  importFile.onchange = async () => {
+    const file = importFile.files[0]
+    importFile.value = ''
+    if (!file) return
+    try {
+      state.activeFunction = null
+      loadProject(mergeBuiltins(upgradeProject(parseProject(await file.text())), builtinNodes, builtinBodies))
+      fitToView()
+      showToast(`Imported ${file.name}`)
+    } catch (error) {
+      if (error instanceof ProjectError) return showToast(`Import failed: ${error.message}`)
+      throw error
+    }
   }
 }
 // --- Copy / paste -------------------------------------------------------------
@@ -3571,106 +3807,135 @@ function pasteClipboard() {
   showToast(`Pasted ${clipboard.length} node${clipboard.length > 1 ? 's' : ''}`)
 }
 // --- Keyboard ---------------------------------------------------------------
-window.addEventListener('keydown', (event) => {
-  const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
-  const mod = event.ctrlKey || event.metaKey
-  if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
-  if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); searchInput.focus(); searchInput.select(); return }
-  if (typing || document.querySelector('#function-dialog') || play) return // no editing shortcuts while a game is playing
-  const key = event.key.toLowerCase()
-  if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
-  else if (mod && key === 'y') { event.preventDefault(); redo() }
-  else if (event.key === 'Delete' || event.key === 'Backspace') {
-    event.preventDefault()
-    if (state.multi.size) { const ids = [...state.multi]; state.multi.clear(); ids.forEach((id) => activeNodes()[id] && deleteNode(id)) }
-    else deleteNode(state.selected)
-  } else if (mod && key === 'c') { event.preventDefault(); copySelection() }
-  else if (mod && key === 'v') { event.preventDefault(); pasteClipboard() }
-})
-document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
-document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
-document.querySelector('#fit').onclick = () => fitToView()
-document.querySelector('#unfold-all').onclick = () => setAllFolded(false)
-document.querySelector('#fold-all').onclick = () => setAllFolded(true)
-// The canvas bitmap has to track the element's CSS size, not just the
-// window's: the element also changes size without any window resize (the
-// inspector collapsing at the breakpoint, layout settling after fonts load),
-// and a stale bitmap gets stretched by CSS — the drawn blocks come out
-// squashed and no longer line up with the DOM slots laid over them.
-new ResizeObserver(resize).observe(canvas)
-window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
-document.querySelector('.add-node').addEventListener('click', createCustomFunction)
-document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
-document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
-document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
-  if (readonlyBlocked()) return
-  if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
-  if (item.dataset.type === 'lambda') return createLambda()
-  const graph = activeNodes()
-  if (item.dataset.type === 'text') {
-    const id = `text-${Date.now()}`
-    graph[id] = { id, type: 'text', label: 'text', value: 'text', color: '#e8b23c', ...freePosition(graph, CHIP_W) }
+function setupKeyboard() {
+  window.addEventListener('keydown', (event) => {
+    const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
+    const mod = event.ctrlKey || event.metaKey
+    if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
+    if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); searchInput.focus(); searchInput.select(); return }
+    if (typing || document.querySelector('#function-dialog, dialog[open]') || play) return // no editing shortcuts while a game is playing
+    const key = event.key.toLowerCase()
+    if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
+    else if (mod && key === 'y') { event.preventDefault(); redo() }
+    else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault()
+      if (state.multi.size) { const ids = [...state.multi]; state.multi.clear(); ids.forEach((id) => activeNodes()[id] && deleteNode(id)) }
+      else deleteNode(state.selected)
+    } else if (mod && key === 'c') { event.preventDefault(); copySelection() }
+    else if (mod && key === 'v') { event.preventDefault(); pasteClipboard() }
+  })
+}
+function setupToolbar() {
+  document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
+  document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
+  document.querySelector('#fit').onclick = () => fitToView()
+  document.querySelector('#unfold-all').onclick = () => setAllFolded(false)
+  document.querySelector('#fold-all').onclick = () => setAllFolded(true)
+  // The canvas bitmap has to track the element's CSS size, not just the
+  // window's: the element also changes size without any window resize (the
+  // inspector collapsing at the breakpoint, layout settling after fonts load),
+  // and a stale bitmap gets stretched by CSS — the drawn blocks come out
+  // squashed and no longer line up with the DOM slots laid over them.
+  new ResizeObserver(resize).observe(canvas)
+  window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
+}
+function setupSidebarButtons() {
+  document.querySelector('.add-node').addEventListener('click', createCustomFunction)
+  document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
+  document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
+  document.querySelectorAll('#value-library .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
+    if (readonlyBlocked()) return
+    if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
+    if (item.dataset.type === 'lambda') return createLambda()
+    const graph = activeNodes()
+    if (item.dataset.type === 'text') {
+      const id = `text-${Date.now()}`
+      graph[id] = { id, type: 'text', label: 'text', value: 'text', color: '#e8b23c', ...freePosition(graph, CHIP_W) }
+      state.selected = id
+      updateInspector(); draw()
+      return
+    }
+    if (!['number', 'boolean'].includes(item.dataset.type)) return
+    const isBoolean = item.dataset.type === 'boolean'
+    const id = `${item.dataset.type}-${Date.now()}`
+    graph[id] = { id, type: isBoolean ? 'boolean' : 'number', typeName: isBoolean ? 'Bool' : 'Int', label: isBoolean ? 'boolean' : 'number', value: isBoolean ? 'false' : '0', color: isBoolean ? '#ed6b84' : '#4f8ef7', ...freePosition(graph, CHIP_W) }
     state.selected = id
-    updateInspector(); draw()
-    return
-  }
-  if (!['number', 'boolean'].includes(item.dataset.type)) return
-  const isBoolean = item.dataset.type === 'boolean'
-  const id = `${item.dataset.type}-${Date.now()}`
-  graph[id] = { id, type: isBoolean ? 'boolean' : 'number', typeName: isBoolean ? 'Bool' : 'Int', label: isBoolean ? 'boolean' : 'number', value: isBoolean ? 'false' : '0', color: isBoolean ? '#ed6b84' : '#4f8ef7', ...freePosition(graph, CHIP_W) }
-  state.selected = id
-  updateInspector()
-  draw()
-}))
-initLearningPanel({
-  workspace: document.querySelector('.workspace'),
-  onModalOpen: () => {
-    endDrag()
-    endWire()
-    if (typeDrag) endTypeDrag(null)
-    state.pan = null
-    state.snapTarget = null
-    canvas.classList.remove('panning')
+    updateInspector()
     draw()
-  },
-})
+  }))
+}
+function setupLearningPanel() {
+  initLearningPanel({
+    workspace: document.querySelector('.workspace'),
+    onModalOpen: () => {
+      endDrag()
+      endWire()
+      if (typeDrag) endTypeDrag(null)
+      state.pan = null
+      state.snapTarget = null
+      canvas.classList.remove('panning')
+      draw()
+    },
+  })
+}
 // Inspector visibility has its own column and controls, independent of learning panels.
-const workspace = document.querySelector('.workspace')
-const inspectorPanel = document.querySelector('.inspector')
-inspectorPanel.id = 'graph-inspector'
-const closeInspector = document.querySelector('.close-inspector')
-closeInspector.setAttribute('aria-label', 'Inspector 닫기')
-const reopenInspector = document.createElement('button')
-reopenInspector.type = 'button'
-reopenInspector.className = 'tool-button inspector-reopen'
-reopenInspector.textContent = 'Inspector'
-reopenInspector.setAttribute('aria-label', 'Inspector 열기')
-reopenInspector.setAttribute('aria-controls', inspectorPanel.id)
-reopenInspector.setAttribute('aria-expanded', 'true')
-reopenInspector.hidden = true
-document.querySelector('.toolbar-actions').prepend(reopenInspector)
-closeInspector.addEventListener('click', () => {
-  inspectorPanel.hidden = true
-  workspace.classList.add('inspector-hidden')
-  reopenInspector.hidden = false
-  reopenInspector.setAttribute('aria-expanded', 'false')
-  reopenInspector.focus({ preventScroll: true })
-})
-reopenInspector.addEventListener('click', () => {
-  inspectorPanel.hidden = false
-  workspace.classList.remove('inspector-hidden')
-  reopenInspector.hidden = true
-  reopenInspector.setAttribute('aria-expanded', 'true')
-  closeInspector.focus({ preventScroll: true })
-})
+function setupInspectorButtons() {
+  const inspectorPanel = document.querySelector('.inspector')
+  const closeInspector = document.querySelector('.close-inspector')
+  closeInspector.setAttribute('aria-label', 'Inspector 닫기')
+  const reopenInspector = document.createElement('button')
+  reopenInspector.type = 'button'
+  reopenInspector.className = 'tool-button inspector-reopen'
+  reopenInspector.textContent = 'Inspector'
+  reopenInspector.setAttribute('aria-label', 'Inspector 열기')
+  reopenInspector.setAttribute('aria-controls', inspectorPanel.id)
+  reopenInspector.setAttribute('aria-expanded', String(!inspectorPanel.hidden))
+  reopenInspector.hidden = !inspectorPanel.hidden
+  document.querySelector('.toolbar-actions').prepend(reopenInspector)
+  closeInspector.addEventListener('click', () => {
+    toggleInspector(false)
+    reopenInspector.focus({ preventScroll: true })
+  })
+  reopenInspector.addEventListener('click', () => {
+    toggleInspector(true)
+    closeInspector.focus({ preventScroll: true })
+  })
+}
 // Restore the autosaved project, if any, then start history from whatever
 // is on screen.
-try {
-  const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
-} catch (error) {
-  showToast(`Couldn't restore the saved project: ${error.message}`)
+function restoreSavedProject() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
+  } catch (error) {
+    showToast(`Couldn't restore the saved project: ${error.message}`)
+  }
+  renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
+  history.reset(currentSnapshot())
+  updateHistoryButtons()
 }
-renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
-history.reset(currentSnapshot())
-updateHistoryButtons()
+
+// --- Start ------------------------------------------------------------------
+// Every piece of the page is wired by its own setup function; `main` runs
+// them in order (listeners on the same event fire in this order) and then
+// brings back the saved project.
+function main() {
+  setupShortcutHints()
+  setupTopBar()
+  setupSearch()
+  setupTypeDrag()
+  setupCanvasInput()
+  setupBackButton()
+  setupRunButton()
+  setupPlayInput()
+  setupTemplates()
+  setupGameExport()
+  setupProjectActions()
+  setupKeyboard()
+  setupToolbar()
+  setupSidebarButtons()
+  setupLearningPanel()
+  setupInspectorButtons()
+  restoreSavedProject()
+}
+main()
