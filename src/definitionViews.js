@@ -79,6 +79,7 @@ const PRIMITIVE_NOTES = {
   traverse: METHOD('Traversable'), pure: METHOD('Applicative'), ap: METHOD('Applicative'), bind: METHOD('Monad'),
   nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
+  uncons: 'primitive · the eliminator of [a]: the inverse of [] and (:), since [a] ≅ 1 + a × [a] (Lambek\'s lemma)',
   mappend: METHOD('Semigroup'), mempty: METHOD('Monoid'), fmap: METHOD('Functor'), foldMap: METHOD('Foldable'),
   leq: METHOD('PartialOrd'), join: METHOD('Lattice'), meet: METHOD('Lattice'), scale: METHOD('VectorSpace'),
   show: METHOD('Show'), showFFloat: 'primitive · decimal rendering of a floating-point number', showCompact: 'primitive · compact rendering of a number (1.2K, 3.4M)',
@@ -101,6 +102,8 @@ const fraction = (g) => {
   const p = g.named(g.call('prelude:properFraction', [g.param(0)]), 'p')
   return [g.named(g.call('prelude:fst', [p]), 'n'), g.named(g.call('prelude:snd', [g.ref(p)]), 'r')]
 }
+// apply (apply f x) y — a two-argument application, made explicit.
+const app2 = (g, f, x, y) => g.call('apply', [g.call('apply', [f, x]), y])
 const COLOURS = { red: ['1', '0', '0'], green: ['0', '0.7', '0'], blue: ['0', '0', '1'], yellow: ['1', '0.85', '0'], black: ['0', '0', '0'], white: ['1', '1', '1'] }
 // The functions written as graphs, by builtin name. Each gets a builder
 // (see `graph` below) and returns the node feeding Output.
@@ -131,6 +134,143 @@ const GRAPHS = {
     ]),
     g.param(1),
   ]),
+  // null xs = foldr (\x acc -> False) True xs
+  null: (g) => g.call('prelude:foldr', [g.lambda(['x', 'acc'], (l) => l.bool(false)), { lit: 'True' }, g.param(0)]),
+  // foldl f z xs = foldr (\f x k acc -> apply k (apply (apply f acc) x)) identity xs `apply` z
+  foldl: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['f', 'x', 'k', 'acc'], (l) => l.call('apply', [l.param(2), app2(l, l.param(0), l.param(3), l.param(1))]), [g.param(0)]),
+      g.call('identity', [null]),
+      g.param(2),
+    ]),
+    g.param(1),
+  ]),
+  // filter p xs = foldr (\p x acc -> select (apply p x) (x : acc) acc) [] xs
+  filter: (g) => g.call('prelude:foldr', [
+    g.lambda(['p', 'x', 'acc'], (l) => l.call('select', [l.call('apply', [l.param(0), l.param(1)]), l.call('prelude:cons', [l.param(1), l.param(2)]), l.param(2)]), [g.param(0)]),
+    g.call('prelude:nil', []),
+    g.param(1),
+  ]),
+  // reverse xs = foldr (\x k acc -> apply k (x : acc)) identity xs `apply` []
+  reverse: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['x', 'k', 'acc'], (l) => l.call('apply', [l.param(1), l.call('prelude:cons', [l.param(0), l.param(2)])])),
+      g.call('identity', [null]),
+      g.param(0),
+    ]),
+    g.call('prelude:nil', []),
+  ]),
+  // concat xss = foldr (++) [] xss
+  concat: (g) => g.call('prelude:foldr', [g.call('prelude:append', [null, null]), g.call('prelude:nil', []), g.param(0)]),
+  // concatMap f xs = foldr (\f x acc -> apply f x ++ acc) [] xs
+  concatMap: (g) => g.call('prelude:foldr', [
+    g.lambda(['f', 'x', 'acc'], (l) => l.call('prelude:append', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    g.call('prelude:nil', []),
+    g.param(1),
+  ]),
+  // elem x xs = foldr (\x y acc -> x == y || acc) False xs
+  elem: (g) => g.call('prelude:foldr', [
+    g.lambda(['x', 'y', 'acc'], (l) => l.call('prelude:or', [l.call('eq', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    { lit: 'False' },
+    g.param(1),
+  ]),
+  // any p xs = foldr (\p x acc -> apply p x || acc) False xs;  all with (&&) and True
+  any: (g) => g.call('prelude:foldr', [
+    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:or', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    { lit: 'False' },
+    g.param(1),
+  ]),
+  all: (g) => g.call('prelude:foldr', [
+    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:and', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    { lit: 'True' },
+    g.param(1),
+  ]),
+  // sum xs = foldr (+) addZero xs;  product xs = foldr (*) mulOne xs
+  sum: (g) => g.call('prelude:foldr', [g.call('plus', [null, null]), g.call('addZero', []), g.param(0)]),
+  product: (g) => g.call('prelude:foldr', [g.call('times', [null, null]), g.call('mulOne', []), g.param(0)]),
+  // take n xs = foldr (\x r k -> select (0 >= k) [] (x : apply r (k - 1))) (\k -> []) xs `apply` n
+  take: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['x', 'r', 'k'], (l) => l.call('select', [
+        l.call('geq', [{ lit: '0' }, l.param(2)]),
+        l.call('prelude:nil', []),
+        l.call('prelude:cons', [l.param(0), l.call('apply', [l.param(1), l.call('minus', [l.param(2), { lit: '1' }])])]),
+      ])),
+      g.lambda(['k'], (l) => l.call('prelude:nil', [])),
+      g.param(1),
+    ]),
+    g.param(0),
+  ]),
+  // drop n xs = foldr (\x r k -> select (0 >= k) (x : apply r 0) (apply r (k - 1))) (\k -> []) xs `apply` n
+  drop: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['x', 'r', 'k'], (l) => l.call('select', [
+        l.call('geq', [{ lit: '0' }, l.param(2)]),
+        l.call('prelude:cons', [l.param(0), l.call('apply', [l.param(1), { lit: '0' }])]),
+        l.call('apply', [l.param(1), l.call('minus', [l.param(2), { lit: '1' }])]),
+      ])),
+      g.lambda(['k'], (l) => l.call('prelude:nil', [])),
+      g.param(1),
+    ]),
+    g.param(0),
+  ]),
+  // splitAt n xs = (take n xs, drop n xs)
+  splitAt: (g) => g.call('prelude:pair', [g.call('prelude:take', [g.param(0), g.param(1)]), g.call('prelude:drop', [g.param(0), g.param(1)])]),
+  // replicate n x = select (0 >= n) [] (x : replicate (n - 1) x)
+  replicate: (g) => g.call('select', [
+    g.call('geq', [{ lit: '0' }, g.param(0)]),
+    g.call('prelude:nil', []),
+    g.call('prelude:cons', [g.param(1), g.call('prelude:replicate', [g.call('minus', [g.param(0), { lit: '1' }]), g.param(1)])]),
+  ]),
+  // enumFromTo m n = select (m > n) [] (m : enumFromTo (m + 1) n)
+  enumFromTo: (g) => g.call('select', [
+    g.call('prelude:gt', [g.param(0), g.param(1)]),
+    g.call('prelude:nil', []),
+    g.call('prelude:cons', [g.param(0), g.call('prelude:enumFromTo', [g.call('plus', [g.param(0), { lit: '1' }]), g.param(1)])]),
+  ]),
+  // zipWith f xs ys = foldr (\f x r ys -> maybe [] (\f x r p -> apply (apply f x) (fst p) : apply r (snd p)) (uncons ys)) (\ys -> []) xs `apply` ys
+  zipWith: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['f', 'x', 'r', 'ys'], (l) => l.call('prelude:maybe', [
+        l.call('prelude:nil', []),
+        l.lambda(['f', 'x', 'r', 'p'], (m) => m.call('prelude:cons', [
+          app2(m, m.param(0), m.param(1), m.call('prelude:fst', [m.param(3)])),
+          m.call('apply', [m.param(2), m.call('prelude:snd', [m.param(3)])]),
+        ]), [l.param(0), l.param(1), l.param(2)]),
+        l.call('prelude:uncons', [l.param(3)]),
+      ]), [g.param(0)]),
+      g.lambda(['ys'], (l) => l.call('prelude:nil', [])),
+      g.param(1),
+    ]),
+    g.param(2),
+  ]),
+  // zip xs ys = zipWith (,) xs ys
+  zip: (g) => g.call('prelude:zipWith', [g.call('prelude:pair', [null, null]), g.param(0), g.param(1)]),
+  // lookup key pairs = foldr (\key p acc -> select (key == fst p) (Just (snd p)) acc) Nothing pairs
+  lookup: (g) => g.call('prelude:foldr', [
+    g.lambda(['key', 'p', 'acc'], (l) => l.call('select', [
+      l.call('eq', [l.param(0), l.call('prelude:fst', [l.param(1)])]),
+      l.call('prelude:just', [l.call('prelude:snd', [l.param(1)])]),
+      l.param(2),
+    ]), [g.param(0)]),
+    g.call('prelude:nothing', []),
+    g.param(1),
+  ]),
+  // insertBy cmp x ys = maybe [x] (\cmp x ys p -> caseOrdering (x : ys) (x : ys) (fst p : insertBy cmp x (snd p)) (cmp x (fst p))) (uncons ys)
+  insertBy: (g) => g.call('prelude:maybe', [
+    g.call('prelude:listOf', [g.param(1)]),
+    g.lambda(['cmp', 'x', 'ys', 'p'], (l) => l.call('type:Ordering:caseOrdering', [
+      l.call('prelude:cons', [l.param(1), l.param(2)]),
+      l.call('prelude:cons', [l.param(1), l.param(2)]),
+      l.call('prelude:cons', [l.call('prelude:fst', [l.param(3)]), l.call('prelude:insertBy', [l.param(0), l.param(1), l.call('prelude:snd', [l.param(3)])])]),
+      app2(l, l.param(0), l.param(1), l.call('prelude:fst', [l.param(3)])),
+    ]), [g.param(0), g.param(1), g.param(2)]),
+    g.call('prelude:uncons', [g.param(2)]),
+  ]),
+  // sortBy cmp xs = foldr (insertBy cmp) [] xs
+  sortBy: (g) => g.call('prelude:foldr', [g.call('prelude:insertBy', [g.param(0), null, null]), g.call('prelude:nil', []), g.param(1)]),
+  // sort xs = sortBy compare xs
+  sort: (g) => g.call('prelude:sortBy', [g.call('prelude:compare', [null, null]), g.param(0)]),
   // The numeric conversions, as the Haskell Report defines them.
   // fromIntegral x = fromInteger (toInteger x)
   fromIntegral: (g) => g.call('prelude:fromInteger', [g.call('prelude:toInteger', [g.param(0)])]),

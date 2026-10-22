@@ -321,6 +321,70 @@ export function createEvaluator(registry) {
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1]), n--) if (n === 0) return just(l.args[0])
       return nothing
     }],
+    uncons: [1, (xs) => {
+      const l = list(xs)
+      return l.ctorIndex === 0 ? nothing : just(now(pair(l.args[0], l.args[1])))
+    }],
+    null: [1, (xs) => list(xs).ctorIndex === 0],
+    // foldl, strict in the accumulator (Data.List's foldl'): same result on total functions, no thunk chain.
+    foldl: [3, (f, z, xs) => {
+      let acc = z
+      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) acc = now(applyValue(f, [acc, l.args[0]]))
+      return force(acc)
+    }],
+    filter: [2, (p, xs) => {
+      const go = (t) => {
+        for (let l = list(t); l.ctorIndex === 1; l = list(l.args[1])) {
+          if (bool(delay(() => applyValue(p, [l.args[0]])))) return cons(l.args[0], delay(() => go(l.args[1])))
+        }
+        return nil
+      }
+      return go(xs)
+    }],
+    reverse: [1, (xs) => {
+      let acc = nil
+      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) acc = cons(l.args[0], now(acc))
+      return acc
+    }],
+    concat: [1, (xss) => concatMapList(null, xss)],
+    concatMap: [2, (f, xs) => concatMapList(f, xs)],
+    elem: [2, (x, xs, [d]) => anyOf(xs, (y) => bool(delay(() => invoke(d, 'eq', [x, y]))))],
+    any: [2, (p, xs) => anyOf(xs, (y) => bool(delay(() => applyValue(p, [y]))))],
+    all: [2, (p, xs) => !anyOf(xs, (y) => !bool(delay(() => applyValue(p, [y]))))],
+    // foldr (+) 0, as written (definitionViews.js): right-nested, for a monoid that isn't commutative.
+    sum: [1, (xs, [d]) => listItems(xs).reduceRight((acc, x) => invoke(toClass(d, 'AddSemigroup'), 'plus', [x, now(acc)]), invoke(toClass(d, 'AddMonoid'), 'addZero', []))],
+    product: [1, (xs, [d]) => listItems(xs).reduceRight((acc, x) => invoke(toClass(d, 'MulSemigroup'), 'times', [x, now(acc)]), invoke(toClass(d, 'MulMonoid'), 'mulOne', []))],
+    take: [2, (n, xs) => takeList(num(n), xs)],
+    drop: [2, (n, xs) => dropList(num(n), xs)],
+    splitAt: [2, (n, xs) => pair(delay(() => takeList(num(n), xs)), delay(() => dropList(num(n), xs)))],
+    replicate: [2, (n, x) => {
+      const go = (k) => (k <= 0 ? nil : cons(x, delay(() => go(k - 1))))
+      return go(num(n))
+    }],
+    enumFromTo: [2, (m, n, [d]) => {
+      const go = (t) => (bool(delay(() => invoke(toClass(d, 'Ord'), 'gt', [t, n]))) ? nil : cons(t, delay(() => go(delay(() => invoke(toClass(d, 'AddSemigroup'), 'plus', [t, now(fromIntegerVia(d, 1))]))))))
+      return go(m)
+    }],
+    zip: [2, (xs, ys) => zipWithList((a, b) => pair(a, b), xs, ys)],
+    zipWith: [3, (f, xs, ys) => zipWithList((a, b) => applyValue(f, [a, b]), xs, ys)],
+    lookup: [2, (key, pairs, [d]) => {
+      for (let l = list(pairs); l.ctorIndex === 1; l = list(l.args[1])) {
+        const p = force(l.args[0])
+        if (bool(delay(() => invoke(d, 'eq', [key, p.args[0]])))) return just(p.args[1])
+      }
+      return nothing
+    }],
+    insertBy: [3, (cmp, x, ys) => {
+      const go = (t) => {
+        const l = list(t)
+        if (l.ctorIndex === 0) return cons(x, now(nil))
+        return ordered(cmp, x, l.args[0]) > 0 ? cons(l.args[0], delay(() => go(l.args[1]))) : cons(x, now(l))
+      }
+      return go(ys)
+    }],
+    // Stable, as insertion by foldr (insertBy cmp) [] is.
+    sortBy: [2, (cmp, xs) => fromItems(listItems(xs).sort((x, y) => ordered(cmp, x, y)))],
+    sort: [1, (xs, [d]) => fromItems(listItems(xs).sort((x, y) => cmpAt(d, x, y)))],
     pair: [2, (a, b) => pair(a, b)],
     fst: [1, (p) => force(force(p).args[0])],
     snd: [1, (p) => force(force(p).args[1])],
@@ -406,6 +470,54 @@ export function createEvaluator(registry) {
       return l.ctorIndex === 0 ? force(ys) : cons(l.args[0], delay(() => go(l.args[1])))
     }
     return go(xs)
+  }
+  /** concatMap f xs, lazily (`f` null: concat). */
+  function concatMapList(f, xs) {
+    const go = (t) => {
+      for (let l = list(t); l.ctorIndex === 1; l = list(l.args[1])) {
+        const inner = f ? delay(() => applyValue(f, [l.args[0]])) : l.args[0]
+        if (list(inner).ctorIndex === 1) return appendList(inner, delay(() => go(l.args[1])))
+      }
+      return nil
+    }
+    return go(xs)
+  }
+  function takeList(n, xs) {
+    if (n <= 0) return nil
+    const l = list(xs)
+    return l.ctorIndex === 0 ? nil : cons(l.args[0], delay(() => takeList(n - 1, l.args[1])))
+  }
+  function dropList(n, xs) {
+    let l = list(xs)
+    for (; n > 0 && l.ctorIndex === 1; n--) l = list(l.args[1])
+    return l
+  }
+  function zipWithList(f, xs, ys) {
+    const go = (s, t) => {
+      const a = list(s)
+      if (a.ctorIndex === 0) return nil
+      const b = list(t)
+      return b.ctorIndex === 0 ? nil : cons(delay(() => f(a.args[0], b.args[0])), delay(() => go(a.args[1], b.args[1])))
+    }
+    return go(xs, ys)
+  }
+  /** Whether `test` holds for some element of `xs` — stops at the first (so works on an infinite list that has one). */
+  function anyOf(xs, test) {
+    for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) if (test(l.args[0])) return true
+    return false
+  }
+  /** The element thunks of a finite list. */
+  function listItems(xs) {
+    const items = []
+    for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) items.push(l.args[0])
+    return items
+  }
+  const fromItems = (items) => items.reduceRight((tail, x) => cons(x, now(tail)), nil)
+  /** `cmp x y` as -1, 0 or 1 (LT, EQ, GT). */
+  function ordered(cmp, x, y) {
+    const o = force(applyValue(cmp, [x, y]))
+    if (!isData(o) || o.type !== 'Ordering') throw new EvalError(`Expected an Ordering, got ${show(o)}`)
+    return o.ctorIndex - 1
   }
 
   /** `properFraction x` taken apart: the integral part (forced) and the fractional part (a thunk). */
