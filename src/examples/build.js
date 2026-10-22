@@ -17,12 +17,16 @@ export function call(id, callee, label, slots = []) {
 }
 export const ref = (id, target) => ({ id, type: 'ref', target, label: `↪ ${target}` })
 export const n = (id) => ({ node: id })
+/** A free-standing literal node (`0`, `"hi"`), for a body whose result is a constant. */
+export const lit = (id, value) => ({ id, type: 'literal', label: 'literal', value })
 
-export function body(fnId, params, nodes, source) {
+// `sig`, when given, is the type signature as annotations: one per
+// parameter, then the result's (`['Int', 'Int', 'Int']` for Int -> Int -> Int).
+export function body(fnId, params, nodes, source, sig) {
   const graph = {}
   params.forEach((name, i) => {
     const id = `input-${fnId}-${i}`
-    graph[id] = { id, type: 'parameter', label: name, value: name, color: '#4f8ef7' }
+    graph[id] = { id, type: 'parameter', label: name, value: name, color: '#4f8ef7', ...(sig ? { annotation: sig[i] } : {}) }
   })
   const rename = (s) => (s && typeof s === 'object' ? { node: params.includes(s.node) ? `input-${fnId}-${params.indexOf(s.node)}` : s.node } : s)
   for (const node of nodes) {
@@ -31,7 +35,7 @@ export function body(fnId, params, nodes, source) {
     if (node.mounted) fixed.mounted = node.mounted.map((m) => (m && params.includes(m) ? `input-${fnId}-${params.indexOf(m)}` : m))
     graph[node.id] = fixed
   }
-  graph.output = { id: 'output', type: 'output', label: 'Output', value: 'ƒ', color: '#2fbf8f', source: rename(n(source)).node }
+  graph.output = { id: 'output', type: 'output', label: 'Output', value: 'ƒ', color: '#2fbf8f', source: rename(n(source)).node, ...(sig ? { annotation: sig[params.length] } : {}) }
   layout(graph)
   return graph
 }
@@ -59,14 +63,14 @@ function layout(graph) {
 const isMounted = (graph, id) => Object.values(graph).some((h) => h.mounted?.includes(id))
 
 
-/** `{ types, nodes, functionBodies, entry }` from Haskell type declarations and `{ name: [params, nodes, outputSource] }`. */
+/** `{ types, nodes, functionBodies, entry }` from Haskell type declarations and `{ name: [params, nodes, outputSource, sig?] }`. */
 export function buildProject(typeSource, functions, entry = 'main') {
   const types = declareTypes({}, typeSource)
   const nodes = {}
   const functionBodies = {}
-  Object.entries(functions).forEach(([name, [params, bodyNodes, source]], i) => {
+  Object.entries(functions).forEach(([name, [params, bodyNodes, source, sig]], i) => {
     nodes[name] = { id: name, type: 'function', label: name, params: [...params], mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true, x: 1060 + (i % 2) * 620, y: 190 + Math.floor(i / 2) * 230 }
-    functionBodies[name] = body(name, params, bodyNodes, source)
+    functionBodies[name] = body(name, params, bodyNodes, source, sig)
   })
   return { types, nodes, functionBodies, entry, outputId: 0 }
 }
