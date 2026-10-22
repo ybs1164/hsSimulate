@@ -381,6 +381,8 @@ function runBlocker(graph, nodeId) {
 // functions: a λ's lifted function (its call node is the λ) and a
 // customized derived function (listed under its type).
 const isHiddenDefinition = (n) => !!(n?.lambda || n?.override || n?.library)
+// A builtin's own definition: listed under Built-in functions (open it, or + a call), not drawn on the top level, where only the project's own functions sit.
+const isBuiltinDefinition = (n) => !!(n && n.readonly && !n.custom && !n.sourceFunctionId && nodes[n.id] === n)
 // Every name a function definition already has, but `exceptId`'s: custom
 // functions, builtins, Prelude, and everything derived from types.
 function functionLabelsExcept(exceptId = null) {
@@ -2089,7 +2091,7 @@ function useAgain(n) {
 // everything plugged into them. Purely a view — it all stays plugged in.
 // Everything starts open.
 function isVisible(n) { // a λ's (lifted) definition is never drawn — its call node is the λ — nor a customized derived function (it's listed under its type)
-  if (isHiddenDefinition(n)) return false
+  if (isHiddenDefinition(n) || isBuiltinDefinition(n)) return false
   for (let at = slotHost(n), guard = 0; at && guard < 500; at = slotHost(at.host), guard++) if (at.host.folded) return false
   return true
 }
@@ -2269,7 +2271,7 @@ function draw() {
   drawLinkHighlights()
   drawWire()
   updatePortEditor(pass)
-  document.querySelector('#node-count').textContent = Object.keys(activeNodes()).length
+  document.querySelector('#node-count').textContent = Object.values(activeNodes()).filter((n) => !isHiddenDefinition(n) && !isBuiltinDefinition(n)).length
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
   document.querySelector('#back-graph').hidden = !state.activeFunction
@@ -3647,14 +3649,13 @@ function setupPlayInput() {
     }
   })
 }
-// Lay a template's custom functions out in a grid to the right of the
-// builtins (the template can't know where the builtins sit).
+// Lay a template's custom functions out in a grid on the top level (the
+// builtins aren't drawn there, so it starts at the left).
 function layoutCustomDefinitions() {
-  const builtins = Object.values(nodes).filter((n) => n.readonly && isFunction(n))
   const customs = Object.values(nodes).filter((n) => n.custom && !isHiddenDefinition(n))
   if (!customs.length) return
-  const left = Math.max(...builtins.map(functionBlockRight)) + 220
-  const top = Math.min(...builtins.map((n) => n.y))
+  const left = 110
+  const top = 190
   const colWidth = Math.max(...customs.map(functionBlockWidth)) + 160
   customs.forEach((n, i) => {
     n.x = left + (i % 2) * colWidth + FN_LEFT
