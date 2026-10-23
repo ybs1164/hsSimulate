@@ -41,6 +41,8 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
   const bodyEl = panel.querySelector('.exercise-body')
 
   const solvedCount = (list) => list.filter((e) => progress[e.id]).length
+  // Whether units[u] opens a part (a course whose units are one function each is grouped in parts).
+  const partStarts = (units, u) => !!units[u].part && units[u].part.id !== units[u - 1]?.part?.id
 
   function renderList() {
     current = null
@@ -51,9 +53,10 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
         <div class="exercise-progress" aria-label="진행도"><span style="width:${(solvedCount(ALL_EXERCISES) / ALL_EXERCISES.length) * 100}%"></span></div>
         <small class="exercise-progress-text">${solvedCount(ALL_EXERCISES)} / ${ALL_EXERCISES.length} 해결</small></div>
       <div class="learning-list exercise-units">${COURSES.map((course) => [course, EXERCISE_UNITS.filter((u) => courseOf(u) === course.id)]).map(([course, units]) => `
-        <div class="exercise-course"><h2>${escapeHtml(course.title)}</h2><small>${solvedCount(units.flatMap((u) => u.exercises))}/${units.reduce((k, u) => k + u.exercises.length, 0)}</small><p>${escapeHtml(course.intro)}</p></div>${units.map((unit, u) => `
-        <section class="exercise-unit">
-          <h3><span>${u + 1}. ${escapeHtml(unit.title)}</span><small>${solvedCount(unit.exercises)}/${unit.exercises.length}</small></h3>
+        <div class="exercise-course"><h2>${escapeHtml(course.title)}</h2><small>${solvedCount(units.flatMap((u) => u.exercises))}/${units.reduce((k, u) => k + u.exercises.length, 0)}</small><p>${escapeHtml(course.intro)}</p></div>${units.map((unit, u) => `${partStarts(units, u) ? `
+        <h4 class="exercise-part">${escapeHtml(unit.part.title)}</h4>` : ''}
+        <section class="exercise-unit${unit.part ? ' per-function' : ''}">
+          <h3><span>${u + 1}. ${unit.part ? `<code>${escapeHtml(unit.title)}</code>` : escapeHtml(unit.title)}</span><small>${solvedCount(unit.exercises)}/${unit.exercises.length}</small></h3>
           <ul>${unit.exercises.map((e, i) => `<li><button type="button" class="learning-item exercise-item${progress[e.id] ? ' solved' : ''}" data-id="${e.id}">
             <span class="learning-item-number" aria-hidden="true">${String(i + 1).padStart(2, '0')}</span>
             <span class="exercise-item-title">${escapeHtml(e.title)}</span>
@@ -84,7 +87,9 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
     const index = ALL_EXERCISES.indexOf(e)
     const next = ALL_EXERCISES[index + 1]
     const unit = EXERCISE_UNITS.find((u) => u.id === e.unit)
-    const first = unit.exercises[0] === e
+    const first = unit.exercises[0].id === e.id // (ALL_EXERCISES holds copies)
+    const courseUnits = EXERCISE_UNITS.filter((u) => courseOf(u) === courseOf(unit))
+    const opensPart = first && partStarts(courseUnits, courseUnits.indexOf(unit))
     let work = ''
     if (e.kind === 'type') {
       work = `<label class="exercise-type-row"><code>${escapeHtml(e.expr)} ::</code><input class="exercise-answer" spellcheck="false" autocomplete="off" placeholder="예: Int -> Bool" value="${escapeHtml(drafts.get(e.id) ?? '')}" /></label>
@@ -116,8 +121,9 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
     bodyEl.innerHTML = `
       <div class="exercise-detail">
         <button type="button" class="exercise-back">‹ 목록</button>
-        <div class="exercise-meta"><span>${escapeHtml(unit.title)} · ${index - ALL_EXERCISES.findIndex((x) => x.unit === e.unit) + 1}/${unit.exercises.length}</span><span class="exercise-kind kind-${e.kind}">${KIND_LABEL[e.kind]}</span>${progress[e.id] ? '<span class="exercise-solved">✓ 해결함</span>' : ''}</div>
+        <div class="exercise-meta"><span>${unit.part ? `${escapeHtml(unit.part.title)} · ` : ''}${escapeHtml(unit.title)} · ${index - ALL_EXERCISES.findIndex((x) => x.unit === e.unit) + 1}/${unit.exercises.length}</span><span class="exercise-kind kind-${e.kind}">${KIND_LABEL[e.kind]}</span>${progress[e.id] ? '<span class="exercise-solved">✓ 해결함</span>' : ''}</div>
         <h3>${escapeHtml(e.title)}</h3>
+        ${opensPart ? `<p class="exercise-intro exercise-part-intro"><b>${escapeHtml(unit.part.title)}</b> ${escapeHtml(unit.part.intro)}</p>` : ''}
         ${first ? `<p class="exercise-intro">${escapeHtml(unit.intro)}</p>` : ''}
         <p class="exercise-prompt">${escapeHtml(e.prompt)}</p>
         ${work}

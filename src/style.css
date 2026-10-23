@@ -603,6 +603,12 @@ dialog::backdrop{background:#211d3466}
 .exercise-unit h3 small{font:10px 'DM Mono',monospace;color:#8c83a4}
 .exercise-unit ul{list-style:none;margin:0;padding:0}
 .exercise-unit li + li{margin-top:2px}
+.exercise-part{margin:16px 8px 6px;font:600 10px 'DM Mono',monospace;letter-spacing:.08em;text-transform:uppercase;color:#8c83a4}
+.exercise-course + .exercise-part{margin-top:4px}
+.exercise-part + .exercise-unit{margin-top:0}
+.exercise-unit.per-function + .exercise-unit.per-function{margin-top:8px}
+.exercise-unit h3 code{font:600 12px 'DM Mono',monospace}
+.exercise-part-intro{background:#f6f3fb}
 .exercise-item{padding:8px;gap:7px}
 .exercise-item-title{flex:1;min-width:0}
 .exercise-kind{flex:none;padding:1px 6px;border-radius:var(--radius-full);font:500 9px 'DM Mono',monospace}

@@ -65,6 +65,20 @@ test('the course follows the basics and every exercise is well-formed', () => {
   })
 })
 
+test('one unit per function: each builds (or declares) the one it is named after, last', () => {
+  const units = EXERCISE_UNITS.filter((u) => u.course === 'blackjack')
+  for (const u of units) {
+    const made = u.exercises.filter((e) => e.kind === 'build' || e.kind === 'declare')
+    assert.deepEqual(made.map((e) => e.name), [u.title], u.id)
+    // (a declared type may be followed by questions about what it derives — they need it declared)
+    if (made[0].kind === 'build') assert.equal(u.exercises.at(-1).name, u.title, `${u.id} ends with ${u.title}`)
+    assert.ok(u.part?.title && u.part.intro && u.intro, u.id)
+  }
+  // Every template function and type has its unit (initial/main/step … included).
+  const names = units.map((u) => u.title)
+  for (const name of [...Object.keys(BLACKJACK_FUNCTIONS), 'Phase', 'Msg', 'Model']) assert.ok(names.includes(name), name)
+})
+
 test("every build passes with the template's functions", () => {
   const project = courseProject()
   withTypes(project.types, () => {
