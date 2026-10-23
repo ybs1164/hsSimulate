@@ -609,6 +609,12 @@ dialog::backdrop{background:#211d3466}
 .exercise-kind.kind-type{background:#e5efff;color:#2f6fd6}
 .exercise-kind.kind-choice{background:#fff1dc;color:#b36b00}
 .exercise-kind.kind-build{background:#e3f7ef;color:#1b8a62}
+.exercise-kind.kind-declare{background:#f3e8ff;color:#8a3fc7}
+.exercise-course{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:2px 8px;padding:0 8px 8px;border-bottom:1px solid #ece8f3;margin-bottom:10px}
+.exercise-unit + .exercise-course{margin-top:22px}
+.exercise-course h2{margin:0;font-size:13px;color:#2c2640}
+.exercise-course small{font:10px 'DM Mono',monospace;color:#8c83a4}
+.exercise-course p{grid-column:1 / -1;margin:0;font-size:11px;line-height:1.55;color:#767086}
 .exercise-check{flex:none;width:12px;color:var(--success);font-weight:700}
 .exercise-item.solved .exercise-item-title{color:#5d566f}
 .exercise-detail{display:flex;flex-direction:column;gap:10px;padding:0 6px 12px;font-size:12px;line-height:1.65}

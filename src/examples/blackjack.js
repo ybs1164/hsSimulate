@@ -56,7 +56,7 @@ const draw = (hand) => [['m'], [
   call('rest', P('drop'), 'drop', ['1', n('dk2')]), call('out', M('set deck'), 'set deck', [n('rest'), n('dealt')]),
 ], 'out']
 
-const FUNCTIONS = {
+export const BLACKJACK_FUNCTIONS = {
   cardValue: [['r'], [call('out', P('min'), 'min', [n('r'), '10'])], 'out'],
   score: [['h'], [
     ref('h2', 'h'), call('cv', 'cardValue', 'cardValue', ['']), call('vals', P('map'), 'map', [n('cv'), n('h')]),
@@ -180,5 +180,5 @@ const FUNCTIONS = {
 }
 
 export function buildBlackjack() {
-  return buildProject(BLACKJACK_TYPES, FUNCTIONS)
+  return buildProject(BLACKJACK_TYPES, BLACKJACK_FUNCTIONS)
 }

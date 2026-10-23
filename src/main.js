@@ -3953,6 +3953,8 @@ function setupLearningPanel() {
     project: () => ({ registry: definitions, functionBodies, userNodes: nodes, types, classes, instances }),
     schemeOf: (name) => builtinSchemes[name],
     openFunction: openExerciseFunction,
+    // A declare exercise: its type in the editor, or a new one to rename.
+    openType: (name) => { openTypeEditor(types[name] ? name : null); showMobileView('canvas') },
     onChange: () => updateRunLabel(),
     reveal: (name) => {
       const input = document.querySelector('.sidebar .search input')

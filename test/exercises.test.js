@@ -4,13 +4,15 @@
 // a body of the wrong type or a wrong result each fail their own check.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ALL_EXERCISES } from '../src/exerciseContent.js'
+import { ALL_EXERCISES as EVERY_EXERCISE, EXERCISE_UNITS, courseOf } from '../src/exerciseContent.js'
 import { acceptedTypes, compareQual, gradeBuild, gradeChoice, gradeTypeAnswer, parseQualType } from '../src/grader.js'
 import { builtinSchemes } from '../src/builtinSchemes.js'
 import { buildProject, call, n, P, ref } from '../src/examples/build.js'
 import { libraryDefs } from '../src/library.js'
 import { registryOf } from './curriculumHarness.js'
 
+// The basics course; the Blackjack course has its own test (blackjackCourse.test.js).
+const ALL_EXERCISES = EVERY_EXERCISE.filter((e) => courseOf(EXERCISE_UNITS.find((u) => u.id === e.unit)) === 'basics')
 const ex = (id) => ALL_EXERCISES.find((e) => e.id === id)
 const schemeOf = (name) => builtinSchemes[name]
 

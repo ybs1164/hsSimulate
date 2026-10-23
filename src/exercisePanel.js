@@ -1,8 +1,8 @@
-import { EXERCISE_UNITS, ALL_EXERCISES } from './exerciseContent.js'
-import { findExerciseFunction, gradeBuild, gradeChoice, gradeTypeAnswer } from './grader.js'
+import { COURSES, EXERCISE_UNITS, ALL_EXERCISES, courseOf } from './exerciseContent.js'
+import { findExerciseFunction, gradeBuild, gradeChoice, gradeDeclare, gradeTypeAnswer, testExpression } from './grader.js'
 
 const PROGRESS_KEY = 'hs-simulate:exercises'
-const KIND_LABEL = { type: '타입', choice: '선택', build: '만들기' }
+const KIND_LABEL = { type: '타입', choice: '선택', build: '만들기', declare: '선언' }
 
 function loadProgress() {
   try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}') || {} } catch { return {} }
@@ -20,7 +20,7 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', 
  * `onChange()` runs whenever the exercise on screen changes; `reveal(name)`
  * shows a block the exercise uses in the sidebar.
  */
-export function initExercisePanel({ workspace, project, schemeOf, openFunction, onChange = () => {}, reveal = () => {} }) {
+export function initExercisePanel({ workspace, project, schemeOf, openFunction, openType = () => {}, onChange = () => {}, reveal = () => {} }) {
   const progress = loadProgress()
   let current = null // the exercise on screen, or null for the list
   const drafts = new Map() // exercise id -> typed answer / picked option, kept while the page is open
@@ -50,7 +50,8 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
       <div class="learning-section-heading"><p>순서대로 풀어 보세요. 모든 문제는 타입을 먼저 확인하고, 만들기 문제는 시그니처 → 타입 검사 → 테스트 순으로 채점해요.</p>
         <div class="exercise-progress" aria-label="진행도"><span style="width:${(solvedCount(ALL_EXERCISES) / ALL_EXERCISES.length) * 100}%"></span></div>
         <small class="exercise-progress-text">${solvedCount(ALL_EXERCISES)} / ${ALL_EXERCISES.length} 해결</small></div>
-      <div class="learning-list exercise-units">${EXERCISE_UNITS.map((unit, u) => `
+      <div class="learning-list exercise-units">${COURSES.map((course) => [course, EXERCISE_UNITS.filter((u) => courseOf(u) === course.id)]).map(([course, units]) => `
+        <div class="exercise-course"><h2>${escapeHtml(course.title)}</h2><small>${solvedCount(units.flatMap((u) => u.exercises))}/${units.reduce((k, u) => k + u.exercises.length, 0)}</small><p>${escapeHtml(course.intro)}</p></div>${units.map((unit, u) => `
         <section class="exercise-unit">
           <h3><span>${u + 1}. ${escapeHtml(unit.title)}</span><small>${solvedCount(unit.exercises)}/${unit.exercises.length}</small></h3>
           <ul>${unit.exercises.map((e, i) => `<li><button type="button" class="learning-item exercise-item${progress[e.id] ? ' solved' : ''}" data-id="${e.id}">
@@ -59,7 +60,7 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
             <span class="exercise-kind kind-${e.kind}">${KIND_LABEL[e.kind]}</span>
             <span class="exercise-check" aria-label="${progress[e.id] ? '해결함' : '미해결'}">${progress[e.id] ? '✓' : ''}</span>
           </button></li>`).join('')}</ul>
-        </section>`).join('')}</div>`
+        </section>`).join('')}`).join('')}</div>`
     bodyEl.querySelectorAll('[data-id]').forEach((b) => b.addEventListener('click', () => open(b.dataset.id)))
   }
 
@@ -90,6 +91,15 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
         <small class="exercise-note">제약은 <code>Num a =&gt;</code>처럼, 함수는 <code>-&gt;</code>로 써요.</small>`
     } else if (e.kind === 'choice') {
       work = `<div class="exercise-options" role="radiogroup">${e.options.map((o, i) => `<label class="exercise-option"><input type="radio" name="opt-${e.id}" value="${i}" ${drafts.get(e.id) === i ? 'checked' : ''} /><code>${escapeHtml(o.text)}</code></label>`).join('')}</div>`
+    } else if (e.kind === 'declare') {
+      const declared = !!project().types?.[e.name]
+      work = `<div class="exercise-target"><small>선언할 타입</small><code>${escapeHtml(e.declaration)}</code></div>
+        <ol class="exercise-steps">
+          <li><b>${declared ? `${escapeHtml(e.name)} 열기` : '타입 선언'}</b>을 눌러 타입 편집기를 열어요.</li>
+          <li>이름을 <code>${escapeHtml(e.name)}</code>로 하고, 생성자와 필드를 위 선언과 같은 순서로 만들어요.</li>
+          <li><b>채점</b>을 눌러요.</li>
+        </ol>
+        <button type="button" class="tool-button exercise-open-type">${declared ? `${escapeHtml(e.name)} 열기` : '타입 선언'}</button>`
     } else {
       const fn = findExerciseFunction(project().userNodes, e.name)
       work = `<div class="exercise-target"><small>만들 함수</small><code>${escapeHtml(e.name)} :: ${escapeHtml(e.signature)}</code></div>
@@ -100,7 +110,8 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
           <li><b>채점</b>을 눌러요.</li>
         </ol>
         <button type="button" class="tool-button exercise-open-fn">${fn ? `ƒ ${escapeHtml(e.name)} 열기` : `ƒ ${escapeHtml(e.name)} 만들기`}</button>
-        ${e.tests ? `<details class="exercise-tests"><summary>테스트 ${e.tests.length}개</summary><ul>${e.tests.map((t) => `<li><code>${escapeHtml(e.name)} ${t.args.map(escapeHtml).join(' ')} == ${escapeHtml(t.expect)}</code></li>`).join('')}</ul></details>` : ''}`
+        ${e.tests?.length ? `<details class="exercise-tests"><summary>테스트 ${e.tests.length}개</summary><ul>${e.tests.map((t) => `<li><code>${escapeHtml(testExpression(e.name, t))} == ${escapeHtml(t.expect)}</code></li>`).join('')}</ul></details>`
+          : '<small class="exercise-note">테스트 없이 시그니처와 타입만 채점해요. 실행해서 직접 확인하세요.</small>'}`
     }
     bodyEl.innerHTML = `
       <div class="exercise-detail">
@@ -115,7 +126,7 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
           ${e.hint ? '<button type="button" class="tool-button exercise-hint-toggle" aria-expanded="false">힌트</button>' : ''}
         </div>
         ${e.hint ? `<p class="exercise-hint" hidden>💡 ${escapeHtml(e.hint)}</p>` : ''}
-        <div class="exercise-result">${e.kind === 'build' ? checksHtml(result) : feedbackHtml(result)}</div>
+        <div class="exercise-result">${e.kind === 'build' || e.kind === 'declare' ? checksHtml(result) : feedbackHtml(result)}</div>
         ${result?.ok && e.explain ? `<p class="exercise-explain">${escapeHtml(e.explain)}</p>` : ''}
         ${result?.ok && next ? `<button type="button" class="tool-button exercise-next">다음 문제: ${escapeHtml(next.title)} ›</button>` : ''}
       </div>`
@@ -124,6 +135,7 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
     bodyEl.querySelector('.exercise-next')?.addEventListener('click', () => open(next.id))
     bodyEl.querySelectorAll('.exercise-use').forEach((b) => b.addEventListener('click', () => reveal(b.dataset.use)))
     bodyEl.querySelector('.exercise-open-fn')?.addEventListener('click', () => { openFunction(e); open(e.id) })
+    bodyEl.querySelector('.exercise-open-type')?.addEventListener('click', () => openType(e.name))
     const hintToggle = bodyEl.querySelector('.exercise-hint-toggle')
     hintToggle?.addEventListener('click', () => {
       const hint = bodyEl.querySelector('.exercise-hint')
@@ -146,6 +158,7 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
     let result
     if (e.kind === 'type') result = gradeTypeAnswer(e, drafts.get(e.id) ?? '', schemeOf)
     else if (e.kind === 'choice') result = gradeChoice(e, drafts.get(e.id) ?? null)
+    else if (e.kind === 'declare') result = gradeDeclare(e, project().types)
     else result = gradeBuild(e, project())
     if (result.ok && !progress[e.id]) { progress[e.id] = true; saveProgress(progress) }
     open(e.id, result)

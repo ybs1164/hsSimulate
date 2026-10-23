@@ -21,8 +21,8 @@
 - `src/typedEvaluator.js`: 실행할 그래프를 스스로 타입 검사해 elaboration을 만드는 실행기(테스트·스크립트용).
 - `src/literals.js`: 리터럴 파서(리터럴 노드의 값, 예전 프로젝트의 슬롯 인라인 텍스트).
 - `src/dataTypes.js`: 내장 유도 타입(리스트, Maybe, Either, Ordering, Char, ())의 인스턴스와 런타임 표현.
-- `src/exerciseContent.js`: 기초 연습 과정(산술 연산자 → 논리 연산자 → 리스트). 문제 종류는 타입 쓰기(`type`), 고르기(`choice`), 캔버스에서 함수 만들기(`build`: 시그니처·테스트).
-- `src/grader.js`: 연습 문제 채점. 타입 답은 문자열이 아니라 타입으로 비교(변수 이름 바꾸기, 제약은 entailment — `Num`과 엔진의 `Ring`이 같음), 만들기 문제는 시그니처 → 본체 타입 검사 → 추론 타입이 요구 타입을 포섭(subsumption) → 테스트 순.
+- `src/exerciseContent.js`: 연습 과정(`COURSES`): 기초(산술 연산자 → 논리 연산자 → 리스트)와 블랙잭 만들기(카드와 점수 → 카드 보여주기 → 덱 섞기 → 게임 상태 → 규칙 → 게임 완성, 템플릿과 같은 이름·타입의 함수를 하나씩). 문제 종류는 타입 쓰기(`type`), 고르기(`choice`), 캔버스에서 함수 만들기(`build`: 시그니처·테스트, 테스트의 `after`로 결과의 일부 보기), 타입 선언하기(`declare`).
+- `src/grader.js`: 연습 문제 채점. 타입 답은 문자열이 아니라 타입으로 비교(변수 이름 바꾸기, 제약은 entailment — `Num`과 엔진의 `Ring`이 같음), 만들기 문제는 시그니처 → 본체 타입 검사 → 추론 타입이 요구 타입을 포섭(subsumption) → 테스트 순(테스트 값은 리터럴·리스트·쌍·생성자/함수 적용), 선언 문제는 생성자 순서·필드·deriving.
 - `src/exercisePanel.js`: 연습 문제 패널(목록·진행도·채점 결과, 함수 만들기/열기). 진행도는 localStorage.
 - `src/laws.js`: 클래스·함수 법칙 검사기.
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.

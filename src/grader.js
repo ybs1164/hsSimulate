@@ -17,7 +17,7 @@
 import { canonicalClass, classLabel } from './classGroups.js'
 import { entails } from './prelude.js'
 import { annotationType } from './typeExpr.js'
-import { DeclError, parseContext } from './typeDecls.js'
+import { DeclError, declareTypes, parseContext } from './typeDecls.js'
 import { applySubst, createNamer, instantiate, pred, showType, tcon, unify } from './typeSystem.js'
 import { inferGraph } from './inferGraph.js'
 import { createTypedEvaluator } from './typedEvaluator.js'
@@ -192,39 +192,101 @@ function bodyErrors(registry, bodies, fnId) {
 
 // ---- Test-case values --------------------------------------------------------
 
-// Split `a, [b, c], "d,e"` at its top-level commas.
-function splitTop(text) {
-  const parts = []
-  let depth = 0, quote = null, start = 0
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (quote) { if (ch === quote && text[i - 1] !== '\\') quote = null; continue }
-    if (ch === '"' || ch === "'") quote = ch
-    else if (ch === '[' || ch === '(') depth++
-    else if (ch === ']' || ch === ')') depth--
-    else if (ch === ',' && depth === 0) { parts.push(text.slice(start, i)); start = i + 1 }
+// A test value's tokens: numbers (`-3` too), strings, chars, names, brackets and commas.
+function valueTokens(text) {
+  const tokens = []
+  const re = /\s*(?:(-?\d+(?:\.\d+)?)|("(?:[^"\\]|\\.)*")|('(?:[^'\\]|\\.)')|([A-Za-z_][A-Za-z0-9_']*)|([()[\],]))/gy
+  while (re.lastIndex < text.length) {
+    const at = re.lastIndex
+    const m = re.exec(text)
+    if (!m) {
+      if (/^\s*$/.test(text.slice(at))) break
+      throw new GradeError(`테스트 값 ${text.trim()}를 읽을 수 없어요.`)
+    }
+    tokens.push(m[1] || m[2] || m[3] || m[4] || m[5])
   }
-  parts.push(text.slice(start))
-  return parts.map((s) => s.trim())
+  return tokens
+}
+
+// A test value as a tree: `{ lit }`, `{ list }`, `{ pair }` or `{ name, args }`
+// (an application, or a name alone).
+function parseValueTree(text) {
+  const tokens = valueTokens(text)
+  const unreadable = () => new GradeError(`테스트 값 ${text.trim()}를 읽을 수 없어요.`)
+  let i = 0
+  const peek = () => tokens[i]
+  const expect = (t) => { if (tokens[i++] !== t) throw unreadable() }
+  const isName = (t) => /^[A-Za-z_]/.test(t ?? '') && !parseLiteral(t)
+  const startsAtom = (t) => t !== undefined && ![')', ']', ','].includes(t)
+  function atom() {
+    const t = tokens[i++]
+    if (t === '[') {
+      const items = []
+      if (peek() !== ']') { items.push(expr()); while (peek() === ',') { i++; items.push(expr()) } }
+      expect(']')
+      return { list: items }
+    }
+    if (t === '(') {
+      const first = expr()
+      if (peek() === ',') { i++; const second = expr(); expect(')'); return { pair: [first, second] } }
+      expect(')')
+      return first
+    }
+    if (isName(t)) return { name: t, args: [] }
+    if (t !== undefined && parseLiteral(t)) return { lit: t }
+    throw unreadable()
+  }
+  function expr() {
+    if (!isName(peek())) return atom()
+    const name = tokens[i++]
+    const args = []
+    while (startsAtom(peek())) args.push(atom())
+    return { name, args }
+  }
+  const tree = expr()
+  if (i < tokens.length) throw unreadable()
+  return tree
+}
+
+// The definition a name in a test value stands for: a constructor of the
+// project's types or a field of one, a Prelude function, or one of the
+// project's functions.
+function resolveName(name, scope) {
+  const owner = Object.values(scope.types || {}).find((d) => d.constructors.some((c) => c.name === name || (d.constructors.length === 1 && c.record && c.fields.some((f) => f.name === name))))
+  if (owner) return `type:${owner.name}:${name}`
+  if (scope.registry?.[`prelude:${name}`]) return `prelude:${name}`
+  const fn = Object.values(scope.registry || {}).find((d) => d?.type === 'function' && d.custom && !d.sourceFunctionId && !d.lambda && d.label === name)
+  if (fn) return fn.id
+  throw new GradeError(`테스트 값의 ${name}를 찾을 수 없어요. 앞 문제의 타입이나 함수를 먼저 만드세요.`)
+}
+
+// The slot for `tree`, its nodes added to `graph`; `extra` are slots after its own arguments.
+function emitValue(tree, graph, prefix, scope, extra = []) {
+  if (tree.lit) return tree.lit
+  const parts = (items) => items.map((item, k) => emitValue(item, graph, `${prefix}.${k}`, scope))
+  if (tree.list) graph[prefix] = tree.list.length ? call(prefix, 'prelude:listOf', '[ , , ]', parts(tree.list)) : call(prefix, 'prelude:nil', '[]', [])
+  else if (tree.pair) graph[prefix] = call(prefix, 'prelude:pair', '(,)', parts(tree.pair))
+  else graph[prefix] = call(prefix, resolveName(tree.name, scope), tree.name, [...parts(tree.args), ...extra])
+  return { node: prefix }
 }
 
 /**
  * The slot for a test-case argument written as a Haskell value: inline
- * literal text (`3`, `True`, `"hi"`), or `{ node }` for a list, whose nodes
- * are added to `graph`.
+ * literal text (`3`, `True`, `"hi"`), or `{ node }` for a list, a pair
+ * `(a, b)` or an application (`Model [] [5, 6] … 0 0`, `mkStdGen 7`, a
+ * constructor alone like `Won`), whose nodes are added to `graph`. `scope`
+ * is `{ types, registry }`, where the names are looked up.
  */
-export function argumentSlot(text, graph, prefix) {
-  const t = text.trim()
-  if (/^\[.*\]$/s.test(t)) {
-    const inner = t.slice(1, -1).trim()
-    const id = `${prefix}`
-    if (!inner) { graph[id] = call(id, 'prelude:nil', '[]', []); return { node: id } }
-    const slots = splitTop(inner).map((item, i) => argumentSlot(item, graph, `${prefix}.${i}`))
-    graph[id] = call(id, 'prelude:listOf', '[ , , ]', slots)
-    return { node: id }
-  }
-  if (!parseLiteral(t)) throw new GradeError(`테스트 값 ${t}를 읽을 수 없어요.`)
-  return t
+export function argumentSlot(text, graph, prefix, scope = {}) {
+  return emitValue(parseValueTree(text), graph, prefix, scope)
+}
+
+// `{ node }` for `expr` applied to one more argument, `slot` — a test's
+// `after`, which looks at part of the result (`player`, `take 3`).
+function applySlot(expr, slot, graph, prefix, scope) {
+  const tree = parseValueTree(expr)
+  if (!tree.name) throw new GradeError(`${expr}는 함수가 아니에요.`)
+  return emitValue(tree, graph, prefix, scope, [slot])
 }
 
 // Shown values compared without the spaces outside of quotes.
@@ -241,10 +303,15 @@ export function gradeBuild(exercise, project) {
   const { registry, functionBodies, userNodes } = project
   const checks = []
   const add = (id, label, ok, detail = '') => { checks.push({ id, label, ok, detail }); return ok }
-  const expected = parseQualType(exercise.signature)
   const fn = findExerciseFunction(userNodes, exercise.name)
+  const tests = exercise.tests || []
   const testsRan = () => checks.some((c) => c.id.startsWith('test'))
-  const done = () => ({ ok: checks.every((c) => c.ok), fnId: fn?.id ?? null, checks, skipped: testsRan() ? 0 : exercise.tests.length })
+  const done = () => ({ ok: checks.every((c) => c.ok), fnId: fn?.id ?? null, checks, skipped: testsRan() ? 0 : tests.length })
+
+  // A signature over the project's own types needs them declared first (a `declare` exercise).
+  const missingTypes = (exercise.types || []).filter((t) => !project.types?.[t])
+  if (missingTypes.length && !add('types', `타입 ${exercise.types.join(', ')} 선언`, false, `먼저 ${missingTypes.join(', ')} 타입을 선언하세요 (앞의 선언 문제).`)) return done()
+  const expected = parseQualType(exercise.signature)
 
   if (!add('exists', `함수 ${exercise.name} 만들기`, !!fn && !!functionBodies[fn.id], fn ? '' : `${exercise.name}이라는 이름의 커스텀 함수가 없어요. "함수 만들기"를 눌러 시작하세요.`)) return done()
   const wantArity = arity(expected.type)
@@ -275,15 +342,18 @@ export function gradeBuild(exercise, project) {
   if (!add('type', '추론된 타입이 요구된 타입과 맞음', fits.ok, `추론: ${inferred ? showQualHs(inferred.preds, inferred.type) : '?'}${fits.ok ? '' : ` — ${fits.reason}`}`)) return done()
 
   const ev = createTypedEvaluator({ nodes: registry, functionBodies, types: project.types || {}, classes: project.classes || {}, instances: project.instances || {} })
-  exercise.tests.forEach((test, i) => {
-    const label = `${exercise.name} ${test.args.map((a) => (/\s/.test(a.trim()) && !/^[[("']/.test(a.trim()) ? `(${a})` : a)).join(' ')} == ${test.expect}`
+  const scope = { types: project.types, registry }
+  tests.forEach((test, i) => {
+    const label = `${testExpression(exercise.name, test)} == ${test.expect}`
     let shown
     try {
       const graph = {}
-      const slots = test.args.map((a, j) => argumentSlot(a, graph, `arg${j}`))
+      const slots = test.args.map((a, j) => argumentSlot(a, graph, `arg${j}`, scope))
       graph.out = call('out', fn.id, fn.label, slots)
+      // `after` looks at part of the result (a field of a Model, its length …).
+      const seen = (test.after || []).reduce((slot, expr, j) => applySlot(expr, slot, graph, `after${j}`, scope), { node: 'out' })
       // Shown through the Prelude's show, at the result's type (a Double prints as 15.0).
-      graph.shown = call('shown', 'prelude:show', 'show', [{ node: 'out' }])
+      graph.shown = call('shown', 'prelude:show', 'show', [seen])
       shown = JSON.parse(showValue(ev.run(graph, 'shown')))
     } catch (e) {
       if (e instanceof EvalError || e instanceof GradeError || e instanceof RangeError) return add(`test${i}`, label, false, `실행 오류: ${e.message}`)
@@ -291,5 +361,56 @@ export function gradeBuild(exercise, project) {
     }
     add(`test${i}`, label, normalize(shown) === normalize(test.expect), normalize(shown) === normalize(test.expect) ? '' : `결과가 ${shown}이에요.`)
   })
+  return done()
+}
+
+/** A test as the expression it runs, in Haskell: `score [1, 13]`, `player (hit (Model …))`. */
+export function testExpression(name, test) {
+  const atom = (a) => (/\s/.test(a.trim()) && !/^[[("']/.test(a.trim()) ? `(${a.trim()})` : a.trim())
+  const run = [name, ...test.args.map(atom)].join(' ')
+  return (test.after || []).reduce((inner, expr) => `${expr} ${/\s/.test(inner) ? `(${inner})` : inner}`, run)
+}
+
+// ---- declare -----------------------------------------------------------------
+
+const fieldTypeText = (t) => showType(t, (id) => id).replace(/→/g, '->')
+
+/**
+ * Grade a `declare` exercise — declare the type `exercise.name` as
+ * `exercise.declaration` reads — against the project's `types`: the same
+ * constructors in the same order (the order is casePhase's argument order),
+ * each with the same fields, and at least the asked `deriving` classes.
+ * Returns `{ ok, checks }` as gradeBuild does.
+ */
+export function gradeDeclare(exercise, types = {}) {
+  const checks = []
+  const add = (id, label, ok, detail = '') => { checks.push({ id, label, ok, detail }); return ok }
+  const done = () => ({ ok: checks.every((c) => c.ok), checks, skipped: 0 })
+  const mine = types[exercise.name]
+  if (!add('exists', `타입 ${exercise.name} 선언`, !!mine, mine ? mine.source || '' : `${exercise.name}이라는 타입이 없어요. 사이드바의 타입 + 버튼으로 선언하세요.`)) return done()
+  const others = Object.fromEntries(Object.entries(types).filter(([name]) => name !== exercise.name))
+  let want
+  try { want = declareTypes(others, exercise.declaration)[exercise.name] } catch (e) {
+    if (!(e instanceof DeclError)) throw e
+    add('exists', '필요한 타입', false, `이 선언에 필요한 타입이 아직 없어요: ${e.message}`)
+    return done()
+  }
+  add('keyword', `${want.keyword} 선언`, mine.keyword === want.keyword, mine.keyword === want.keyword ? '' : `${want.keyword}로 선언해야 해요.`)
+  const names = (d) => d.constructors.map((c) => c.name).join(' | ')
+  const sameNames = names(mine) === names(want)
+  add('constructors', `생성자 ${names(want)}`, sameNames, sameNames ? '' : `선언한 생성자는 ${names(mine) || '없음'}이에요. 이름과 순서가 모두 같아야 해요 — 순서가 case${exercise.name}의 인자 순서를 정해요.`)
+  if (sameNames) {
+    want.constructors.forEach((c, k) => {
+      if (!c.fields.length) return
+      const have = mine.constructors[k]
+      const show = (ctor) => ctor.fields.map((f) => (f.name ? `${f.name} :: ${fieldTypeText(f.type)}` : fieldTypeText(f.type))).join(', ')
+      const same = have.fields.length === c.fields.length && c.fields.every((f, j) => (f.name ?? null) === (have.fields[j].name ?? null) && fieldTypeText(f.type) === fieldTypeText(have.fields[j].type))
+      add(`fields${k}`, `${c.name} { ${show(c)} }`, same, same ? '' : `선언한 필드는 { ${show(have) || '없음'} }이에요. 이름·타입·순서가 같아야 해요.`)
+    })
+  }
+  const derived = new Set((mine.deriving || []).flatMap((d) => d.classes))
+  const asked = (want.deriving || []).flatMap((d) => d.classes)
+  const lacking = asked.filter((cls) => !derived.has(cls))
+  if (asked.length) add('deriving', `deriving (${asked.join(', ')})`, !lacking.length, lacking.length ? `${lacking.join(', ')} 인스턴스를 유도(deriving)해야 해요.` : '')
   return done()
 }
