@@ -1,14 +1,16 @@
 import './style.css'
 import { initExercisePanel } from './exercisePanel.js'
 import { findExerciseFunction } from './grader.js'
-import { applySubst, classShown, constructorArity, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
+import { applySubst, classShown, constructorArity, constructorKind, showKind, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { classArity, reduce, predsOnVar, pickDefault, entails, findInstance, headName, listInstances, literalClass, numericTypes, setDynamicClasses, setDynamicInstances, superclassesOf } from './prelude.js'
 import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, renameTypeInInstances, showHead, writtenEnvironment, writtenMethodProblem, writtenMinimalProblem } from './classDecls.js'
-import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, renameTypeReferences, typeArities, typeKinds } from './typeDecls.js'
+import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, paramKind, renameTypeReferences, typeArities, typeKinds } from './typeDecls.js'
+import { classGraph, layoutGraph, layoutKey, renameLayout, typeGraph, universeGraph } from './declGraph.js'
+import { drawDeclGraph } from './declCanvas.js'
 import { TAKEABLE_TYPES, customizeDerived, isPristineOverride, libraryTypeProblem, migrateTypeEdit, primLabel, primitiveDefinitions, resetDerived, takeOverType } from './typeEdits.js'
 import { BUILTIN_CLASSES, METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
@@ -22,14 +24,14 @@ import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
 import { buildDice } from './examples/dice.js'
 import { buildBlackjack } from './examples/blackjack.js'
-import { renderWidget } from './player.js'
-import { PRELUDE, libraryDefs, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
 import { buildVending } from './examples/vending.js'
 import { buildNim } from './examples/nim.js'
 import { buildDamage } from './examples/damage.js'
 import { buildRps } from './examples/rps.js'
 import { buildSimon } from './examples/simon.js'
 import { buildHighLow } from './examples/highLow.js'
+import { renderWidget } from './player.js'
+import { PRELUDE, libraryDefs, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
@@ -63,10 +65,10 @@ app.innerHTML = `
           <div id="parameter-library"></div>
           <div class="library-title"><span>함수 · 열기 / 추가</span><button class="add-node" aria-label="함수 만들기" title="함수 만들기">+</button></div>
           <div id="function-library"></div>
-          <details class="library-section" id="types-section"><summary>타입</summary><div class="library-title types-title"><span>타입 선언</span><button class="add-type" aria-label="타입 선언" title="타입 선언 — 생성자 함수로 정의해요">+</button></div>
+          <details class="library-section" id="types-section"><summary>타입</summary><div class="library-title types-title"><span>타입 선언</span><button class="open-universe" aria-label="타입 우주" title="타입 우주 — 모든 타입과 클래스를 한 그래프로">◎</button><button class="add-type" aria-label="타입 선언" title="타입 선언 — 생성자 함수로 정의해요">+</button></div>
           <div id="type-palette"></div>
           <div id="type-library"></div></details>
-          <details class="library-section" id="classes-section"><summary>클래스</summary><div class="library-title types-title"><span>클래스 선언</span><button class="add-class" aria-label="클래스 선언" title="클래스 선언 — 인스턴스마다 구현할 메서드">+</button></div>
+          <details class="library-section" id="classes-section"><summary>클래스</summary><div class="library-title types-title"><span>클래스 선언</span><button class="open-universe" aria-label="타입 우주" title="타입 우주 — 모든 타입과 클래스를 한 그래프로">◎</button><button class="add-class" aria-label="클래스 선언" title="클래스 선언 — 인스턴스마다 구현할 메서드">+</button></div>
           <div id="class-palette"></div>
           <div id="class-library"></div></details>
           <details class="library-section" id="prelude-section"><summary>Prelude 함수</summary>
@@ -221,6 +223,8 @@ let resolvedClasses = []
 // (classDecls.js' resolveWritten). Resolved with the classes (`resolvedClasses.written`).
 let instances = {}
 const classDefs = {}
+// Where each declaration graph's nodes sit (declGraph.js), saved with the project: `{ 'type:Shape': { [node id]: { x, y } } }`.
+let layouts = {}
 // Read-only definition views (definitionViews.js): a builtin, Prelude or
 // derived function shown as a graph. `viewDefs`/`viewBodies` hold each
 // view's own definition (id `view:<function id>`) and body, plus the λs it
@@ -664,6 +668,7 @@ function draftKeyMap(before, after) {
 function openTypeEditor(name = null) {
   stopGame()
   classEditor = null
+  universeOpen = false
   if (!name) {
     // A new type: one constructor without fields, under a free name — valid at once.
     let n = 1
@@ -677,9 +682,63 @@ function openTypeEditor(name = null) {
   renderTypeEditor()
 }
 
+// --- Type universe ------------------------------------------------------------
+// Every type and class of the project as one graph (declGraph.js'
+// universeGraph): a type points at the types whose fields use it, a
+// superclass at its subclasses, a type at the classes it has an instance
+// of. A click on a card opens that declaration's own graph; ◎ in its bar
+// comes back here.
+let universeOpen = false
+function universeButtonHtml() { return '<button class="tool-button" data-universe title="All types and classes as one graph">◎ 타입 우주</button>' }
+function openUniverse() {
+  stopGame()
+  typeEditor = null
+  classEditor = null
+  universeOpen = true
+  typePanel.hidden = false
+  renderUniverse()
+}
+function renderUniverse() {
+  if (!universeOpen) return
+  const graph = universeGraph(types, classes, instances)
+  typePanel.innerHTML = `
+    <div class="play-bar type-bar"><b>타입 우주</b>
+      <span class="te-status ok">${Object.keys(types).length} types · ${Object.keys(classes).length} classes</span>
+      <button class="tool-button" data-u="add-type">+ type</button>
+      <button class="tool-button" data-u="add-class">+ class</button>
+      <button class="tool-button icon-only" data-u="close" title="Back to the canvas">×</button>
+    </div>
+    <p class="te-hint decl-hint">A type points at the types that use it in a field and at the classes it has an instance of; a superclass points at its subclasses. Click a card to open its declaration.</p>
+    <div class="decl-host"></div>`
+  typePanel.querySelector('[data-u="add-type"]').onclick = () => openTypeEditor()
+  typePanel.querySelector('[data-u="add-class"]').onclick = () => openClassEditor()
+  typePanel.querySelector('[data-u="close"]').onclick = closeTypeEditor
+  const host = typePanel.querySelector('.decl-host')
+  if (!graph.nodes.length) { host.innerHTML = '<p class="decl-empty">No types or classes yet — + type or + class to start.</p>'; return }
+  const card = (n) => n.kind === 'type'
+    ? `<div class="decl-kind">${n.library ? 'type · Prelude, yours' : 'type'}</div><div class="decl-head"><span class="lib-icon type-icon">T</span><b>${escapeAttr([n.name, ...n.params].join(' '))}</b></div><small class="decl-sub">${escapeAttr(n.constructors.join(' | '))}</small>`
+    : `<div class="decl-kind">${n.builtin ? 'class · builtin' : 'class'}</div><div class="decl-head"><span class="lib-icon class-icon">C</span><b>${escapeAttr(n.builtin ? n.name : `${n.name} ${n.param}`)}</b></div>`
+  drawDeclGraph(host, {
+    graph, at: layoutGraph(graph, layouts.universe, { universe: true }), fixed: new Set(Object.keys(layouts.universe || {})), viewKey: 'universe', card,
+    className: () => 'decl-openable',
+    onMoved: (_, positions) => { layouts.universe = { ...positions }; draw() },
+    onOpen: (id) => {
+      const [kind, name] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)]
+      if (kind === 'type') openTypeEditor(name)
+      else openClassEditor(name)
+    },
+  })
+}
+// A renamed declaration's layout goes with it.
+function moveLayout(from, to) {
+  if (from === to || !layouts[from]) return
+  layouts[to] = layouts[from]
+  delete layouts[from]
+}
 function closeTypeEditor() {
   typeEditor = null
   classEditor = null
+  universeOpen = false
   typePanel.hidden = true
   typePanel.innerHTML = ''
 }
@@ -713,6 +772,7 @@ function applyTypeDraft() {
   const { before, next, nextClasses, nextInstances } = checked
   const changed = before && typeEditor.appliedDraft ? migrateTypeEdit({ nodes, functionBodies }, before, next[d.name], draftKeyMap(typeEditor.appliedDraft, d)) : 0
   if (before && d.name !== before.name) renameTypeInAnnotations(before.name, d.name)
+  if (before && d.name !== before.name) moveLayout(layoutKey('type', before.name), layoutKey('type', d.name))
   applyTypes(next, nextClasses, nextInstances)
   typeEditor.original = d.name
   typeEditor.appliedDraft = structuredClone(d)
@@ -827,48 +887,80 @@ function renderTypeEditor(error = '') {
   // A field's type, as type nodes (a slot of the same type drag as signatures); text that doesn't parse yet is shown as is.
   const fieldType = (f) => { try { return typeFromText(f.type || '_') } catch { return null } }
   const derivingText = applied ? applied.deriving.filter((c) => c.classes.length).map((c) => `deriving${c.strategy === 'stock' ? '' : ` ${c.strategy}`} (${c.classes.join(', ')})`).join(' ') : ''
-  // A name is a token of the declaration, renamed by double-clicking it — names are the only thing typed here.
+  // A name is a token of the declaration, renamed by clicking it — names are the only thing typed here.
   const ident = (kind, name, title, data = '') => `<button class="te-ident te-ident-${kind}" data-ident="${kind}"${data} title="${escapeAttr(title)} — click to rename">${escapeAttr(name)}</button>`
   const field = (ci, f, fi, record) => {
     const t = fieldType(f)
-    return `<span class="te-field">${record ? `${ident('field', f.name, 'Field name', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`
+    return `<div class="te-field" data-field-row="${fi}">${record ? `${ident('field', f.name, 'Field name', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></div>`
+  }
+  // The kinds the declaration gives the type and its parameters (once applied).
+  const kindOf = (i) => { try { return applied ? showKind(i === undefined ? constructorKind(applied.name) : paramKind(applied, i), '▸') : '' } catch { return '' } }
+  const sub = (n) => String(n).replace(/\d/g, (x) => '₀₁₂₃₄₅₆₇₈₉'[x])
+  const cards = {
+    type: () => `
+      <div class="decl-kind">type${kindOf() ? ` :: ${escapeAttr(kindOf())}` : ''}</div>
+      <div class="decl-head">
+        <button class="te-keyword" data-te="keyword" title="${d.keyword === 'data' ? 'data: any constructors — click for newtype (exactly one constructor with one field)' : 'newtype: exactly one constructor with one field — click for data'}">${d.keyword}</button>
+        ${ident('type', d.name, 'Type name')}
+        ${(d.params || []).map((v) => `<span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span>`).join(' ')}
+      </div>
+      <div class="decl-actions">
+        <button class="te-drop te-add-param" data-te="add-param" title="Add type parameter — click to choose or drop a variable" aria-label="Add type parameter">+</button><small>parameter</small>
+        <button class="te-drop te-add-ctor" data-te="add-ctor" title="Another constructor (a value is one of them): drag a type here for one holding a field of it, or click for one without fields">+ constructor</button>
+      </div>
+      ${derivingText ? `<div class="hs-deriving" title="Derived by itself whenever the fields allow">${escapeAttr(derivingText)}</div>` : ''}`,
+    param: (n) => `
+      <div class="decl-kind">parameter${kindOf(n.index) ? ` :: ${escapeAttr(kindOf(n.index))}` : ''}</div>
+      <span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(n.name), namer)}">${escapeAttr(n.name)}</span><button class="te-x" data-te="drop-param" data-pi="${n.index}" title="Remove this type parameter">−</button></span>`,
+    ctor: (n) => {
+      const ci = n.index, c = d.constructors[ci]
+      const record = c.fields.some((f) => f.name)
+      return `
+      <div class="decl-kind">constructor ι${sub(ci + 1)}${d.constructors.length > 1 ? ' · drag up/down to reorder' : ''}</div>
+      <div class="decl-head">
+        ${ident('ctor', c.name, `Constructor — a value of ${d.name} is made by exactly one of its constructors`, ` data-ci="${ci}"`)}
+        ${c.fields.length ? `<button class="te-mode${record ? ' on' : ''}" data-te="toggle-record" title="${record ? 'Record syntax: Con { name :: A } — click for unnamed fields, Con A' : 'Unnamed fields: Con A — click for record syntax, Con { name :: A }'}">{ record }</button>` : ''}
+        ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
+      </div>
+      <div class="decl-fields">${c.fields.map((f, fi) => field(ci, f, fi, record)).join('')}<button class="te-drop te-add" data-te="add-field" title="Add field — click to choose or drop a type" aria-label="Add field">+</button></div>
+      <div class="hs-comment te-sig">${escapeAttr(c.name)} ::&nbsp;${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</div>`
+    },
+    derived: (n) => `
+      <div class="decl-kind">${{ get: 'projections π', update: 'updates (set / over)', case: 'copairing [f₁, …, fₙ]', fold: 'recursor (fold)' }[n.op] ?? 'derived'}</div>
+      ${n.fns.map(({ fnId }) => {
+        const def = derivedDefs[fnId]
+        const custom = nodes[def.id]?.override
+        const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
+        return `<div class="te-derived"><b>${escapeAttr(def.label)}</b> <small>${chainOfDef(def.id)}</small> ${custom ? `<i class="customized">✎ custom${changed ? '' : ' (unchanged)'}</i> <button class="law-check" data-edit="${def.id}">Edit body →</button> <button class="law-check" data-reset="${def.id}" title="Back to the derived definition">Reset</button>` : `<button class="law-check icon-only" data-edit="${def.id}" title="Customize: redefine it with a body of your own (starting from ${escapeAttr(primLabel(def.label))})">✎</button>`}</div>`
+      }).join('')}`,
   }
   typePanel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
       <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
+      ${universeButtonHtml()}
       ${applied?.library ? `<button class="tool-button" data-te="delete" title="Drop your declaration: ${escapeAttr(d.name)} is the Prelude's again">↺ Prelude's ${escapeAttr(d.name)}</button>` : '<button class="tool-button" data-te="delete">Delete type</button>'}
       <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
     </div>
-    <div class="type-body">
-      <div class="hs-decl">
-        <div class="hs-line hs-head">
-          <button class="te-keyword" data-te="keyword" title="${d.keyword === 'data' ? 'data: any constructors — click for newtype (exactly one constructor with one field)' : 'newtype: exactly one constructor with one field — click for data'}">${d.keyword}</button>
-          ${ident('type', d.name, 'Type name')}
-          ${(d.params || []).map((v, pi) => `<span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span><button class="te-x" data-te="drop-param" data-pi="${pi}" title="Remove this type parameter">−</button></span>`).join('')}
-          <button class="te-drop te-add-param" data-te="add-param" title="Add type parameter — click to choose or drop a variable" aria-label="Add type parameter">+</button>
-        </div>
-        ${d.constructors.map((c, ci) => {
-          const record = c.fields.some((f) => f.name)
-          return `
-        <div class="hs-line te-ctor" data-ci="${ci}">
-          <span class="hs-op">${ci ? '|' : '='}</span>
-          ${ident('ctor', c.name, `Constructor — a value of ${d.name} is made by exactly one of its constructors`, ` data-ci="${ci}"`)}
-          ${record ? '<span class="hs-punct">{</span>' : ''}${c.fields.map((f, fi) => field(ci, f, fi, record)).join(record ? '<span class="hs-punct">,</span>' : '')}<button class="te-drop te-add" data-te="add-field" title="Add field — click to choose or drop a type" aria-label="Add field">+</button>${record ? '<span class="hs-punct">}</span>' : ''}
-          ${c.fields.length ? `<button class="te-mode${record ? ' on' : ''}" data-te="toggle-record" title="${record ? 'Record syntax: Con { name :: A } — click for unnamed fields, Con A' : 'Unnamed fields: Con A — click for record syntax, Con { name :: A }'}">{ record }</button>` : ''}
-          ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
-          <span class="hs-comment te-sig">-- ${escapeAttr(c.name)} ::&nbsp;${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</span>
-        </div>`
-        }).join('')}
-        <div class="hs-line"><span class="hs-op">|</span><button class="te-drop te-add-ctor" data-te="add-ctor" title="Another constructor (a value is one of them): drag a type here for one holding a field of it, or click for one without fields">+ constructor</button></div>
-        ${derivingText ? `<div class="hs-line hs-deriving" title="Derived by itself whenever the fields allow">${escapeAttr(derivingText)}</div>` : ''}
-      </div>
-      <p class="te-hint">Click a name to rename it. Click + to choose a type, or drag one from Types.</p>
-      ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => {
-        const custom = nodes[def.id]?.override
-        const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
-        return `<div class="te-derived"><b>${escapeAttr(def.label)}</b> ${chainOfDef(def.id)} ${custom ? `<i class="customized">✎ custom${changed ? '' : ' (unchanged)'}</i> <button class="law-check" data-edit="${def.id}">Edit body →</button> <button class="law-check" data-reset="${def.id}" title="Back to the derived definition">Reset</button>` : `<button class="law-check" data-edit="${def.id}" title="Redefine it with a body of your own (starting from ${escapeAttr(primLabel(def.label))})">Customize ✎</button>`}</div>`
-      }).join('')}</div>` : ''}
-    </div>`
+    <p class="te-hint decl-hint">Click a name to rename it. Click + to choose a type, or drag one from Types. Drag a card to move it.</p>
+    <div class="decl-host"></div>`
+  // The declaration as a graph (declGraph.js): the type, its parameters, its constructors injecting into it, what it derives.
+  const graph = typeGraph(d, { derived: derived.map((def) => ({ id: def.id, label: def.label, op: def.derived.op })) })
+  graph.edges = graph.edges.map((e) => (e.field === undefined ? e : { ...e, toPort: `[data-field-row="${e.field}"]` }))
+  const key = layoutKey('type', typeEditor.original || d.name)
+  const at = layoutGraph(graph, layouts[key])
+  drawDeclGraph(typePanel.querySelector('.decl-host'), {
+    graph, at, viewKey: key, fixed: new Set(Object.keys(layouts[key] || {})),
+    card: (n) => cards[n.kind](n),
+    className: (n) => (n.kind === 'ctor' ? 'te-ctor' : ''),
+    onMoved: (id, positions) => {
+      layouts[key] = { ...positions }
+      // The sum's order is the constructors' top-to-bottom order: dragging one past another reorders them (and every case's branches).
+      const order = graph.nodes.filter((n) => n.kind === 'ctor').sort((a, b) => positions[a.id].y - positions[b.id].y).map((n) => n.index)
+      if (id.startsWith('ctor:') && order.some((ci, i) => ci !== i)) return update(() => { d.constructors = order.map((ci) => d.constructors[ci]) })
+      draw()
+    },
+  })
+  typePanel.querySelectorAll('.te-ctor').forEach((el) => { el.dataset.ci = graph.nodes.find((n) => n.id === el.dataset.node).index })
   // Every _ must be filled before the declaration can apply.
   const update = (mutate) => { mutate(d); renderTypeEditor(d.constructors.some((c) => c.fields.some((f) => /(^|[^\w'])_(?![\w'])/.test(f.type))) ? 'Fill each _ in a field — drag a type into it' : applyTypeDraft()) }
   // A type variable a field mentions must be a parameter of the type (as in Haskell): it's added by itself.
@@ -887,7 +979,13 @@ function renderTypeEditor(error = '') {
       const self = new RegExp(`\\b${old}\\b`, 'g')
       if (/^[A-Z]\w*$/.test(d.name)) d.constructors.forEach((c) => c.fields.forEach((fl) => { fl.type = fl.type.replace(self, d.name) }))
     },
-    ctor: (name, el) => { d.constructors[Number(el.dataset.ci)].name = name },
+    ctor: (name, el) => {
+      const c = d.constructors[Number(el.dataset.ci)]
+      // its card stays where it is
+      const key = layoutKey('type', typeEditor.original || d.name)
+      if (layouts[key]) layouts[key] = renameLayout(layouts[key], { [`ctor:${c.name}`]: `ctor:${name}` })
+      c.name = name
+    },
     field: (name, el) => { d.constructors[Number(el.dataset.ci)].fields[Number(el.dataset.fi)].name = name },
   }
   typePanel.querySelectorAll('.te-ident').forEach((el) => {
@@ -1032,6 +1130,7 @@ function classEditorFor(name) {
 function openClassEditor(name = null) {
   stopGame()
   typeEditor = null
+  universeOpen = false
   if (name) classEditor = classEditorFor(name)
   else {
     let k = 1
@@ -1140,12 +1239,41 @@ const methodArity = (sig) => {
 }
 const methodParams = (sig) => Array.from({ length: methodArity(sig) }, (_, i) => ['x', 'y', 'z', 'w'][i] || `x${i + 1}`)
 
+// Turn token `el` into a text box for its own text; `commit(text)` on Enter/blur when changed, `rerender()` otherwise.
+function editInPlace(el, commit, rerender) {
+  if (!el.isConnected) return
+  const input = document.createElement('input')
+  input.className = `te-rename ${el.className}`
+  input.value = el.dataset.text ?? el.textContent
+  input.spellcheck = false
+  const fit = () => { input.style.width = `${Math.max(input.value.length + 2, 6)}ch` }
+  fit()
+  let done = false
+  const finish = (keep) => {
+    if (done) return
+    done = true
+    const text = input.value.trim()
+    if (keep && text && text !== (el.dataset.text ?? el.textContent)) commit(text)
+    else rerender()
+  }
+  input.onchange = () => finish(true)
+  input.onblur = () => finish(true)
+  input.oninput = fit
+  input.onkeydown = (e) => { if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false) }
+  el.replaceWith(input)
+  input.focus()
+  input.select()
+}
+// A class as a graph (declGraph.js' classGraph): the class, the superclasses
+// implying it, its methods, and its instances — each one the class's record
+// of methods applied to an implementation per method, the implementing
+// functions wired into the methods they implement. Every edit is checked by
+// classDecls.js and applied at once (undoable).
 function renderClassEditor(error = '') {
   if (!classEditor) return
   const d = classEditor.draft
   const builtin = classEditor.builtin
   const applied = !builtin && classEditor.original && resolvedClasses.find((c) => c.name === classEditor.original)
-  const fnChoices = (selected, none) => `<option value="">${none}</option>${customFunctionChoices(selected)}<option value="__new">+ new function</option>`
   const takenHeads = new Set(d.instances.map((i) => i.head))
   // An instance can be added for a type that hasn't the class yet (a builtin class's own instances, or derived ones, already give it)
   // — or that has the Prelude's, for a type the Prelude declares: a written one replaces it (classDecls.js).
@@ -1177,83 +1305,153 @@ function renderClassEditor(error = '') {
     }
     const rInst = applied?.instances.find((r) => r.headName === inst.head)
     const rm = applied?.methods.find((x) => x.name === m.name)
-    if (!fnId) return m.default && nodes[m.default] ? '<span class="law ok">uses the default</span>' : '<span class="law bad">✗ pick a function</span>'
+    if (!fnId) return m.default && nodes[m.default] ? '<span class="law ok">uses the default</span>' : '<span class="law bad">✗ give it a function</span>'
     if (!rInst || !rm) return ''
     const have = implementationScheme(fnId)
     const problem = typeof have === 'string' ? have : instanceMethodProblem(have, applied, rm, rInst)
     return `<span class="law ${problem ? 'bad' : 'ok'}">${problem ? `✗ ${escapeAttr(problem)}` : '✓'}</span>`
   }
-  const head = builtin
-    ? `<b>CLASS</b> <span class="ce-builtin-head"><b>class</b> ${escapeAttr(superclassesOf(d.name).length ? `${superclassesOf(d.name).length > 1 ? `(${superclassesOf(d.name).join(', ')})` : superclassesOf(d.name)[0]} ⇒ ` : '')}<b>${escapeAttr(d.name)}</b> ${arity ? 'f' : 'a'} <b>where</b></span>
-      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : ''}</span>
-      <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>`
-    : `<b>CLASS</b>
-      <input class="ce-supers" value="${escapeAttr(d.supers.join(', '))}" placeholder="superclasses" title="Superclasses, comma-separated (Show, Eq, …): every instance needs them" spellcheck="false" /><i class="ce-arrow">⇒</i>
-      <input class="te-name ce-name" value="${escapeAttr(d.name)}" title="Class name" spellcheck="false" />
-      <input class="te-params ce-param" value="${escapeAttr(d.param)}" title="The class variable — the type an instance is for" spellcheck="false" />
-      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
-      <button class="tool-button" data-ce="delete">Delete class</button>
-      <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>`
-  const methodsHtml = builtin
-    ? `<p class="te-hint">A builtin class: its methods are fixed, and so are the instances it comes with (${escapeAttr(listInstances().filter((i) => i.cls === d.name && i.how !== 'written').map((i) => showHead(headName(i.head))).join(', ') || 'none')}). Give it an instance of your own — for a type of yours, a builtin one that hasn't it, or a type the Prelude declares (yours replaces the Prelude's) — by picking a function for each method${minimal ? `; the rest come from the class's defaults, so it's enough to define <code>${escapeAttr(minimal)}</code>` : ''}. Which instance a call means is worked out from the types.</p>
-      <div class="property"><label>METHODS</label>
-        ${methods.map((m) => `<div class="te-method ce-method"><code>${escapeAttr(m.label)}</code> <small class="ce-sigshow">${qualChainHtml(builtinSchemes[m.name].preds, builtinSchemes[m.name].type)}</small></div>`).join('') || '<small>none of its own — an instance is a claim the laws check</small>'}
-        ${minimal ? `<small class="ce-minimal">{-# MINIMAL ${escapeAttr(minimal)} #-}</small>` : ''}
-      </div>`
-    : `<p class="te-hint">A class is a set of methods every instance implements — like <code>class Show a => Pretty a where pretty :: a -> String</code>. A method's type mentions <code>${escapeAttr(d.param)}</code>; use it applied (<code>${escapeAttr(d.param)} b</code>) for a class of type constructors. Which instance a call means is worked out from the types, so a method needn't take an argument at all (<code>defaultValue :: ${escapeAttr(d.param)}</code>).</p>
-      <div class="property"><label>METHODS</label>
-        ${d.methods.map((m, mi) => `<div class="te-method ce-method" data-mi="${mi}"><input class="te-fname ce-mname" value="${escapeAttr(m.name)}" spellcheck="false" /><i>::</i><input class="te-ftype ce-sig" value="${escapeAttr(m.sig)}" spellcheck="false" /><small>default</small><select class="ce-default">${fnChoices(m.default, 'none')}</select>${nodes[m.default] ? ` <button class="law-check" data-open="${m.default}">Open body →</button>` : ''}${d.methods.length > 1 ? '<button class="te-x" data-ce="drop-method" title="Remove method">−</button>' : ''}${applied ? ` <small class="ce-sigshow">${classDefs[`class:${d.name}:${m.name}`] ? qualChainHtml(classDefs[`class:${d.name}:${m.name}`].scheme.preds, classDefs[`class:${d.name}:${m.name}`].scheme.type) : ''}</small>` : ''}</div>`).join('')}
-        <button class="use-again te-add-ctor" data-ce="add-method">+ method</button>
-      </div>`
-  typePanel.innerHTML = `
-    <div class="play-bar type-bar">${head}</div>
-    <div class="type-body">
-      ${methodsHtml}
-      <div class="property"><label>INSTANCES</label>
-        ${d.instances.map((inst, ii) => {
-          const ctx = inst.context || []
-          const chips = ctx.map((q, k) => `<span class="cc pinned" data-ci="${k}" title="${escapeAttr(`${classShown(q.cls)} ${q.var} — drop another class here to change it, _ to remove it`)}">${escapeAttr(`${classShown(q.cls)} ${q.var}`)}<button class="cc-x" title="Remove ${escapeAttr(`${classShown(q.cls)} ${q.var}`)}">×</button></span>`)
-          const context = chips.length ? `<span class="tc-ctx ce-ctx">${chips.length > 1 ? '<i>(</i>' : ''}${chips.join('<i>,</i> ')}${chips.length > 1 ? '<i>)</i>' : ''} ⇒</span>` : ''
-          const w = written.find((x) => x.headName === inst.head)
-          const incomplete = w && writtenMinimalProblem(w)
-          return `<div class="te-instance" data-ii="${ii}"><div class="ce-instance-head"><b>instance</b> ${context} <b>${escapeAttr(d.name)}</b> <span class="ce-head">${classInstanceHeadHtml(d, inst)}</span> <b>where</b> <button class="te-x" data-ce="drop-instance" title="Remove this instance (its functions stay)">×</button>${incomplete ? ` <span class="law bad">✗ ${escapeAttr(incomplete)}</span>` : ''}</div>
-            ${methods.map((m) => {
-              const fnId = inst.methods?.[m.name]
-              return `<div class="te-method"><code>${escapeAttr(m.label)} =</code> <select data-method="${escapeAttr(m.name)}">${fnChoices(fnId, m.default || builtin ? '— the default —' : '— pick a function —')}</select>${nodes[fnId] ? ` <button class="law-check" data-open="${fnId}">Open body →</button>` : ''} ${statusOf(inst, m)}</div>`
-            }).join('')}
-          </div>`
-        }).join('')}
-        <select class="te-add-instance ce-add-instance"><option value="">+ instance for…</option>${heads.map((h) => `<option value="${escapeAttr(h)}">${escapeAttr(showHead(h))}</option>`).join('')}</select>
+  const namer = createNamer()
+  const kind = arity ? ['*', ...Array(arity).fill('*')].join(' ▸ ') : '*'
+  // A slot a function is put in: dragged from FUNCTIONS in the workspace, or picked (or made new) from its menu.
+  const fnSlot = (fnId, none, data) => `<span class="ce-fn-slot" data-fn-slot ${data}>${nodes[fnId] ? `<b>ƒ ${escapeAttr(nodes[fnId].label)}</b>` : `<i>${none}</i>`}<select title="Pick a function — or drag one from FUNCTIONS in the workspace onto this slot" ${data}><option value="">${none}</option>${customFunctionChoices(fnId)}<option value="__new">+ new function</option></select></span>${nodes[fnId] ? ` <button class="law-check" data-open="${fnId}" title="Open ${escapeAttr(nodes[fnId].label)}'s body">→</button>` : ''}`
+  const sigHtml = (m) => {
+    let t = null
+    try { if (!m.sig.includes('=>')) t = typeFromText(m.sig) } catch {}
+    return `<span class="ce-sig-slot" data-sig title="The method's type, mentioning ${escapeAttr(d.param)} — drag a type from TYPES onto it (or a part of it); click to type it">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(m.sig)}</span>`}</span>`
+  }
+  const cards = {
+    class: () => `
+      <div class="decl-kind">class :: ${escapeAttr(kind)} ▸ Constraint${builtin ? ' · builtin' : ''}</div>
+      <div class="decl-head">
+        <b class="te-keyword">class</b>
+        ${builtin ? `${superclassesOf(d.name).length ? `<span class="ce-supers-shown">${escapeAttr(superclassesOf(d.name).length > 1 ? `(${superclassesOf(d.name).join(', ')})` : superclassesOf(d.name)[0])} ⇒</span>` : ''}<b>${escapeAttr(d.name)}</b> <span class="tn tn-var">${arity ? 'f' : 'a'}</span>` : `<button class="te-ident te-ident-type" data-ce-ident="name" title="Class name — click to rename">${escapeAttr(d.name)}</button><button class="te-ident tn tn-var" data-ce-ident="param" title="The class variable — the type an instance is for; click to rename">${escapeAttr(d.param)}</button>`}
+        <b class="te-keyword">where</b>
       </div>
-    </div>`
+      <div class="decl-actions">
+        ${builtin ? '' : '<span class="te-drop te-add-ctor ce-add-super" data-ce="add-super" title="Drag a class from CLASSES here: every instance must have it too (a superclass)">+ superclass</span><button class="te-add-ctor" data-ce="add-method">+ method</button>'}
+        <span class="ce-add-instance-wrap te-drop te-add-ctor" data-ce="add-instance-zone" title="Drag a type from TYPES here for an instance of it — or pick one">+ instance <select class="ce-add-instance"><option value="">for…</option>${heads.map((h) => `<option value="${escapeAttr(h)}">${escapeAttr(showHead(h))}</option>`).join('')}</select></span>
+      </div>
+      ${minimal ? `<small class="ce-minimal">{-# MINIMAL ${escapeAttr(minimal)} #-}</small>` : ''}`,
+    super: (n) => `
+      <div class="decl-kind">superclass</div>
+      <span class="cc pinned">${escapeAttr(classShown(n.name))} ${escapeAttr(d.param)}<button class="cc-x" data-ce="drop-super" data-super="${escapeAttr(n.name)}" title="Remove this superclass">×</button></span>`,
+    method: (n) => {
+      if (n.builtin) return `
+      <div class="decl-kind">method</div>
+      <div class="te-method ce-method"><code>${escapeAttr(n.label)}</code> <small class="ce-sigshow">${qualChainHtml(builtinSchemes[n.name].preds, builtinSchemes[n.name].type)}</small></div>`
+      const m = d.methods[n.index]
+      const shown = classDefs[`class:${d.name}:${m.name}`]
+      return `
+      <div class="decl-kind">method${shown ? ` :: ${qualChainHtml(shown.scheme.preds, shown.scheme.type)}` : ''}</div>
+      <div class="decl-head ce-method" data-mi="${n.index}"><button class="te-ident" data-ce-ident="method" data-mi="${n.index}" title="Method name — click to rename">${escapeAttr(m.name)}</button><i>::</i>${sigHtml(m)}${d.methods.length > 1 ? `<button class="te-x" data-ce="drop-method" data-mi="${n.index}" title="Remove method">−</button>` : ''}</div>
+      <div class="decl-actions"><small>default</small>${fnSlot(m.default, 'none', `data-default="${n.index}"`)}</div>`
+    },
+    instance: (n) => {
+      const inst = d.instances[n.index]
+      const ctx = inst.context || []
+      const chips = ctx.map((q, k) => `<span class="cc pinned" data-ci="${k}" title="${escapeAttr(`${classShown(q.cls)} ${q.var} — drop another class here to change it, _ to remove it`)}">${escapeAttr(`${classShown(q.cls)} ${q.var}`)}<button class="cc-x" title="Remove ${escapeAttr(`${classShown(q.cls)} ${q.var}`)}">×</button></span>`)
+      const context = chips.length ? `<span class="tc-ctx ce-ctx">${chips.length > 1 ? '<i>(</i>' : ''}${chips.join('<i>,</i> ')}${chips.length > 1 ? '<i>)</i>' : ''} ⇒</span>` : ''
+      const w = written.find((x) => x.headName === inst.head)
+      const incomplete = w && writtenMinimalProblem(w)
+      return `
+      <div class="decl-kind">instance — the methods applied to one function each</div>
+      <div class="ce-instance-head"><b>instance</b> ${context} <b>${escapeAttr(d.name)}</b> <span class="ce-head">${classInstanceHeadHtml(d, inst)}</span> <b>where</b> <button class="te-x" data-ce="drop-instance" title="Remove this instance (its functions stay)">×</button></div>
+      ${incomplete ? `<span class="law bad">✗ ${escapeAttr(incomplete)}</span>` : ''}
+      ${methods.map((m) => `<div class="te-method" data-method-row="${escapeAttr(m.name)}"><code>${escapeAttr(m.label)} =</code> ${fnSlot(inst.methods?.[m.name], m.default || builtin ? '— the default —' : '— a function —', `data-method="${escapeAttr(m.name)}"`)} ${statusOf(inst, m)}</div>`).join('')}`
+    },
+    fn: (n) => `
+      <div class="decl-kind">function</div>
+      <div class="decl-head"><b>ƒ ${escapeAttr(nodes[n.fnId]?.label ?? n.fnId)}</b>${nodes[n.fnId] ? ` <small>${functionChainHtml(nodes[n.fnId], nodes)}</small>` : ''}</div>
+      ${nodes[n.fnId] ? `<div class="decl-actions"><button class="law-check" data-open="${n.fnId}">Open body →</button></div>` : ''}`,
+  }
+  typePanel.innerHTML = `
+    <div class="play-bar type-bar"><b>CLASS</b>
+      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
+      ${universeButtonHtml()}
+      ${builtin ? '' : '<button class="tool-button" data-ce="delete">Delete class</button>'}
+      <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>
+    </div>
+    <p class="te-hint decl-hint">${builtin
+      ? `A builtin class: its methods are fixed, and so are the instances it comes with (${escapeAttr(listInstances().filter((i) => i.cls === d.name && i.how !== 'written').map((i) => showHead(headName(i.head))).join(', ') || 'none')}). Give it an instance of your own — drag a type onto + instance — and a function for each method${minimal ? `; it's enough to define ${escapeAttr(minimal)}` : ''}.`
+      : `A class is a set of methods every instance implements. Drag a class from CLASSES onto + superclass, a type from TYPES onto + instance or a method's type, a function from FUNCTIONS onto a slot. Drag a card to move it.`}</p>
+    <div class="decl-host"></div>`
+  const graph = classGraph(d, builtin ? { builtin: true, methods: methods.map((m) => ({ name: m.name, label: m.label })) } : {})
+  graph.edges = graph.edges.map((e) => (e.kind === 'implements' ? { ...e, toPort: `[data-method-row="${e.method}"]`, label: e.method } : e))
+  const key = layoutKey('class', classEditor.original || d.name)
+  const at = layoutGraph(graph, layouts[key])
+  drawDeclGraph(typePanel.querySelector('.decl-host'), {
+    graph, at, viewKey: key, fixed: new Set(Object.keys(layouts[key] || {})),
+    card: (n) => cards[n.kind](n),
+    onMoved: (_, positions) => { layouts[key] = { ...positions }; draw() },
+  })
+  const nodeOf = (el) => graph.nodes.find((n) => n.id === el.closest('.decl-node').dataset.node)
   const update = (mutate) => { mutate(d); renderClassEditor(applyClassDraft()) }
   const $ = (sel) => typePanel.querySelector(sel)
+  // A function slot: a pick from its menu, or a function dragged from FUNCTIONS (see setupFunctionDrag).
+  const bindFnSlot = (slot, set, newFor) => {
+    const select = slot.querySelector('select')
+    select.onchange = () => update(() => { set(select.value === '__new' ? newFor() : select.value || null); renderFunctionLibrary() })
+    fnSlots.set(slot, (fnId) => update(() => { set(fnId); renderFunctionLibrary() }))
+  }
   if (!builtin) {
-    $('.ce-name').onchange = (e) => update(() => { d.name = e.target.value.trim() })
-    $('.ce-param').onchange = (e) => update(() => {
-      const old = d.param
-      d.param = e.target.value.trim()
-      const word = new RegExp(`\\b${old}\\b`, 'g')
-      if (/^[a-z]\w*$/.test(d.param)) d.methods.forEach((m) => { m.sig = m.sig.replace(word, d.param) })
+    typePanel.querySelectorAll('[data-ce-ident]').forEach((el) => {
+      el.onclick = () => editInPlace(el, (text) => update(() => {
+        if (el.dataset.ceIdent === 'name') {
+          moveLayout(layoutKey('class', d.name), layoutKey('class', text))
+          d.name = text
+        } else if (el.dataset.ceIdent === 'param') {
+          const old = d.param
+          d.param = text
+          const word = new RegExp(`\\b${old}\\b`, 'g')
+          if (/^[a-z]\w*$/.test(d.param)) d.methods.forEach((m) => { m.sig = m.sig.replace(word, d.param) })
+        } else {
+          const m = d.methods[Number(el.dataset.mi)]
+          if (layouts[key]) layouts[key] = renameLayout(layouts[key], { [`method:${m.name}`]: `method:${text}` })
+          // each instance's implementation goes with the name
+          for (const inst of d.instances) if (inst.methods && m.name in inst.methods) { inst.methods[text] = inst.methods[m.name]; delete inst.methods[m.name] }
+          m.name = text
+        }
+      }), () => renderClassEditor())
     })
-    $('.ce-supers').onchange = (e) => update(() => { d.supers = e.target.value.split(/[\s,]+/).filter(Boolean) })
-    typePanel.querySelectorAll('.ce-method').forEach((row) => {
-      const m = d.methods[Number(row.dataset.mi)]
-      row.querySelector('.ce-mname').onchange = (e) => update(() => { m.name = e.target.value.trim() })
-      row.querySelector('.ce-sig').onchange = (e) => update(() => { m.sig = e.target.value.trim() })
-      row.querySelector('.ce-default').onchange = (e) => update(() => { m.default = e.target.value === '__new' ? createMethodFunction(m.name, 'Default', methodParams(m.sig)) : e.target.value || null; renderFunctionLibrary() })
-      row.querySelector('[data-ce="drop-method"]')?.addEventListener('click', () => update(() => { d.methods.splice(Number(row.dataset.mi), 1); d.instances.forEach((i) => { delete i.methods?.[m.name] }) }))
+    typePanel.querySelectorAll('[data-sig]').forEach((slot) => {
+      const m = d.methods[Number(slot.closest('[data-mi]').dataset.mi)]
+      let shown = hole()
+      try { shown = typeFromText(m.sig) } catch {}
+      dropZone(slot, { shown, current: () => shown, commit: (type) => update(() => { m.sig = typeText(type) }) })
+      slot.dataset.text = m.sig
+      slot.onclick = () => editInPlace(slot, (text) => update(() => { m.sig = text }), () => renderClassEditor())
+    })
+    typePanel.querySelectorAll('[data-default]').forEach((slot) => {
+      if (!slot.matches('[data-fn-slot]')) return
+      const m = d.methods[Number(slot.dataset.default)]
+      bindFnSlot(slot, (fnId) => { m.default = fnId }, () => createMethodFunction(m.name, 'Default', methodParams(m.sig)))
+    })
+    typePanel.querySelectorAll('[data-ce="drop-method"]').forEach((b) => {
+      const m = d.methods[Number(b.dataset.mi)]
+      b.onclick = () => update(() => { d.methods.splice(Number(b.dataset.mi), 1); d.instances.forEach((i) => { delete i.methods?.[m.name] }) })
     })
     $('[data-ce="add-method"]').onclick = () => update(() => {
       let name = 'newMethod'
       for (let k = 2; functionNameProblem(name) || d.methods.some((x) => x.name === name); k++) name = `newMethod${k}`
       d.methods.push({ name, sig: `${d.param} -> String`, default: null })
     })
+    const addSuper = $('[data-ce="add-super"]')
+    dropZone(addSuper, {
+      take: () => showToast('Drag a class from CLASSES here to make it a superclass'),
+      constrain: (_, cls) => {
+        if (cls === d.name || d.supers.includes(cls)) return showToast(`${cls} is already ${cls === d.name ? 'this class' : 'a superclass'}`)
+        update(() => { d.supers = [...d.supers, cls] })
+      },
+    })
+    addSuper.onclick = () => showToast('Drag a class from CLASSES here to make it a superclass')
+    typePanel.querySelectorAll('[data-ce="drop-super"]').forEach((b) => { b.onclick = () => update(() => { d.supers = d.supers.filter((s) => s !== b.dataset.super) }) })
   }
   const fnNameOf = (inst) => (inst.head === 'List' ? 'List' : inst.head.replace(/\W/g, ''))
-  typePanel.querySelectorAll('.te-instance').forEach((row) => {
-    const inst = d.instances[Number(row.dataset.ii)]
-    row.querySelector('[data-ce="drop-instance"]').onclick = () => update(() => { d.instances.splice(Number(row.dataset.ii), 1) })
+  typePanel.querySelectorAll('.decl-instance').forEach((card) => {
+    const inst = d.instances[nodeOf(card).index]
+    const at = d.instances.indexOf(inst)
+    card.querySelector('[data-ce="drop-instance"]').onclick = () => update(() => { d.instances.splice(at, 1) })
     // The context is built by dragging classes from the workspace: onto a
     // type variable of the head to ask that class of it, onto a constraint to
     // change its class; _ or × removes one. A context the class can't take is rolled back.
@@ -1265,10 +1463,8 @@ function renderClassEditor(error = '') {
       renderClassEditor(error)
     }
     const ctx = inst.context || []
-    const stop = (el) => el.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
-    row.querySelectorAll('.ce-hvar').forEach((el) => {
+    card.querySelectorAll('.ce-hvar').forEach((el) => {
       const v = el.dataset.var
-      stop(el)
       dropZone(el, {
         take: () => showToast(`Drag a class from CLASSES onto ${v} to ask it of ${v}`),
         constrain: (_, cls) => {
@@ -1279,27 +1475,25 @@ function renderClassEditor(error = '') {
       })
       el.addEventListener('click', () => showToast(`Drag a class from CLASSES onto ${v} to ask it of ${v}`))
     })
-    row.querySelectorAll('.ce-ctx .cc').forEach((chip) => {
+    card.querySelectorAll('.ce-ctx .cc').forEach((chip) => {
       const q = ctx[Number(chip.dataset.ci)]
       const without = () => ctx.filter((c) => c !== q)
-      stop(chip)
       dropZone(chip, {
         take: (sub) => (isHole(sub) ? setContext(without()) : showToast('Drop a class here to change this constraint, or _ to remove it')),
         constrain: (_, cls) => setContext(ctx.filter((c) => c === q || !(c.cls === cls && c.var === q.var)).map((c) => (c === q ? { cls, var: q.var } : c))),
       })
       chip.querySelector('.cc-x').addEventListener('click', (event) => { event.stopPropagation(); setContext(without()) })
     })
-    row.querySelectorAll('select[data-method]').forEach((sel) => {
-      sel.onchange = () => update(() => {
-        const m = methods.find((x) => x.name === sel.dataset.method)
-        inst.methods = { ...inst.methods, [m.name]: sel.value === '__new' ? createMethodFunction(builtin ? m.name : m.name, fnNameOf(inst), m.params) : sel.value || undefined }
-        renderFunctionLibrary()
-      })
+    card.querySelectorAll('[data-fn-slot][data-method]').forEach((slot) => {
+      const m = methods.find((x) => x.name === slot.dataset.method)
+      bindFnSlot(slot, (fnId) => { inst.methods = { ...inst.methods, [m.name]: fnId || undefined } }, () => createMethodFunction(m.name, fnNameOf(inst), m.params))
     })
   })
-  $('.ce-add-instance').onchange = (e) => {
-    const head = e.target.value
+  // A new instance — for a type picked, or dragged from TYPES.
+  const addInstance = (head) => {
     if (!head) return
+    if (takenHeads.has(head)) return renderClassEditor(`${d.name} already has an instance for ${showHead(head)}`)
+    if (!heads.includes(head)) return renderClassEditor(`${showHead(head)} already has ${d.name}`)
     // The context asks the class of each of the head's type variables (`Pretty a => Pretty (Maybe a)`); edit it if that's too much.
     const n = (types[head] ? (types[head].params || []).length : (constructorArity[head] || 0)) - arity
     const context = arity ? [] : ['a', 'b', 'c', 'd'].slice(0, Math.max(0, n)).map((v) => ({ cls: d.name, var: v }))
@@ -1311,9 +1505,19 @@ function renderClassEditor(error = '') {
     const inst = d.instances[d.instances.length - 1]
     const fresh = builtin ? (BUILTIN_CLASSES[d.name].minimal?.[0] || BUILTIN_CLASSES[d.name].methods).map((name) => methods.find((m) => m.name === name)) : methods.filter((m) => !m.default)
     for (const m of fresh) inst.methods[m.name] = createMethodFunction(m.name, fnNameOf(inst), m.params)
+    renderFunctionLibrary()
     renderClassEditor(applyClassDraft())
     if (fresh.length) showToast(`instance ${d.name} ${showHead(head)}: define ${fresh.map((m) => m.label).join(', ')} in the new function${fresh.length > 1 ? 's' : ''} (Open body →)`)
   }
+  $('.ce-add-instance').onchange = (e) => addInstance(e.target.value)
+  dropZone($('[data-ce="add-instance-zone"]'), {
+    shown: hole(), current: hole,
+    commit: (type) => {
+      const { head: h } = typeNode(type)
+      if (h.kind !== 'con') return showToast('Drag a type constructor (Int, Maybe, a type of yours) here for an instance of it')
+      addInstance(h.name)
+    },
+  })
   typePanel.querySelectorAll('[data-open]').forEach((b) => { b.onclick = () => { const id = b.dataset.open; closeTypeEditor(); state.activeFunction = null; enterFunction(id) } })
   $('[data-ce="close"]').onclick = closeTypeEditor
   if (builtin) return
@@ -1328,12 +1532,56 @@ function renderClassEditor(error = '') {
     const next = { ...classes }
     delete next[name]
     applyTypes(types, next)
+    delete layouts[layoutKey('class', name)]
     closeTypeEditor()
     renderFunctionLibrary(); updateInspector(); draw()
     showToast(`Deleted class ${name} (undo to bring it back)`)
   }
 }
 
+// Functions dragged from FUNCTIONS in the workspace onto a function slot of
+// a class graph (a method's default, an instance's method): the slot's
+// handler, by element.
+const fnSlots = new WeakMap()
+function setupFunctionDrag() {
+  let drag = null
+  document.addEventListener('pointerdown', (event) => {
+    const item = event.target.closest?.('.function-library-item')
+    if (!item || event.button !== 0 || typePanel.hidden || !nodes[item.dataset.functionId]?.custom) return
+    drag = { fnId: item.dataset.functionId, item, start: { x: event.clientX, y: event.clientY }, ghost: null, over: null }
+  })
+  window.addEventListener('pointermove', (event) => {
+    if (!drag) return
+    if (!drag.ghost) {
+      if (Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y) < 5) return
+      drag.ghost = document.createElement('span')
+      drag.ghost.className = 'type-ghost fn-ghost'
+      drag.ghost.textContent = `ƒ ${nodes[drag.fnId].label}`
+      document.body.append(drag.ghost)
+      document.body.classList.add('type-dragging')
+    }
+    drag.ghost.style.left = `${event.clientX + 10}px`
+    drag.ghost.style.top = `${event.clientY + 10}px`
+    const slot = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-fn-slot]')
+    if (drag.over !== slot) { drag.over?.classList.remove('drop-over'); slot?.classList.add('drop-over'); drag.over = slot }
+  })
+  const end = (event) => {
+    if (!drag) return
+    const { fnId, ghost, over } = drag
+    drag = null
+    if (!ghost) return
+    ghost.remove()
+    over?.classList.remove('drop-over')
+    document.body.classList.remove('type-dragging')
+    // (not a click on the item: it was dragged)
+    window.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault() }, { capture: true, once: true })
+    const slot = event && document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-fn-slot]')
+    if (slot && fnSlots.has(slot)) fnSlots.get(slot)(fnId)
+    else showToast('Drop a function on a slot of the class graph (a method’s default, an instance’s method)')
+  }
+  window.addEventListener('pointerup', end)
+  window.addEventListener('pointercancel', () => end(null))
+}
 const classLibrary = document.querySelector('#class-library')
 // Classes in the workspace, as nodes: drag one onto a type variable of a
 // signature to constrain it (`Ord a ⇒`) — see constrainVariable.
@@ -3749,7 +3997,7 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200)
 }
 // --- Project snapshots, autosave, undo/redo ---------------------------------
-function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, instances, entry: entryId, outputId }) }
+function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, instances, layouts, entry: entryId, outputId }) }
 // Replaces the live project with `project` (already parsed + merged) in place
 // — `nodes`/`functionBodies` are shared with the evaluator, so they're
 // refilled rather than reassigned.
@@ -3761,8 +4009,10 @@ function loadProject(project) {
   ;[nodes, ...Object.values(functionBodies)].forEach(materializeLiterals)
   state.editingLiteral = null
   applyTypes(project.types || {}, project.classes || {}, project.instances || {})
+  layouts = project.layouts || {}
   if (typeEditor) { if (types[typeEditor.original]) { typeEditor = editorFor(typeEditor.original); renderTypeEditor() } else closeTypeEditor() }
   if (classEditor) { if (classes[classEditor.original] || classEditor.builtin) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }
+  renderUniverse()
   entryId = project.entry
   outputId = project.outputId
   if (state.activeFunction && !allBodies[state.activeFunction]) state.activeFunction = null
@@ -3912,6 +4162,8 @@ function setupSidebarButtons() {
   document.querySelector('.add-node').addEventListener('click', createCustomFunction)
   document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
   document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
+  document.querySelectorAll('.open-universe').forEach((b) => b.addEventListener('click', openUniverse))
+  typePanel.addEventListener('click', (event) => { if (event.target.closest('[data-universe]')) openUniverse() })
   document.querySelectorAll('#value-library .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
     if (readonlyBlocked()) return
     if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
@@ -4036,6 +4288,7 @@ function main() {
   setupTopBar()
   setupSearch()
   setupTypeDrag()
+  setupFunctionDrag()
   setupCanvasInput()
   setupBackButton()
   setupRunButton()

@@ -413,7 +413,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(p.nodes[stepId].label === 'tick' && callLabels.length && callLabels.every((l) => l === 'tick'), `${p.nodes[stepId].label} / ${callLabels}`)
     return `step → tick (${callLabels.length} call)`
   })
-  await check('the type editor reads as a data declaration with no text boxes; fields are dragged in', async () => {
+  await check('the type editor is a graph of the declaration with no text boxes; fields are dragged in', async () => {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
     const boxes = await js(`document.querySelectorAll('#type-panel input, #type-panel select, #type-panel textarea').length`)
     await rename('.te-ident-type', 'Shape'); await sleep(150)
@@ -421,14 +421,15 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const waiting = await editorStatus()
     await dragType('data-con="Int"', `document.querySelector('.te-ftype[data-fi="0"] .tn-hole')`)
     await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(200)
-    const source = await js(`[...document.querySelectorAll('.hs-decl .hs-line')].map((l) => [...l.querySelectorAll('.te-keyword, .te-ident, .hs-op, .hs-punct, .te-ftype')].map((e) => e.textContent).join(' ')).join(' / ')`)
+    // the type card, then each constructor card injecting into it (with an edge per constructor)
+    const source = await js(`[...document.querySelectorAll('.decl-type .decl-head, .decl-ctor')].map((c) => [...c.querySelectorAll('.te-keyword, .te-ident, .te-ftype')].map((e) => e.textContent).join(' ')).map((t, i) => (i === 1 ? '= ' : '') + t).join(' / ') + ' / edges ' + document.querySelectorAll('.decl-edge-inject').length`)
     const p = await project()
     const status = await editorStatus()
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
     expect(boxes === 0, `${boxes} text boxes in the type editor`)
     expect(status.includes('applied'), status)
     expect(/Fill each _/.test(waiting), waiting)
-    expect(/= Shape MaybeInt/.test(source) && /^data Shape/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && !p.types.Shape.constructors[0].fields[0].name, source)
+    expect(/= Shape MaybeInt/.test(source) && / edges 1$/.test(source) && /^data Shape/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && !p.types.Shape.constructors[0].fields[0].name, source)
     return source.split(' / ').slice(0, 2).join(' ')
   })
   await check('a type with a parameter', async () => {
@@ -462,13 +463,13 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   })
   await check('a user class: declare it, give Model an instance, and call its method — picked by type', async () => {
     await js(`document.querySelector('.add-class').click()`); await sleep(300)
-    await setField('.ce-name', 'Pretty'); await sleep(200)
-    await setField('.ce-mname', 'pretty'); await sleep(200)
+    await rename('[data-ce-ident="name"]', 'Pretty'); await sleep(200)
+    await rename('[data-ce-ident="method"]', 'pretty'); await sleep(200)
     await setField('.ce-add-instance', 'Model'); await sleep(400)
     const status = await editorStatus()
-    const implId = await js(`document.querySelector('.te-instance select[data-method]').value`)
+    const implId = await js(`document.querySelector('.decl-instance select[data-method]').value`)
     // prettyModel x = show x
-    await js(`document.querySelector('.te-instance [data-open]').click()`); await sleep(600)
+    await js(`document.querySelector('.decl-instance [data-open]').click()`); await sleep(600)
     const sh = await add('prelude', 'show'); await plug(await paramId('x'), sh, 0); await toOutput(sh); await back()
     // shown = pretty initial
     await createFunction('shown', []); await openBody('shown')
@@ -486,7 +487,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await check("an instance's context is built by dragging classes onto the head's type variables", async () => {
     await js(`document.querySelector('.class-item[data-class-name="Pretty"]').click()`); await sleep(300)
     await setField('.ce-add-instance', 'Maybe'); await sleep(400)
-    const row = `[...document.querySelectorAll('.te-instance')].find((r) => /Maybe/.test(r.querySelector('.ce-head')?.textContent))`
+    const row = `[...document.querySelectorAll('.decl-instance')].find((r) => /Maybe/.test(r.querySelector('.ce-head')?.textContent))`
     const context = async () => ((await project()).classes.Pretty.instances.find((i) => i.head === 'Maybe')?.context || []).map((q) => `${q.cls} ${q.var}`).join(', ')
     const shown = () => js(`${row}.querySelector('.ce-instance-head').textContent.replace(/×/g, '').replace(/\\s+/g, ' ').trim()`)
     const fresh = await context()
@@ -503,7 +504,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     // × removes one
     await js(`${row}.querySelector('.ce-ctx .cc[data-ci="0"] .cc-x').click()`); await sleep(300)
     const removed = await context()
-    const boxes = await js(`document.querySelectorAll('.te-instance input').length`)
+    const boxes = await js(`document.querySelectorAll('.decl-instance input').length`)
     await js(`${row}.querySelector('[data-ce="drop-instance"]').click()`); await sleep(300)
     await js(`document.querySelector('[data-ce="close"]').click()`); await sleep(200)
     expect(fresh === 'Pretty a' && added === 'Pretty a, Show a' && /^instance \(Pretty a, Show a\) ⇒ Pretty \(Maybe a\) where$/.test(line), `${fresh} / ${added} / ${line}`)
@@ -515,11 +516,11 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const r = JSON.parse(await js(`(() => { const el = document.querySelector('#class-palette .type-chip[data-cls="Semigroup"]'); el.scrollIntoView({ block: 'nearest', behavior: 'instant' }); return JSON.stringify(el.getBoundingClientRect()) })()`))
     await mouse('mousePressed', r.x + r.width / 2, r.y + r.height / 2)
     await mouse('mouseReleased', r.x + r.width / 2, r.y + r.height / 2); await sleep(400)
-    const head = await js(`document.querySelector('.ce-builtin-head')?.textContent.replace(/\\s+/g, ' ').trim()`)
+    const head = await js(`document.querySelector('.decl-class .decl-head')?.textContent.replace(/\\s+/g, ' ').trim()`)
     await setField('.ce-add-instance', 'Model'); await sleep(400)
     const inst = (await project()).instances?.Semigroup?.find((i) => i.head === 'Model')
     // mappendModel x y = x  (the left one wins)
-    await js(`document.querySelector('.te-instance [data-open]').click()`); await sleep(600)
+    await js(`document.querySelector('.decl-instance [data-open]').click()`); await sleep(600)
     await toOutput(await paramId('x')); await back()
     // joined = initial <> initial
     await createFunction('joined', []); await openBody('joined')
@@ -530,7 +531,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('#evaluate').click()`); await sleep(600)
     const result = Object.values((await project()).nodes).filter((n) => n.type === 'value').pop()
     await js(`document.querySelector('.class-item[data-class-name="Semigroup"]').click()`); await sleep(300)
-    const status = await js(`[...document.querySelectorAll('.te-instance .law')].map((e) => e.textContent).join(' ')`)
+    const status = await js(`[...document.querySelectorAll('.decl-instance .law')].map((e) => e.textContent).join(' ')`)
     await js(`document.querySelector('[data-ce="close"]').click()`); await sleep(200)
     expect(/^class Semigroup a where$/.test(head) && inst?.context.length === 0 && p.nodes[inst?.methods.mappend]?.label === 'mappendModel', `${head} / ${JSON.stringify(inst)}`)
     expect(result?.data?.type === 'Model' && status === '✓', `${JSON.stringify(result?.data)} / ${status}`)

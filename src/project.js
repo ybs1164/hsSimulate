@@ -17,8 +17,9 @@ const VERSION = 4
 
 export class ProjectError extends Error {}
 
-export function serializeProject({ nodes, functionBodies, types = {}, classes = {}, instances = {}, entry = null, outputId = 0 }) {
-  return JSON.stringify({ version: VERSION, nodes, functionBodies, types, classes, instances, entry, outputId })
+// `layouts`: where each declaration graph's nodes sit (declGraph.js), `{ 'type:Shape': { [node id]: { x, y } } }`.
+export function serializeProject({ nodes, functionBodies, types = {}, classes = {}, instances = {}, layouts = {}, entry = null, outputId = 0 }) {
+  return JSON.stringify({ version: VERSION, nodes, functionBodies, types, classes, instances, layouts, entry, outputId })
 }
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -48,6 +49,7 @@ export function parseProject(text) {
     types: data.types || {},
     classes: data.classes || {},
     instances: data.instances || {},
+    layouts: isRecord(data.layouts) ? data.layouts : {},
     entry: typeof data.entry === 'string' && data.nodes[data.entry] ? data.entry : null,
     outputId: Number.isInteger(data.outputId) ? data.outputId : 0,
   }

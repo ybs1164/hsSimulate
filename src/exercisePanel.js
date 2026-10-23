@@ -100,8 +100,8 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
       const declared = !!project().types?.[e.name]
       work = `<div class="exercise-target"><small>선언할 타입</small><code>${escapeHtml(e.declaration)}</code></div>
         <ol class="exercise-steps">
-          <li><b>${declared ? `${escapeHtml(e.name)} 열기` : '타입 선언'}</b>을 눌러 타입 편집기를 열어요.</li>
-          <li>이름을 <code>${escapeHtml(e.name)}</code>로 하고, 생성자와 필드를 위 선언과 같은 순서로 만들어요.</li>
+          <li><b>${declared ? `${escapeHtml(e.name)} 열기` : '타입 선언'}</b>을 눌러 타입 그래프를 열어요.</li>
+          <li>타입 카드의 이름을 <code>${escapeHtml(e.name)}</code>로 하고, <b>+ constructor</b>로 생성자 카드를 만들어 필드에 타입을 끌어다 놓아요. 생성자 카드는 위에서 아래로 선언의 순서예요(끌어서 바꿀 수 있어요).</li>
           <li><b>채점</b>을 눌러요.</li>
         </ol>
         <button type="button" class="tool-button exercise-open-type">${declared ? `${escapeHtml(e.name)} 열기` : '타입 선언'}</button>`
