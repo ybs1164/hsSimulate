@@ -18,7 +18,7 @@ import { P, T, buildProject, call, n, ref } from './build.js'
 export const DICE_TYPES = `data Model = Model { face :: Int, gen :: StdGen } deriving stock (Show)
 data Msg = Roll deriving stock (Eq, Show)`
 
-const FUNCTIONS = {
+export const DICE_FUNCTIONS = {
   initial: [[], [call('g', P('mkStdGen'), 'mkStdGen', ['2026']), call('out', T('Model', 'Model'), 'Model', ['1', n('g')])], 'out'],
   roll: [['m'], [
     call('range', P('pair'), '(,)', ['1', '6']), call('gm', T('Model', 'gen'), 'gen', [n('m')]), call('r', P('randomRInt'), 'randomRInt', [n('range'), n('gm')]), ref('r2', 'r'),
@@ -41,5 +41,5 @@ const FUNCTIONS = {
 }
 
 export function buildDice() {
-  return buildProject(DICE_TYPES, FUNCTIONS)
+  return buildProject(DICE_TYPES, DICE_FUNCTIONS)
 }

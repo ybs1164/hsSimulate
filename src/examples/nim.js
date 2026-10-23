@@ -25,7 +25,7 @@ data Msg = Take1 | Take2 | Restart deriving stock (Eq, Show)`
 
 const M = (field) => T('Model', field)
 
-const FUNCTIONS = {
+export const NIM_FUNCTIONS = {
   yourTake: [['k', 'm'], [
     call('l', M('left'), 'left', [n('m')]), call('l1', 'minus', '(-)', [n('l'), '1']), call('last', 'isZero', 'isZero', [n('l1')]),
     call('out', 'ifThenElse', 'ifThenElse', [n('last'), '1', n('k')]),
@@ -78,5 +78,5 @@ const FUNCTIONS = {
 }
 
 export function buildNim() {
-  return buildProject(NIM_TYPES, FUNCTIONS)
+  return buildProject(NIM_TYPES, NIM_FUNCTIONS)
 }

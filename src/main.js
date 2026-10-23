@@ -24,6 +24,12 @@ import { buildDice } from './examples/dice.js'
 import { buildBlackjack } from './examples/blackjack.js'
 import { renderWidget } from './player.js'
 import { PRELUDE, libraryDefs, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
+import { buildVending } from './examples/vending.js'
+import { buildNim } from './examples/nim.js'
+import { buildDamage } from './examples/damage.js'
+import { buildRps } from './examples/rps.js'
+import { buildSimon } from './examples/simon.js'
+import { buildHighLow } from './examples/highLow.js'
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
@@ -70,7 +76,7 @@ app.innerHTML = `
 
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>그래프</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>방금 저장됨</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="실행 취소" disabled>↶</button><button class="tool-button icon-only" id="redo" title="다시 실행" disabled>↷</button><details class="project-menu"><summary class="tool-button">프로젝트</summary><div class="project-menu-items"><button class="tool-button" id="export" title="프로젝트를 JSON으로 내려받기">⤓ <span>프로젝트 저장 (.json)</span></button><button class="tool-button" id="import" title="프로젝트 JSON 파일 불러오기">⤒ <span>프로젝트 열기</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="템플릿에서 시작 (실행 취소 가능)"><option value="">✦ 템플릿…</option><option value="clickCounter">클릭 카운터</option><option value="blankGame">빈 게임</option><option value="dice">주사위 (난수 · 그림)</option><option value="blackjack">블랙잭 (리스트)</option></select><button class="tool-button" id="export-game" title="게임을 독립 HTML 파일 하나로 내려받기">⬇ <span>게임 내보내기 (.html)</span></button><button class="tool-button" id="reset">↺ <span>프로젝트 초기화</span></button></div></details><button class="tool-button primary" id="run">▶ <span>실행 add</span></button></div></div>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>그래프</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>방금 저장됨</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="실행 취소" disabled>↶</button><button class="tool-button icon-only" id="redo" title="다시 실행" disabled>↷</button><details class="project-menu"><summary class="tool-button">프로젝트</summary><div class="project-menu-items"><button class="tool-button" id="export" title="프로젝트를 JSON으로 내려받기">⤓ <span>프로젝트 저장 (.json)</span></button><button class="tool-button" id="import" title="프로젝트 JSON 파일 불러오기">⤒ <span>프로젝트 열기</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="템플릿에서 시작 (실행 취소 가능)"><option value="">✦ 템플릿…</option><option value="clickCounter">클릭 카운터</option><option value="blankGame">빈 게임</option><option value="vending">자판기 (함수와 타입)</option><option value="nim">님 (조건)</option><option value="dice">주사위 (난수 · 그림)</option><option value="damage">데미지 (커링과 합성)</option><option value="rps">가위바위보 (데이터 타입)</option><option value="simon">사이먼 (리스트와 재귀)</option><option value="highLow">하이로우 (타입 클래스)</option><option value="blackjack">블랙잭 (리스트)</option></select><button class="tool-button" id="export-game" title="게임을 독립 HTML 파일 하나로 내려받기">⬇ <span>게임 내보내기 (.html)</span></button><button class="tool-button" id="reset">↺ <span>프로젝트 초기화</span></button></div></details><button class="tool-button primary" id="run">▶ <span>실행 add</span></button></div></div>
         <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div class="canvas-empty" hidden><b>빈 그래프예요</b><span>왼쪽 <i>연습 문제</i>에서 문제를 고르거나, 사이드바에서 값·함수를 끌어다 놓으세요.</span><span><kbd data-shortcut="K"></kbd> 블록 검색 · <i>프로젝트 › 템플릿</i>으로 예제 열기</span></div><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="모든 함수 펼치기: 슬롯에 꽂힌 것을 캔버스에 보여요">⤢</button><button id="fold-all" title="모든 함수 접기: 꽂힌 것을 슬롯 안에 넣어요">⤡</button></div></div>
         <footer class="canvas-footer"><span>블록 <b id="node-count">2</b>개</span><span>연결 <b id="connection-count">0</b>개</span><span class="footer-spacer"></span><span class="shortcut"><kbd data-shortcut="Enter"></kbd><span id="run-shortcut-label">실행 add</span></span></footer>
       </section>
@@ -3700,7 +3706,8 @@ function layoutCustomDefinitions() {
   })
   draw()
 }
-const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame], dice: ['the dice roller', buildDice], blackjack: ['the blackjack game', buildBlackjack] }
+const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame], dice: ['the dice roller', buildDice], blackjack: ['the blackjack game', buildBlackjack],
+  vending: ['the vending machine', buildVending], nim: ['the nim game', buildNim], damage: ['the damage pipeline', buildDamage], rps: ['rock, paper, scissors', buildRps], simon: ['the simon game', buildSimon], highLow: ['the high-low game', buildHighLow] }
 function setupTemplates() {
   document.querySelector('#template').onchange = (event) => {
     const [name, build] = TEMPLATES[event.target.value] || []

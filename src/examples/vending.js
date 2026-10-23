@@ -17,7 +17,7 @@ import { P, T, buildProject, call, lit, n } from './build.js'
 
 export const VENDING_TYPES = `data Msg = Coin100 | Coin500 | Refund deriving stock (Eq, Show)`
 
-const FUNCTIONS = {
+export const VENDING_FUNCTIONS = {
   insert: [['coin', 'total'], [call('out', 'plus', '(+)', [n('coin'), n('total')])], 'out', ['Int', 'Int', 'Int']],
   refund: [['total'], [lit('out', '0')], 'out', ['Int', 'Int']],
   handle: [['msg', 'm'], [
@@ -40,5 +40,5 @@ const FUNCTIONS = {
 }
 
 export function buildVending() {
-  return buildProject(VENDING_TYPES, FUNCTIONS)
+  return buildProject(VENDING_TYPES, VENDING_FUNCTIONS)
 }

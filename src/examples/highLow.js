@@ -30,7 +30,7 @@ data Msg = Hi | Lo deriving stock (Eq, Show)`
 
 const M = (field) => T('Model', field)
 
-const FUNCTIONS = {
+export const HIGH_LOW_FUNCTIONS = {
   ranks: [[], [...RANKS.map((r) => call(`r${r}`, T('Rank', r), r)), call('out', P('listOf'), '[ , , ]', RANKS.map((r) => n(`r${r}`)))], 'out'],
   rankOf: [['i'], [
     call('rs', 'ranks', 'ranks'), call('ix', P('index'), '(!?)', [n('rs'), n('i')]), call('two', T('Rank', 'Two'), 'Two'), call('id', 'identity', 'identity', ['']),
@@ -78,5 +78,5 @@ const FUNCTIONS = {
 }
 
 export function buildHighLow() {
-  return buildProject(HIGH_LOW_TYPES, FUNCTIONS)
+  return buildProject(HIGH_LOW_TYPES, HIGH_LOW_FUNCTIONS)
 }

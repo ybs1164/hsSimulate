@@ -33,7 +33,7 @@ const upgrade = (fn, label, slots) => [['b'], [
   call('f', fn, label, slots), call('id', 'identity', 'identity', ['']), call('out', 'select', 'select', [n('b'), n('f'), n('id')]),
 ], 'out']
 
-const FUNCTIONS = {
+export const DAMAGE_FUNCTIONS = {
   weapon: upgrade('plus', '(+)', ['', '5']),
   critical: upgrade('times', '(*)', ['', '2']),
   shield: upgrade('minus', '(-)', ['', '3']),
@@ -87,5 +87,5 @@ const FUNCTIONS = {
 }
 
 export function buildDamage() {
-  return buildProject(DAMAGE_TYPES, FUNCTIONS)
+  return buildProject(DAMAGE_TYPES, DAMAGE_FUNCTIONS)
 }

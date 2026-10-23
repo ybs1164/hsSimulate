@@ -13,7 +13,7 @@ import { P, T, buildProject, call, n } from './build.js'
 export const BLANK_GAME_TYPES = `data Model = Model { count :: Double } deriving stock (Eq, Show)
 data Msg = Increment deriving stock (Eq, Show)`
 
-const FUNCTIONS = {
+export const BLANK_GAME_FUNCTIONS = {
   initial: [[], [call('out', T('Model', 'Model'), 'Model', ['0'])], 'out'],
   handle: [['msg', 'm'], [call('inc', 'plus', '(+)', ['1', '']), call('up', T('Model', 'over count'), 'over count', [n('inc'), '']), call('cm', T('Msg', 'caseMsg'), 'caseMsg', [n('up'), n('msg')]), call('out', 'apply', 'apply', [n('cm'), n('m')])], 'out'],
   view: [['m'], [
@@ -26,5 +26,5 @@ const FUNCTIONS = {
 }
 
 export function buildBlankGame() {
-  return buildProject(BLANK_GAME_TYPES, FUNCTIONS)
+  return buildProject(BLANK_GAME_TYPES, BLANK_GAME_FUNCTIONS)
 }

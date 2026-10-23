@@ -33,7 +33,7 @@ data Msg = Press Pad | Start deriving stock (Eq, Show)`
 const M = (field) => T('Model', field)
 const PADS = ['Red', 'Green', 'Blue', 'Yellow']
 
-const FUNCTIONS = {
+export const SIMON_FUNCTIONS = {
   pads: [[], [...PADS.map((p) => call(`p${p}`, T('Pad', p), p)), call('out', P('listOf'), '[ , , ]', PADS.map((p) => n(`p${p}`)))], 'out'],
   toPad: [['i'], [
     call('ps', 'pads', 'pads'), call('ix', P('index'), '(!?)', [n('ps'), n('i')]), call('red', T('Pad', 'Red'), 'Red'), call('id', 'identity', 'identity', ['']),
@@ -114,5 +114,5 @@ const FUNCTIONS = {
 }
 
 export function buildSimon() {
-  return buildProject(SIMON_TYPES, FUNCTIONS)
+  return buildProject(SIMON_TYPES, SIMON_FUNCTIONS)
 }

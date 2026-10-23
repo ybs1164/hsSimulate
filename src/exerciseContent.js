@@ -10,7 +10,28 @@
 //   build  — define `name :: signature` on the canvas: write the signature
 //            on its parameters and Output, build the body, and pass `tests`
 //            (arguments as Haskell values, the expected result as `show` prints it).
-//            `uses` are the blocks it takes, as a hint.
+//            `uses` are the blocks it takes, as a hint. `params` are the
+//            ones the definition names (fewer than the type's arrows when
+//            it returns a function); a test's arguments past them go to
+//            what it returns, and its `after` looks at part of the result
+//            (`after: ['player']` checks player (f m)). With no `tests`,
+//            only the types are graded; `types` are the project's own
+//            types the signature needs.
+//   declare — declare a type (`name`) as `declaration` reads: the same
+//            constructors in order, the same fields, at least its deriving.
+//
+// Units belong to a course (COURSES): the basics, then one course per
+// template game (src/courses/), each rebuilding it one function per unit.
+import { blankGameUnits } from './courses/blankGame.js'
+import { vendingUnits } from './courses/vending.js'
+import { nimUnits } from './courses/nim.js'
+import { diceUnits } from './courses/dice.js'
+import { damageUnits } from './courses/damage.js'
+import { rpsUnits } from './courses/rps.js'
+import { simonUnits } from './courses/simon.js'
+import { highLowUnits } from './courses/highLow.js'
+import { clickCounterUnits } from './courses/clickCounter.js'
+import { blackjackUnits } from './courses/blackjack.js'
 
 export const EXERCISE_UNITS = [
   {
@@ -160,283 +181,37 @@ export const EXERCISE_UNITS = [
         tests: [{ args: ['"level"'], expect: 'True' }, { args: ['"haskell"'], expect: 'False' }, { args: ['""'], expect: 'True' }] },
     ],
   },
+  ...blankGameUnits(),
+  ...vendingUnits(),
+  ...nimUnits(),
+  ...diceUnits(),
+  ...damageUnits(),
+  ...rpsUnits(),
+  ...simonUnits(),
+  ...highLowUnits(),
+  ...clickCounterUnits(),
   ...blackjackUnits(),
 ]
 
-/** The courses, in order: each unit names its own (`course`, the basics when absent). */
+// The courses, in order: each unit names its own (`course`, the basics when
+// absent). A game course names its template (examples/), whose functions are
+// the reference solutions its tests check.
+const GAME = '템플릿 게임을 함수 하나씩 직접 만들어요. 앞에서 만든 함수와 타입을 뒤에서 그대로 쓰므로, 새 프로젝트 하나에서 순서대로 푸세요.'
 export const COURSES = [
   { id: 'basics', title: '기초', intro: '연산자와 리스트의 타입부터 시작해요.' },
-  { id: 'blackjack', title: '블랙잭 만들기', intro: '템플릿의 블랙잭 게임을 함수 하나씩 직접 만들어요. 앞에서 만든 함수와 타입을 뒤에서 그대로 쓰므로 한 프로젝트에서 순서대로 푸세요.' },
+  { id: 'blankGame', template: 'blankGame', title: '빈 게임 — 게임의 뼈대', intro: `상태, 메시지, 화면, 시간 — 모든 게임이 가진 모양을 가장 작은 게임으로 익혀요. ${GAME}` },
+  { id: 'vending', template: 'vending', title: '자판기 — 함수와 타입', intro: `시그니처를 읽고, 인자를 하나만 준 함수(부분 적용)를 버튼에 연결해요. ${GAME}` },
+  { id: 'nim', template: 'nim', title: '님 — 조건', intro: `isZero와 ifThenElse·select로 규칙을 조건으로 써요. ${GAME}` },
+  { id: 'dice', template: 'dice', title: '주사위 — 난수와 쌍', intro: `생성기를 상태에 담아 무작위 수를 순수하게 다뤄요. ${GAME}` },
+  { id: 'damage', template: 'damage', title: '데미지 — 커링과 합성', intro: `슬롯을 비운 연산자로 함수를 만들고, compose로 합성해요. ${GAME}` },
+  { id: 'rps', template: 'rps', title: '가위바위보 — 데이터 타입', intro: `합 타입과 분기 함수, Maybe, 값을 싣는 메시지를 다뤄요. ${GAME}` },
+  { id: 'simon', template: 'simon', title: '사이먼 — 리스트와 재귀', intro: `패턴을 리스트로 다루며 붙이고, 자르고, 세고, 그려요. ${GAME}` },
+  { id: 'highLow', template: 'highLow', title: '하이로우 — 타입 클래스', intro: `deriving으로 얻은 Eq·Ord·Show로 카드를 비교하고 보여 줘요. ${GAME}` },
+  { id: 'clickCounter', template: 'clickCounter', title: '클릭 카운터 — 대수 구조와 구독', intro: `anyclass로 지갑에 덧셈과 순서를 주고, 시간과 키보드에 반응해요. ${GAME}` },
+  { id: 'blackjack', template: 'blackjack', title: '블랙잭 — 모두 합쳐서', intro: `리스트, 재귀, 레코드, 난수를 모두 써서 카드 게임을 만들어요. ${GAME}` },
 ]
 export const courseOf = (unit) => unit.course || 'basics'
 
-// The Blackjack course: the template (examples/blackjack.js), rebuilt one
-// function (or declared type) per unit, in parts — cards and score, showing
-// cards, the deck, the game's types, the rules, the program. Every function
-// keeps the template's name and type, so the finished project plays the same game.
-function blackjackUnits() {
-  // A test model: `Model deck player dealer gen phase wins losses`.
-  const model = (deck, player, dealer, phase = 'Playing', wins = 0, losses = 0) => `Model ${deck} ${player} ${dealer} (mkStdGen 1) ${phase} ${wins} ${losses}`
-  const course = 'blackjack'
-  const types = ['Model', 'Phase']
-  // The parts the units are grouped in (the list shows each as a heading).
-  const PARTS = {
-    cards: { title: '카드와 점수', intro: '카드 한 장은 숫자 하나예요: 1 = A, 2 … 10, 11 = J, 12 = Q, 13 = K. 손패와 덱은 모두 [Int]예요. 그림 카드는 10점, A는 1점이지만 21을 넘지 않으면 11점으로 셀 수 있어요.' },
-    show: { title: '카드 보여주기', intro: '화면에는 숫자 대신 A, 2, …, 10, J, Q, K를 보여 줘요. 리스트에서 위치로 찾는 (!?)는 없는 위치일 수도 있어서 Maybe를 돌려주고, maybe가 그 Maybe를 풀어 줘요.' },
-    deck: { title: '덱 섞기', intro: '덱은 1부터 13까지 네 장씩, 52장이에요. 섞기는 카드마다 무작위 열쇠를 붙여 열쇠 순으로 정렬한 뒤 열쇠를 버리는 방법으로 해요. 무작위 수는 생성기(StdGen)에서 차례로 뽑아요.' },
-    state: { title: '게임 상태', intro: '게임의 상태를 타입으로 선언해요. Phase는 지금 단계(진행 중, 이김, 짐, 비김), Msg는 버튼이 보내는 메시지, Model은 덱·손패·생성기·단계·전적을 담은 레코드예요. 타입을 선언하면 생성자, 필드 읽기(player), 필드 바꾸기(set·over), 분기 함수(casePhase)가 저절로 생겨요.' },
-    rules: { title: '게임 규칙', intro: '상태를 바꾸는 함수는 Model을 받아 새 Model을 돌려줘요. 카드 뽑기, 승패 기록, 버스트(21 초과) 검사, 딜러의 차례, 승패 판정을 차례로 만들어요.' },
-    game: { title: '게임 완성', intro: '마지막으로 새 판 나누기, 메시지 처리, 화면, 그리고 이 모두를 묶는 program을 만들어요. main을 시작 함수로 정하고 실행하면 블랙잭을 할 수 있어요.' },
-  }
-  // One unit per function (or declared type): the questions that lead to it, then building it.
-  const unit = (part, name, intro, exercises) => ({ id: `bj-fn-${name}`, course, part: { id: part, ...PARTS[part] }, title: name, intro, exercises })
-  return [
-    unit('cards', 'cardValue', '카드 한 장의 기본 점수예요. J·Q·K는 10점, 나머지는 숫자 그대로(A는 1점). 먼저 min이 무엇을 하는지 타입으로 확인해요.', [
-      { id: 'bj-min-type', kind: 'type', title: 'min의 타입', expr: 'min', answer: 'Ord a => a -> a -> a', engine: 'min',
-        prompt: '두 값 중 작은 쪽을 돌려주는 min의 타입을 쓰세요.', hint: '크기를 비교하려면 Ord가 필요해요. 두 인자와 결과가 같은 타입이에요.',
-        explain: 'min 13 10 == 10. 그림 카드(11, 12, 13)를 10점으로 만드는 데 딱 맞아요.' },
-      { id: 'bj-cardvalue', kind: 'build', title: 'cardValue 만들기', name: 'cardValue', params: ['r'], signature: 'Int -> Int',
-        prompt: '카드의 기본 점수를 구하는 cardValue를 만드세요. J·Q·K는 10점, 나머지는 숫자 그대로(A는 1점)예요.', uses: ['min'],
-        hint: 'min r 10: 10보다 크면 10이 돼요.',
-        tests: [{ args: ['1'], expect: '1' }, { args: ['7'], expect: '7' }, { args: ['10'], expect: '10' }, { args: ['12'], expect: '10' }, { args: ['13'], expect: '10' }] },
-    ]),
-    unit('cards', 'handSum', '손패 전체의 기본 점수예요. 리스트의 모든 카드에 cardValue를 적용해 더해요.', [
-      { id: 'bj-handsum', kind: 'build', title: 'handSum 만들기', name: 'handSum', params: ['h'], signature: '[Int] -> Int',
-        prompt: '손패의 기본 점수 합을 구하는 handSum을 만드세요. 방금 만든 cardValue를 모든 카드에 적용해 더해요.', uses: ['map', 'sum', 'cardValue'],
-        hint: 'sum (map cardValue h). map의 첫 슬롯에는 슬롯을 비운 cardValue(함수 그 자체)를 넣어요.',
-        tests: [{ args: ['[1, 13]'], expect: '11' }, { args: ['[5, 6, 12]'], expect: '21' }, { args: ['[]'], expect: '0' }] },
-    ]),
-    unit('cards', 'score', '블랙잭의 진짜 점수예요. A가 있고 10을 더해도 21을 넘지 않으면 A를 11로 세요. 필요한 elem과 select를 먼저 익혀요.', [
-      { id: 'bj-elem-type', kind: 'type', title: 'elem의 타입', expr: 'elem', answer: 'Eq a => a -> [a] -> Bool', accept: ['(Foldable t, Eq a) => a -> t a -> Bool'], engine: 'elem',
-        prompt: '값이 리스트에 들어 있는지 판별하는 elem의 타입을 쓰세요 (리스트에 대한 타입으로 써도 돼요).', hint: '같은지 비교해야 하므로 Eq가 필요해요. 결과는 Bool이에요.',
-        explain: 'elem 1 h 는 손패 h에 A가 있는지 알려 줘요.' },
-      { id: 'bj-select-type', kind: 'type', title: 'select의 타입', expr: 'select', answer: 'Bool -> a -> a -> a', engine: 'select',
-        prompt: 'select는 if … then … else를 함수로 쓴 것이에요: select c x y 는 c가 True이면 x, 아니면 y. select의 타입을 쓰세요.', hint: '조건 하나와 같은 타입의 두 갈래를 받아요.',
-        explain: '두 갈래의 타입이 같아야 하는 것은 if 식과 똑같아요. 고르지 않은 갈래는 계산하지 않아요(지연 평가) — 그래서 재귀에도 쓸 수 있어요.' },
-      { id: 'bj-soft-choice', kind: 'choice', title: 'A를 11로 세기', prompt: '손패 [1, 6] (A와 6)의 블랙잭 점수는?',
-        options: [
-          { text: '7', why: 'A를 1로 세면 7이지만, 11로 세도 21을 넘지 않으니 더 높은 점수를 써요.' },
-          { text: '17', correct: true, why: '기본 합 7에 10을 더한 17이 21 이하이므로 A를 11로 세요. A가 두 장이어도 11로 셀 수 있는 것은 한 장뿐이라서, "+10을 한 번" 하면 충분해요.' },
-          { text: '27', why: 'A 한 장만 11로 셀 수 있고, 21을 넘으면 11로 세지 않아요.' },
-        ] },
-      { id: 'bj-score', kind: 'build', title: 'score 만들기', name: 'score', params: ['h'], signature: '[Int] -> Int',
-        prompt: '손패의 점수 score를 만드세요. 기본 합을 s라 할 때, A가 있고 s + 10이 21 이하이면 s + 10, 아니면 s예요.', uses: ['handSum', 'elem', '(+)', '(<=)', '(&&)', 'select', '참조(Δ)'],
-        hint: 'select (elem 1 h && s + 10 <= 21) (s + 10) s, 여기서 s = handSum h. s와 h를 여러 번 쓰므로 참조(Δ)를 만드세요.',
-        tests: [{ args: ['[1, 13]'], expect: '21' }, { args: ['[1, 6]'], expect: '17' }, { args: ['[1, 6, 9]'], expect: '16' }, { args: ['[1, 1]'], expect: '12' }, { args: ['[10, 9, 5]'], expect: '24' }, { args: ['[]'], expect: '0' }] },
-    ]),
-    unit('show', 'cardName', '카드의 이름(A, 2, …, K)이에요. 이름 리스트에서 위치로 찾는데, 없는 위치일 수도 있어서 Maybe가 나와요.', [
-      { id: 'bj-index-type', kind: 'type', title: '(!?)의 타입', expr: '(!?)', answer: '[a] -> Int -> Maybe a', engine: 'index',
-        prompt: '리스트의 i번째(0부터) 원소를 찾는 (!?)의 타입을 쓰세요. 범위를 벗어나면 Nothing이에요.', hint: '리스트 하나와 Int 위치를 받아 Maybe a를 돌려줘요.',
-        explain: '["A", "2"] !? 0 == Just "A", ["A", "2"] !? 5 == Nothing. 실패할 수 있다는 것이 타입에 드러나요.' },
-      { id: 'bj-maybe-type', kind: 'type', title: 'maybe의 타입', expr: 'maybe', answer: 'b -> (a -> b) -> Maybe a -> b', engine: 'maybe',
-        prompt: 'maybe d f m 은 m이 Nothing이면 d, Just x이면 f x예요. maybe의 타입을 쓰세요.', hint: '기본값 b, 함수 (a -> b), 그리고 Maybe a를 받아요.',
-        explain: 'maybe "?" identity (names !? i): 찾으면 그 이름, 못 찾으면 "?".' },
-      { id: 'bj-cardname', kind: 'build', title: 'cardName 만들기', name: 'cardName', params: ['r'], signature: 'Int -> String',
-        prompt: '카드의 이름을 구하는 cardName을 만드세요: 1 → "A", 2 → "2", …, 13 → "K". 범위 밖의 수는 "?"예요.', uses: ['[ , , ]', '(-)', '(!?)', 'maybe', 'identity'],
-        hint: 'maybe "?" identity (["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"] !? (r - 1)). 위치는 0부터라서 r - 1이에요.',
-        tests: [{ args: ['1'], expect: '"A"' }, { args: ['10'], expect: '"10"' }, { args: ['12'], expect: '"Q"' }, { args: ['0'], expect: '"?"' }, { args: ['14'], expect: '"?"' }] },
-    ]),
-    unit('show', 'cardLabel', '이름 뒤에 공백을 붙여, 여러 장을 이어 보여 줄 준비를 해요.', [
-      { id: 'bj-cardlabel', kind: 'build', title: 'cardLabel 만들기', name: 'cardLabel', params: ['r'], signature: 'Int -> String',
-        prompt: '카드 이름 뒤에 공백 하나를 붙인 cardLabel을 만드세요.', uses: ['cardName', '(++)'],
-        hint: 'cardName r ++ " "',
-        tests: [{ args: ['13'], expect: '"K "' }, { args: ['5'], expect: '"5 "' }] },
-    ]),
-    unit('show', 'showHand', '손패 전체를 한 문자열로 보여 줘요. 카드마다 cardLabel을 적용해 이어 붙여요.', [
-      { id: 'bj-concatmap-type', kind: 'type', title: 'concatMap의 타입', expr: 'concatMap', answer: '(a -> [b]) -> [a] -> [b]', accept: ['Foldable t => (a -> [b]) -> t a -> [b]'], engine: 'concatMap',
-        prompt: 'concatMap f xs 는 각 원소에 리스트를 돌려주는 f를 적용하고 결과들을 이어 붙여요. concatMap의 타입을 쓰세요.', hint: 'map과 비슷하지만 f가 리스트를 돌려주고, 결과는 이어 붙인 한 리스트예요.',
-        explain: 'String은 [Char]라서 concatMap cardLabel [1, 13] == "A K " 처럼 문자열을 이어 붙이는 데도 써요.' },
-      { id: 'bj-showhand', kind: 'build', title: 'showHand 만들기', name: 'showHand', params: ['h'], signature: '[Int] -> String',
-        prompt: '손패를 "A K " 처럼 보여 주는 showHand를 만드세요.', uses: ['concatMap', 'cardLabel'],
-        hint: 'concatMap cardLabel h. 첫 슬롯에는 슬롯을 비운 cardLabel을 넣어요.',
-        tests: [{ args: ['[1, 13]'], expect: '"A K "' }, { args: ['[10, 2, 7]'], expect: '"10 2 7 "' }, { args: ['[]'], expect: '""' }] },
-    ]),
-    unit('deck', 'fullDeck', '섞기 전의 52장 덱이에요. 1부터 13까지 네 장씩.', [
-      { id: 'bj-deck-choice', kind: 'choice', title: '덱 만들기', prompt: '1부터 13까지 각각 네 장씩 담은 [Int]를 만드는 식은?',
-        options: [
-          { text: 'replicate 4 (enumFromTo 1 13)', why: '[1..13] 리스트 네 개의 리스트, [[Int]]가 돼요. 타입이 맞지 않아요.' },
-          { text: 'map (replicate 4) (enumFromTo 1 13)', why: '[[1,1,1,1], [2,2,2,2], …] — 역시 [[Int]]예요. 이어 붙여야 해요.' },
-          { text: 'concatMap (replicate 4) (enumFromTo 1 13)', correct: true, why: '각 수를 네 번 복제한 리스트들을 이어 붙여 [1,1,1,1,2,…,13]이 돼요. map한 뒤 concat하는 것이 concatMap이에요.' },
-          { text: 'enumFromTo 1 52', why: '52장이긴 하지만 카드의 값이 1~13이 아니에요.' },
-        ] },
-      { id: 'bj-fulldeck', kind: 'build', title: 'fullDeck 만들기', name: 'fullDeck', params: [], signature: '[Int]',
-        prompt: '매개변수 없는 값 fullDeck을 만드세요: 1부터 13까지 각각 네 장씩, 정렬된 52장의 덱이에요.', uses: ['concatMap', 'replicate', 'enumFromTo'],
-        hint: 'concatMap (replicate 4) (enumFromTo 1 13). replicate는 첫 슬롯에만 4를 넣어요.',
-        tests: [{ args: [], after: ['length'], expect: '52' }, { args: [], after: ['sum'], expect: '364' }, { args: [], after: ['take 6'], expect: '[1, 1, 1, 1, 2, 2]' }] },
-    ]),
-    unit('deck', 'byKey', '섞기의 정렬 기준이에요. (열쇠, 카드) 쌍을 열쇠로 비교해요. 쌍을 만드는 zip부터 봐요.', [
-      { id: 'bj-zip-type', kind: 'type', title: 'zip의 타입', expr: 'zip', answer: '[a] -> [b] -> [(a, b)]', engine: 'zip',
-        prompt: '두 리스트를 짝지어 쌍의 리스트로 만드는 zip의 타입을 쓰세요.', hint: '쌍의 타입은 (a, b)예요.',
-        explain: 'zip [7, 3] [1, 13] == [(7, 1), (3, 13)]. 짧은 쪽이 끝나면 멈춰요 — 그래서 한쪽이 무한 리스트여도 괜찮아요.' },
-      { id: 'bj-bykey', kind: 'build', title: 'byKey 만들기', name: 'byKey', params: ['a', 'b'], signature: '(Int, Int) -> (Int, Int) -> Ordering',
-        prompt: '(열쇠, 카드) 쌍 두 개를 열쇠(첫 성분)로 비교하는 byKey를 만드세요.', uses: ['fst', 'compare'],
-        hint: 'compare (fst a) (fst b). 결과는 LT, EQ, GT 중 하나예요.',
-        tests: [{ args: ['(3, 9)', '(5, 1)'], expect: 'LT' }, { args: ['(5, 1)', '(3, 9)'], expect: 'GT' }, { args: ['(4, 1)', '(4, 2)'], expect: 'EQ' }] },
-    ]),
-    unit('deck', 'rolls', '무작위 열쇠를 끝없이 뽑는 리스트예요. 생성기에서 수 하나와 다음 생성기를 얻고, 자기 자신을 다시 불러요(재귀).', [
-      { id: 'bj-lazy-choice', kind: 'choice', title: '무한 리스트', prompt: '곧 만들 rolls g 는 끝이 없는 리스트예요. zip (rolls g) [1, 2, 3] 은 어떻게 될까요?',
-        options: [
-          { text: '끝나지 않는다', why: 'Haskell은 값이 필요할 때만 계산해요(지연 평가). zip은 [1, 2, 3]이 끝나면 멈추므로 rolls의 앞 세 개만 계산해요.' },
-          { text: '세 쌍의 리스트가 된다', correct: true, why: 'zip은 짧은 쪽에 맞춰 멈추고, rolls는 필요한 세 개만 계산돼요. 무한 리스트를 "필요한 만큼 꺼내 쓰는 공급원"으로 쓸 수 있어요.' },
-          { text: '타입 오류다', why: '무한 리스트도 그냥 [Int]예요. 길이는 타입에 나타나지 않아요.' },
-        ] },
-      { id: 'bj-rolls', kind: 'build', title: 'rolls 만들기', name: 'rolls', params: ['g'], signature: 'StdGen -> [Int]',
-        prompt: '생성기 g에서 0~1000000 사이의 무작위 수를 끝없이 뽑는 rolls를 만드세요. randomRInt (0, 1000000) g 는 (수, 다음 생성기) 쌍을 돌려줘요.', uses: ['randomRInt', '(,)', 'fst', 'snd', '(:)', 'rolls'],
-        hint: 'fst r : rolls (snd r), 여기서 r = randomRInt (0, 1000000) g. 자기 자신(rolls)을 부르는 재귀예요 — 끝이 없지만 지연 평가라서 필요한 만큼만 계산해요.',
-        tests: [{ args: ['mkStdGen 1'], after: ['take 3', 'length'], expect: '3' }, { args: ['mkStdGen 1'], after: ['take 3'], expect: '[627074, 2735, 527447]' }] },
-    ]),
-    unit('deck', 'shuffle', '덱 섞기: 카드마다 무작위 열쇠를 붙이고, 열쇠 순으로 정렬한 뒤, 열쇠를 버려요.', [
-      { id: 'bj-sortby-type', kind: 'type', title: 'sortBy의 타입', expr: 'sortBy', answer: '(a -> a -> Ordering) -> [a] -> [a]', engine: 'sortBy',
-        prompt: '비교 함수로 리스트를 정렬하는 sortBy의 타입을 쓰세요.', hint: '첫 인자는 두 값을 받아 Ordering을 돌려주는 함수예요.',
-        explain: 'sortBy byKey 는 쌍들을 열쇠 순으로 정렬해요. 원소 타입 a가 쌍 (Int, Int)이 돼요.' },
-      { id: 'bj-shuffle', kind: 'build', title: 'shuffle 만들기', name: 'shuffle', params: ['g', 'xs'], signature: 'StdGen -> [Int] -> [Int]',
-        prompt: '리스트를 섞는 shuffle을 만드세요: 각 원소에 rolls g의 열쇠를 짝짓고(zip), byKey로 정렬한 뒤(sortBy), 카드만 남겨요(map snd).', uses: ['rolls', 'zip', 'sortBy', 'byKey', 'map', 'snd'],
-        hint: 'map snd (sortBy byKey (zip (rolls g) xs)).',
-        tests: [{ args: ['mkStdGen 1', '[1, 2, 3, 4, 5]'], expect: '[2, 3, 1, 5, 4]' }, { args: ['mkStdGen 7', 'fullDeck'], after: ['length'], expect: '52' }, { args: ['mkStdGen 7', 'fullDeck'], after: ['sum'], expect: '364' }] },
-    ]),
-    unit('state', 'Phase', '판의 단계예요: 진행 중, 이김, 짐, 비김. 선언하면 분기 함수 casePhase가 생겨요.', [
-      { id: 'bj-phase', kind: 'declare', title: 'Phase 선언', name: 'Phase', declaration: 'data Phase = Playing | Won | Lost | Push deriving (Eq, Show)',
-        prompt: '게임의 단계 Phase를 선언하세요: Playing, Won, Lost, Push. 같은지 비교하고(Eq) 보여 줄(Show) 수 있어야 해요.',
-        hint: '사이드바 타입의 + 버튼 → 이름 Phase, 생성자 네 개(필드 없음)를 이 순서로, deriving에 Eq와 Show.',
-        explain: '생성자의 순서가 casePhase의 인자 순서가 돼요: casePhase p w l t phase 는 Playing이면 p, Won이면 w ….' },
-      { id: 'bj-casephase-type', kind: 'type', title: 'casePhase의 타입', expr: 'casePhase', answer: 'r -> r -> r -> r -> Phase -> r',
-        prompt: 'Phase를 선언하면 생기는 분기 함수 casePhase의 타입을 쓰세요. 생성자마다 결과 하나씩, 마지막에 Phase를 받아요.', hint: '생성자가 네 개이고 필드가 없으니 결과 타입 r 네 개, 그리고 Phase.',
-        explain: '하스켈의 case p of { Playing -> …; Won -> … } 를 함수로 쓴 것이에요. 예: casePhase "Hit or stand?" "You win!" "You lose." "Push" (phase m).' },
-    ]),
-    unit('state', 'Msg', '버튼이 보내는 메시지 세 가지예요.', [
-      { id: 'bj-msg', kind: 'declare', title: 'Msg 선언', name: 'Msg', declaration: 'data Msg = Hit | Stand | Deal deriving (Eq, Show)',
-        prompt: '버튼이 보내는 메시지 Msg를 선언하세요: Hit(한 장 더), Stand(멈춤), Deal(새 판). Eq와 Show를 유도하세요.',
-        hint: '생성자 Hit, Stand, Deal — 이 순서로.' },
-    ]),
-    unit('state', 'Model', '게임 상태 전체를 담는 레코드예요. 필드마다 읽기·바꾸기·고치기 함수가 생겨요.', [
-      { id: 'bj-model', kind: 'declare', title: 'Model 선언', name: 'Model', declaration: 'data Model = Model { deck :: [Int], player :: [Int], dealer :: [Int], gen :: StdGen, phase :: Phase, wins :: Int, losses :: Int } deriving (Show)',
-        prompt: '게임 상태 Model을 레코드로 선언하세요: deck, player, dealer :: [Int], gen :: StdGen, phase :: Phase, wins, losses :: Int — 이 순서로. Show를 유도하세요.',
-        hint: '생성자 Model 하나에 필드 일곱 개. 필드 순서가 생성자 Model의 인자 순서가 돼요.',
-        explain: '레코드의 필드마다 읽기(player :: Model -> [Int]), 바꾸기(set player), 고치기(over player) 함수가 생겨요.' },
-      { id: 'bj-player-type', kind: 'type', title: '필드 읽기의 타입', expr: 'player', answer: 'Model -> [Int]',
-        prompt: 'Model의 필드 player를 읽는 함수 player의 타입을 쓰세요.', hint: 'Model 하나를 받아 그 필드의 값을 돌려줘요.',
-        explain: 'player m 은 m의 손패예요. 필드 이름이 그대로 함수가 돼요.' },
-      { id: 'bj-over-choice', kind: 'choice', title: '필드 고치기', prompt: 'over wins 의 타입은 (Int -> Int) -> Model -> Model 이에요. 이긴 횟수를 하나 늘린 Model은?',
-        options: [
-          { text: 'over wins 1 m', why: 'over의 첫 인자는 값이 아니라 함수 (Int -> Int)예요. 1은 함수가 아니에요.' },
-          { text: 'over wins (+ 1) m', correct: true, why: '(+ 1)은 Int -> Int 함수라서 wins 필드에 적용돼요. 나머지 필드는 그대로예요.' },
-          { text: 'wins m + 1', why: '이것은 Int예요. 늘어난 수를 계산할 뿐 Model을 만들지 않아요.' },
-          { text: 'set wins (+ 1) m', why: 'set의 첫 인자는 새 값(Int)이에요. 함수를 적용하려면 over를 써요.' },
-        ] },
-    ]),
-    unit('state', 'isPlaying', '지금 판이 진행 중인지 알려 줘요. 버튼 동작이 모두 이것을 먼저 확인해요.', [
-      { id: 'bj-isplaying', kind: 'build', title: 'isPlaying 만들기', name: 'isPlaying', params: ['m'], signature: 'Model -> Bool', types,
-        prompt: '아직 판이 진행 중인지(phase가 Playing인지) 판별하는 isPlaying을 만드세요.', uses: ['phase', 'Playing', '(==)'],
-        hint: 'phase m == Playing. Phase가 Eq를 유도했기 때문에 (==)를 쓸 수 있어요.',
-        tests: [{ args: [model('[]', '[10, 6]', '[10, 7]')], expect: 'True' }, { args: [model('[]', '[10, 6]', '[10, 7]', 'Won')], expect: 'False' }] },
-    ]),
-    unit('rules', 'drawPlayer', '덱 맨 위 카드를 플레이어의 손패로 옮겨요. Model을 받아 새 Model을 돌려주는 첫 함수예요.', [
-      { id: 'bj-drawplayer', kind: 'build', title: 'drawPlayer 만들기', name: 'drawPlayer', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '덱의 맨 위 카드를 플레이어의 손패 끝에 더하고 덱에서 빼는 drawPlayer를 만드세요.', uses: ['deck', 'take', 'drop', '(++)', 'over player', 'set deck'],
-        hint: 'set deck (drop 1 (deck m)) (over player (++ take 1 (deck m)) m). (++)의 둘째 슬롯에만 take 1 (deck m)을 넣으면 "뒤에 붙이기" 함수가 돼요.',
-        tests: [{ args: [model('[5, 9]', '[10, 6]', '[10, 7]')], after: ['player'], expect: '[10, 6, 5]' }, { args: [model('[5, 9]', '[10, 6]', '[10, 7]')], after: ['deck'], expect: '[9]' }] },
-    ]),
-    unit('rules', 'drawDealer', '같은 일을 딜러의 손패에 해요.', [
-      { id: 'bj-drawdealer', kind: 'build', title: 'drawDealer 만들기', name: 'drawDealer', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '같은 방법으로 딜러의 손패에 한 장 더하는 drawDealer를 만드세요.', uses: ['deck', 'take', 'drop', '(++)', 'over dealer', 'set deck'],
-        hint: 'drawPlayer에서 over player를 over dealer로 바꾸면 돼요.',
-        tests: [{ args: [model('[5, 9]', '[10, 6]', '[10, 7]')], after: ['dealer'], expect: '[10, 7, 5]' }, { args: [model('[5, 9]', '[10, 6]', '[10, 7]')], after: ['deck'], expect: '[9]' }] },
-    ]),
-    unit('rules', 'settle', '판을 끝내며 결과를 기록해요: 단계를 바꾸고, 이기거나 진 횟수를 늘려요.', [
-      { id: 'bj-settle', kind: 'build', title: 'settle 만들기', name: 'settle', params: ['p', 'm'], signature: 'Phase -> Model -> Model', types,
-        prompt: '판을 끝내는 settle p m을 만드세요: phase를 p로 바꾸고, p가 Won이면 wins를, Lost이면 losses를 1 늘려요.', uses: ['casePhase', 'over wins', 'over losses', 'set phase', '(+)'],
-        hint: 'set phase p (over losses (+ casePhase 0 0 1 0 p) (over wins (+ casePhase 0 1 0 0 p) m)). casePhase 0 1 0 0 p 는 Won일 때만 1이에요.',
-        tests: [{ args: ['Won', model('[]', '[]', '[]', 'Playing', 2, 1)], after: ['wins'], expect: '3' }, { args: ['Won', model('[]', '[]', '[]', 'Playing', 2, 1)], after: ['phase'], expect: 'Won' },
-          { args: ['Lost', model('[]', '[]', '[]', 'Playing', 2, 1)], after: ['losses'], expect: '2' }, { args: ['Push', model('[]', '[]', '[]', 'Playing', 2, 1)], after: ['wins'], expect: '2' }] },
-    ]),
-    unit('rules', 'checkBust', '21을 넘으면(버스트) 바로 져요.', [
-      { id: 'bj-checkbust', kind: 'build', title: 'checkBust 만들기', name: 'checkBust', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '플레이어의 점수가 21을 넘으면 진 것으로(settle Lost) 끝내고, 아니면 그대로 두는 checkBust를 만드세요.', uses: ['player', 'score', '(>)', 'settle', 'Lost', 'select'],
-        hint: 'select (score (player m) > 21) (settle Lost m) m.',
-        tests: [{ args: [model('[]', '[10, 6, 9]', '[10, 7]')], after: ['phase'], expect: 'Lost' }, { args: [model('[]', '[10, 6, 9]', '[10, 7]')], after: ['losses'], expect: '1' }, { args: [model('[]', '[10, 6, 5]', '[10, 7]')], after: ['phase'], expect: 'Playing' }] },
-    ]),
-    unit('rules', 'hit', '"Hit" 버튼: 한 장 더 받아요.', [
-      { id: 'bj-hit', kind: 'build', title: 'hit 만들기', name: 'hit', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '"Hit" 버튼의 동작 hit을 만드세요: 판이 진행 중이면 한 장 뽑고 버스트를 검사하고, 끝난 판이면 아무것도 하지 않아요.', uses: ['isPlaying', 'drawPlayer', 'checkBust', 'select'],
-        hint: 'select (isPlaying m) (checkBust (drawPlayer m)) m.',
-        tests: [{ args: [model('[5, 9]', '[10, 6]', '[10, 7]')], after: ['player'], expect: '[10, 6, 5]' }, { args: [model('[9, 5]', '[10, 6]', '[10, 7]')], after: ['phase'], expect: 'Lost' },
-          { args: [model('[5, 9]', '[10, 6]', '[10, 7]', 'Won')], after: ['player'], expect: '[10, 6]' }] },
-    ]),
-    unit('rules', 'dealerPlay', '딜러의 차례예요: 17 이상이 될 때까지 뽑아요. 재귀로 만들어요.', [
-      { id: 'bj-dealerplay', kind: 'build', title: 'dealerPlay 만들기', name: 'dealerPlay', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '딜러는 점수가 17 이상이 될 때까지 카드를 뽑아요. dealerPlay를 재귀로 만드세요.', uses: ['dealer', 'score', '(>=)', 'drawDealer', 'dealerPlay', 'select'],
-        hint: 'select (score (dealer m) >= 17) m (dealerPlay (drawDealer m)). 17 이상이면 멈추고, 아니면 한 장 뽑아 다시 dealerPlay.',
-        tests: [{ args: [model('[3, 4, 9]', '[10, 9]', '[10, 2]')], after: ['dealer'], expect: '[10, 2, 3, 4]' }, { args: [model('[3, 4, 9]', '[10, 9]', '[10, 7]')], after: ['dealer'], expect: '[10, 7]' },
-          { args: [model('[5, 9]', '[10, 9]', '[1, 2]')], after: ['dealer'], expect: '[1, 2, 5]' }] },
-    ]),
-    unit('rules', 'outcome', '두 손패의 점수를 비교해 승패를 정해요.', [
-      { id: 'bj-outcome', kind: 'build', title: 'outcome 만들기', name: 'outcome', params: ['m'], signature: 'Model -> Phase', types,
-        prompt: '두 사람이 멈춘 뒤의 결과 outcome을 만드세요: 딜러가 21을 넘거나 플레이어 점수가 더 높으면 Won, 같으면 Push, 아니면 Lost.', uses: ['player', 'dealer', 'score', '(>)', '(||)', '(==)', 'select'],
-        hint: 'select (d > 21 || p > d) Won (select (p == d) Push Lost), 여기서 p = score (player m), d = score (dealer m).',
-        tests: [{ args: [model('[]', '[10, 9]', '[10, 7]')], expect: 'Won' }, { args: [model('[]', '[10, 7]', '[10, 9]')], expect: 'Lost' },
-          { args: [model('[]', '[10, 8]', '[9, 9]')], expect: 'Push' }, { args: [model('[]', '[10, 2]', '[10, 6, 9]')], expect: 'Won' }] },
-    ]),
-    unit('rules', 'finish', '딜러의 차례와 판정을 이어 판을 끝내요.', [
-      { id: 'bj-finish', kind: 'build', title: 'finish 만들기', name: 'finish', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '딜러의 차례를 진행하고 그 결과로 판을 끝내는 finish를 만드세요.', uses: ['dealerPlay', 'outcome', 'settle', '참조(Δ)'],
-        hint: 'settle (outcome d) d, 여기서 d = dealerPlay m.',
-        tests: [{ args: [model('[5, 9]', '[10, 9]', '[10, 6]')], after: ['phase'], expect: 'Lost' }, { args: [model('[9, 5]', '[10, 9]', '[10, 6]')], after: ['phase'], expect: 'Won' }, { args: [model('[9, 5]', '[10, 9]', '[10, 6]')], after: ['wins'], expect: '1' }] },
-    ]),
-    unit('rules', 'stand', '"Stand" 버튼: 멈추고 딜러에게 차례를 넘겨요.', [
-      { id: 'bj-stand', kind: 'build', title: 'stand 만들기', name: 'stand', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '"Stand" 버튼의 동작 stand를 만드세요: 진행 중인 판이면 finish, 끝난 판이면 그대로.', uses: ['isPlaying', 'finish', 'select'],
-        hint: 'select (isPlaying m) (finish m) m.',
-        tests: [{ args: [model('[5, 9]', '[10, 9]', '[10, 6]')], after: ['losses'], expect: '1' }, { args: [model('[5, 9]', '[10, 9]', '[10, 6]', 'Won')], after: ['dealer'], expect: '[10, 6]' }] },
-    ]),
-    unit('game', 'deal', '새 판이에요: 섞은 덱에서 두 장씩 나눠요.', [
-      { id: 'bj-deal', kind: 'build', title: 'deal 만들기', name: 'deal', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '새 판을 나누는 deal을 만드세요: d = shuffle (gen m) fullDeck 에서 플레이어가 앞 두 장, 딜러가 그다음 두 장을 받고 나머지가 덱이 돼요. 다음 판을 위해 생성기는 mkStdGen (fst (randomRInt (0, 1000000000) (gen m)))로 바꾸고, phase는 Playing, 전적은 그대로예요.',
-        uses: ['Model', 'shuffle', 'fullDeck', 'take', 'drop', 'randomRInt', 'mkStdGen', 'Playing', 'wins', 'losses'],
-        hint: 'Model (drop 4 d) (take 2 d) (take 2 (drop 2 d)) (mkStdGen (fst (randomRInt (0, 1000000000) (gen m)))) Playing (wins m) (losses m).',
-        tests: [{ args: [model('[]', '[]', '[]', 'Won', 3, 1)], after: ['player'], expect: '[1, 6]' }, { args: [model('[]', '[]', '[]', 'Won', 3, 1)], after: ['dealer'], expect: '[12, 5]' },
-          { args: [model('[]', '[]', '[]', 'Won', 3, 1)], after: ['deck', 'length'], expect: '48' }, { args: [model('[]', '[]', '[]', 'Won', 3, 1)], after: ['phase'], expect: 'Playing' }, { args: [model('[]', '[]', '[]', 'Won', 3, 1)], after: ['wins'], expect: '3' }] },
-    ]),
-    unit('game', 'nextRound', '"Deal" 버튼: 끝난 판에서만 새 판을 시작해요.', [
-      { id: 'bj-nextround', kind: 'build', title: 'nextRound 만들기', name: 'nextRound', params: ['m'], signature: 'Model -> Model', types,
-        prompt: '"Deal" 버튼의 동작 nextRound를 만드세요: 판이 끝났을 때만 새로 나누고, 진행 중이면 그대로.', uses: ['isPlaying', 'deal', 'select'],
-        hint: 'select (isPlaying m) m (deal m).',
-        tests: [{ args: [model('[5]', '[10, 6]', '[10, 7]')], after: ['player'], expect: '[10, 6]' }, { args: [model('[5]', '[10, 6]', '[10, 7]', 'Lost')], after: ['deck', 'length'], expect: '48' }] },
-    ]),
-    unit('game', 'handle', '메시지에 맞는 버튼 동작을 골라요.', [
-      { id: 'bj-handle', kind: 'build', title: 'handle 만들기', name: 'handle', params: ['msg', 'm'], signature: 'Msg -> Model -> Model', types: ['Model', 'Phase', 'Msg'],
-        prompt: '메시지에 따라 동작을 고르는 handle을 만드세요: Hit → hit, Stand → stand, Deal → nextRound.', uses: ['caseMsg', 'hit', 'stand', 'nextRound', 'apply'],
-        hint: 'apply (caseMsg hit stand nextRound msg) m. caseMsg가 Model -> Model 함수 하나를 골라 주고, apply가 그것을 m에 적용해요.',
-        tests: [{ args: ['Hit', model('[5, 9]', '[10, 6]', '[10, 7]')], after: ['player'], expect: '[10, 6, 5]' }, { args: ['Stand', model('[5, 9]', '[10, 9]', '[10, 6]')], after: ['phase'], expect: 'Lost' },
-          { args: ['Deal', model('[5, 9]', '[10, 6]', '[10, 7]')], after: ['player'], expect: '[10, 6]' }] },
-    ]),
-    unit('game', 'view', '화면이에요: 손패와 점수, 상태 문구, 버튼, 전적.', [
-      { id: 'bj-view', kind: 'build', title: 'view 만들기', name: 'view', params: ['m'], signature: 'Model -> Widget Msg', types: ['Model', 'Phase', 'Msg'],
-        prompt: '화면 view를 만드세요: column [heading "Blackjack", 딜러 줄, 플레이어 줄, 상태 문구, row [button "Hit" Hit, button "Stand" Stand, button "Deal" Deal], 전적]. 딜러의 둘째 카드는 판이 진행 중일 때 숨겨요(take 1). 이 문제는 타입만 채점해요 — 실행해서 화면을 확인하세요.',
-        uses: ['column', 'row', 'heading', 'text', 'button', 'showHand', 'score', 'show', 'casePhase', '(++)', '[ , , ]'],
-        hint: '딜러 줄: "Dealer: " ++ showHand (select (isPlaying m) (take 1 (dealer m)) (dealer m)) ++ select (isPlaying m) "?" ("(" ++ show (score (dealer m)) ++ ")"). 상태 문구: casePhase "Hit or stand?" "You win!" "You lose." "Push — a tie." (phase m).' },
-    ]),
-    unit('game', 'step', '시간의 흐름이에요. 블랙잭에서는 아무것도 바뀌지 않아요.', [
-      { id: 'bj-step', kind: 'build', title: 'step 만들기', name: 'step', params: ['dt', 'm'], signature: 'Double -> Model -> Model', types,
-        prompt: '블랙잭은 시간이 흘러도 변하는 것이 없어요. 상태를 그대로 돌려주는 step을 만드세요.', uses: [],
-        hint: 'm 매개변수를 바로 Output에 이으세요.',
-        tests: [{ args: ['0.5', model('[5]', '[10, 6]', '[10, 7]')], after: ['player'], expect: '[10, 6]' }] },
-    ]),
-    unit('game', 'initial', '처음 상태예요: 빈 Model에서 첫 판을 나눠요.', [
-      { id: 'bj-initial', kind: 'build', title: 'initial 만들기', name: 'initial', params: [], signature: 'Model', types,
-        prompt: '처음 상태 initial을 만드세요: 빈 Model(덱·손패 [], mkStdGen 2026, Playing, 0승 0패)을 deal로 나눠요.', uses: ['deal', 'Model', '[]', 'mkStdGen', 'Playing'],
-        hint: 'deal (Model [] [] [] (mkStdGen 2026) Playing 0 0).',
-        tests: [{ args: [], after: ['player', 'length'], expect: '2' }, { args: [], after: ['deck', 'length'], expect: '48' }, { args: [], after: ['wins'], expect: '0' }] },
-    ]),
-    unit('game', 'main', '모두 묶어 게임으로 만들어요: program initial view handle step.', [
-      { id: 'bj-program-type', kind: 'type', title: 'program의 타입', expr: 'program', answer: 'm -> (m -> Widget e) -> (e -> m -> m) -> (Double -> m -> m) -> Program m e', engine: 'program',
-        prompt: 'program은 처음 상태, 화면, 메시지 처리, 시간 흐름(step)을 받아 게임을 만들어요. program의 타입을 쓰세요 (상태 m, 메시지 e).', hint: 'm, (m -> Widget e), (e -> m -> m), (Double -> m -> m)를 받아 Program m e.',
-        explain: '이 앱의 게임은 모두 이 모양이에요(Elm 아키텍처): 상태 → 화면, 메시지 → 상태 바꾸기, 시간 → 상태 바꾸기.' },
-      { id: 'bj-main', kind: 'build', title: 'main 만들기', name: 'main', params: [], signature: 'Program Model Msg', types: ['Model', 'Phase', 'Msg'],
-        prompt: '모두 묶어 main = program initial view handle step 을 만드세요. 그다음 main을 시작 함수로 정하고 실행하면 블랙잭 완성이에요!', uses: ['program', 'initial', 'view', 'handle', 'step'],
-        hint: 'view, handle, step은 슬롯을 비운 채(함수 그 자체로) program의 슬롯에 넣어요.' },
-    ]),
-  ]
-}
 
 /** Every exercise, in course order, with its unit's id. */
 export const ALL_EXERCISES = EXERCISE_UNITS.flatMap((u) => u.exercises.map((e) => ({ ...e, unit: u.id })))

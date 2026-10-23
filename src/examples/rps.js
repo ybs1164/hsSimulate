@@ -33,7 +33,7 @@ data Msg = Throw Hand deriving stock (Eq, Show)`
 const M = (field) => T('Model', field)
 const H = (ctor) => T('Hand', ctor)
 
-const FUNCTIONS = {
+export const RPS_FUNCTIONS = {
   beats: [['a', 'b'], [
     ref('b2', 'b'), ref('b3', 'b'),
     call('sc', H('Scissors'), 'Scissors'), call('vsS', 'eq', '(==)', [n('b'), n('sc')]),
@@ -89,5 +89,5 @@ const FUNCTIONS = {
 }
 
 export function buildRps() {
-  return buildProject(RPS_TYPES, FUNCTIONS)
+  return buildProject(RPS_TYPES, RPS_FUNCTIONS)
 }

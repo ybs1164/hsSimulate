@@ -248,12 +248,16 @@ function parseValueTree(text) {
   return tree
 }
 
+// The Prelude's constructors a test value may use, by their ids.
+const PRELUDE_CONSTRUCTORS = { Just: 'prelude:just', Nothing: 'prelude:nothing' }
+
 // The definition a name in a test value stands for: a constructor of the
 // project's types or a field of one, a Prelude function, or one of the
 // project's functions.
 function resolveName(name, scope) {
   const owner = Object.values(scope.types || {}).find((d) => d.constructors.some((c) => c.name === name || (d.constructors.length === 1 && c.record && c.fields.some((f) => f.name === name))))
   if (owner) return `type:${owner.name}:${name}`
+  if (PRELUDE_CONSTRUCTORS[name]) return PRELUDE_CONSTRUCTORS[name]
   if (scope.registry?.[`prelude:${name}`]) return `prelude:${name}`
   const fn = Object.values(scope.registry || {}).find((d) => d?.type === 'function' && d.custom && !d.sourceFunctionId && !d.lambda && d.label === name)
   if (fn) return fn.id
@@ -289,8 +293,11 @@ function applySlot(expr, slot, graph, prefix, scope) {
   return emitValue(tree, graph, prefix, scope, [slot])
 }
 
+// `show` writes a character past ASCII as its code (`"\8212"` for "—"), as
+// Haskell's does; the result is read back with the character itself.
+const unescape = (s) => String(s).replace(/\\(\d+)(\\&)?/g, (_, code) => String.fromCodePoint(Number(code)))
 // Shown values compared without the spaces outside of quotes.
-const normalize = (s) => String(s).replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\s+/g, (m, q) => q || '')
+const normalize = (s) => unescape(s).replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\s+/g, (m, q) => q || '')
 
 /**
  * Grade a `build` exercise against the project. `project` is
@@ -314,7 +321,9 @@ export function gradeBuild(exercise, project) {
   const expected = parseQualType(exercise.signature)
 
   if (!add('exists', `함수 ${exercise.name} 만들기`, !!fn && !!functionBodies[fn.id], fn ? '' : `${exercise.name}이라는 이름의 커스텀 함수가 없어요. "함수 만들기"를 눌러 시작하세요.`)) return done()
-  const wantArity = arity(expected.type)
+  // The parameters the definition names, which may be fewer than the arrows
+  // of its type (`weapon :: Bool -> Int -> Int; weapon b = select b (+ 5) identity`).
+  const wantArity = exercise.params?.length ?? arity(expected.type)
   if (!add('arity', `매개변수 ${wantArity}개`, fn.params.length === wantArity, fn.params.length === wantArity ? fn.params.join(', ') : `매개변수가 ${fn.params.length}개예요. 이 함수는 ${wantArity}개를 받아야 해요.`)) return done()
 
   // An Output with nothing wired in has no body to check: an empty body
@@ -349,7 +358,11 @@ export function gradeBuild(exercise, project) {
     try {
       const graph = {}
       const slots = test.args.map((a, j) => argumentSlot(a, graph, `arg${j}`, scope))
-      graph.out = call('out', fn.id, fn.label, slots)
+      // Arguments past the function's own parameters go to what it returns.
+      const own = fn.params.length
+      const ids = slots.slice(own).map((_, j) => `out${j}`).concat('out')
+      graph[ids[0]] = call(ids[0], fn.id, fn.label, slots.slice(0, own))
+      slots.slice(own).forEach((slot, j) => { graph[ids[j + 1]] = call(ids[j + 1], 'apply', 'apply', [{ node: ids[j] }, slot]) })
       // `after` looks at part of the result (a field of a Model, its length …).
       const seen = (test.after || []).reduce((slot, expr, j) => applySlot(expr, slot, graph, `after${j}`, scope), { node: 'out' })
       // Shown through the Prelude's show, at the result's type (a Double prints as 15.0).
@@ -359,7 +372,7 @@ export function gradeBuild(exercise, project) {
       if (e instanceof EvalError || e instanceof GradeError || e instanceof RangeError) return add(`test${i}`, label, false, `실행 오류: ${e.message}`)
       throw e
     }
-    add(`test${i}`, label, normalize(shown) === normalize(test.expect), normalize(shown) === normalize(test.expect) ? '' : `결과가 ${shown}이에요.`)
+    add(`test${i}`, label, normalize(shown) === normalize(test.expect), normalize(shown) === normalize(test.expect) ? '' : `결과가 ${unescape(shown)}이에요.`)
   })
   return done()
 }
