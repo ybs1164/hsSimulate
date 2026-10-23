@@ -31,27 +31,14 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
   panel.innerHTML = `
     <header class="learning-header">
       <div class="learning-heading"><span class="learning-eyebrow">LEARN · HASKELL</span>
-        <div class="learning-tabs" role="tablist" aria-label="학습">
-          <button type="button" role="tab" id="examples-heading" class="learning-tab" data-tab="practice" aria-selected="true" aria-controls="examples-section">연습 문제</button>
-          <button type="button" role="tab" id="syntax-heading" class="learning-tab" data-tab="syntax" aria-selected="false" aria-controls="examples-section">문법</button>
-        </div></div>
+        <h2 id="examples-heading">연습 문제</h2></div>
       <button type="button" class="learning-toggle" aria-expanded="true" aria-controls="examples-section" aria-label="연습 문제 패널 접기" title="연습 문제 패널 접기">‹</button>
     </header>
     <section id="examples-section" class="learning-section" aria-labelledby="examples-heading">
       <div class="exercise-body"></div>
-      <div class="syntax-host" hidden></div>
     </section>`
   workspace.prepend(panel)
   const bodyEl = panel.querySelector('.exercise-body')
-  const syntaxHost = panel.querySelector('.syntax-host')
-  // Two tabs share the panel: the exercises, and the syntax lessons
-  // (learningPanel.js).
-  panel.querySelectorAll('.learning-tab').forEach((tab) => tab.addEventListener('click', () => {
-    const syntax = tab.dataset.tab === 'syntax'
-    panel.querySelectorAll('.learning-tab').forEach((t) => t.setAttribute('aria-selected', String(t === tab)))
-    bodyEl.hidden = syntax
-    syntaxHost.hidden = !syntax
-  }))
 
   const solvedCount = (list) => list.filter((e) => progress[e.id]).length
 
@@ -186,8 +173,6 @@ export function initExercisePanel({ workspace, project, schemeOf, openFunction, 
     /** Re-render the open build exercise (its function may have been created or renamed). */
     refresh() { if (current?.kind === 'build') open(current.id) },
     /** The build exercise on screen, or null. */
-    /** Where the syntax lessons render. */
-    syntaxHost,
     currentBuild: () => (current?.kind === 'build' ? current : null),
     grade() { panel.querySelector('.exercise-grade')?.click() },
   }

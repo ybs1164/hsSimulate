@@ -198,7 +198,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   for (let i = 0; i < 480 && !(await js(`!!document.querySelector('.exercise-item')`).catch(() => false)); i++) await sleep(250)
   await sleep(500)
   console.log('Learning panels:')
-  await check('the learning panel: tabs and collapsing keep the graph, search and exercise selection', async () => {
+  await check('the learning panel: collapsing keeps the graph, search and exercise selection', async () => {
     await js(`document.querySelector('.exercise-item').click()`)
     await setField('.search input', 'identity', 'input')
     const before = JSON.stringify(await project())
@@ -211,19 +211,18 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     })`)
     const initial = await snapshot()
     const widths = []
-    for (const action of [null, '[data-tab="syntax"]', '[data-tab="practice"]', '.learning-toggle', '.learning-toggle']) {
+    for (const action of [null, '.learning-toggle', '.learning-toggle']) {
       if (action) { await js(`document.querySelector('.examples-panel ${action}').click()`); await sleep(150) }
       const layout = await js(`[...document.querySelector('.workspace').children].map((e) => ({
         name: e.className, x: e.getBoundingClientRect().x, right: e.getBoundingClientRect().right, width: e.getBoundingClientRect().width
       }))`)
       expect(['examples-panel', 'sidebar', 'canvas-panel', 'inspector'].every((name, i) => layout[i].name.includes(name)), 'panel order changed')
       expect(layout.slice(1).every((r, i) => Math.abs(r.x - layout[i].right) < 1), 'panels overlap or leave gaps')
-      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'a tab or toggle changed the graph or selection')
+      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'the toggle changed the graph or selection')
       widths.push(layout[2].width)
     }
-    expect(await js(`document.querySelectorAll('.syntax-list .learning-item').length > 0`), 'the syntax tab has no lessons')
-    // Switching tabs keeps the panel's width; collapsing it widens the canvas.
-    expect(widths[0] === widths[1] && widths[1] === widths[2] && widths[3] > widths[2] && widths[4] === widths[0], `canvas widths: ${widths}`)
+    // Collapsing the panel widens the canvas; expanding restores it.
+    expect(widths[1] > widths[0] && widths[2] === widths[0], `canvas widths: ${widths}`)
     await setField('.search input', '', 'input')
     // Use the compact learning rail for the large game below.
     await js(`document.querySelector('.examples-panel .learning-toggle').click()`)

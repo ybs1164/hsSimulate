@@ -1,5 +1,4 @@
 import './style.css'
-import { initLearningPanel } from './learningPanel.js'
 import { initExercisePanel } from './exercisePanel.js'
 import { findExerciseFunction } from './grader.js'
 import { applySubst, classShown, constructorArity, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
@@ -3961,18 +3960,6 @@ function setupLearningPanel() {
       input.dispatchEvent(new Event('input', { bubbles: true }))
       showMobileView('sidebar')
       input.focus()
-    },
-  })
-  initLearningPanel({
-    host: exercisePanel.syntaxHost,
-    onModalOpen: () => {
-      endDrag()
-      endWire()
-      if (typeDrag) endTypeDrag(null)
-      state.pan = null
-      state.snapTarget = null
-      canvas.classList.remove('panning')
-      draw()
     },
   })
 }

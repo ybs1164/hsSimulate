@@ -215,7 +215,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .param-remove{right:0;top:0;width:16px;height:16px;background:#e0537d}
 .param-add{width:26px;height:26px;font-size:18px;line-height:20px;box-shadow:0 3px 8px #211d3428;background:var(--accent)}
 
-/* ----- Independent example and syntax panels to the left of the graph ----- */
+/* ----- The practice panel to the left of the graph ----- */
 .topbar{flex-shrink:0}
 .canvas-toolbar,.canvas-footer{flex-shrink:0}
 .inspector{display:block;overflow-y:auto;min-height:0}
@@ -227,8 +227,8 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .learning-header{height:65px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 12px;border-bottom:1px solid var(--line)}
 .learning-eyebrow{font:500 9px 'DM Mono',monospace;letter-spacing:1.5px;color:var(--accent-ink)}
 .learning-heading h2{margin:5px 0 0;font-size:15px;font-weight:700}
-.learning-toggle,.syntax-close{flex:none;display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--accent-soft-2);border-radius:10px;background:var(--accent-soft);color:var(--accent-ink);font-size:24px;cursor:pointer}
-.learning-toggle:hover,.syntax-close:hover{background:var(--accent-soft-2)}
+.learning-toggle{flex:none;display:grid;place-items:center;width:32px;height:32px;border:1px solid var(--accent-soft-2);border-radius:10px;background:var(--accent-soft);color:var(--accent-ink);font-size:24px;cursor:pointer}
+.learning-toggle:hover{background:var(--accent-soft-2)}
 .learning-toggle{scroll-margin-inline:8px}
 .learning-section{display:flex;flex-direction:column;flex:1;min-height:0;padding:20px 10px 12px;overflow:hidden}
 .learning-section[hidden]{display:none}
@@ -243,24 +243,11 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .learning-item[aria-pressed="true"]{background:var(--accent-soft);border-color:#c6b9f5;color:var(--accent-ink);font-weight:700}
 .learning-item[aria-pressed="true"] .learning-item-number{color:var(--accent-ink)}
 .learning-footnote{flex:none;padding:12px 8px 0;font-size:10px}
-.learning-item:focus-visible,.learning-toggle:focus-visible,.syntax-close:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.learning-item:focus-visible,.learning-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .workspace.examples-collapsed{--examples-width:44px}
 .learning-panel.is-collapsed .learning-header{padding:0;justify-content:center}
 .learning-panel.is-collapsed .learning-heading{display:none}
 
-/* Native dialog stays in the viewport even when the workspace scrolls. */
-.syntax-dialog{width:min(540px,calc(100vw - 32px));max-width:none;max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);margin:auto;padding:0;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--panel);color:var(--ink);box-shadow:0 24px 80px #211d3433}
-.syntax-dialog::backdrop{background:#211d3466}
-.syntax-dialog-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:24px 24px 18px;border-bottom:1px solid var(--line)}
-.syntax-dialog-header h2{margin:7px 0 0;font-size:19px;line-height:1.5;overflow-wrap:anywhere}
-.syntax-dialog-header h2:focus{outline:none}
-.syntax-close{font-size:22px}
-.syntax-dialog-content{padding:4px 24px 24px}
-.syntax-dialog-content p{font-size:13px;line-height:1.85;word-break:keep-all;overflow-wrap:anywhere}
-.syntax-dialog-content h3{margin:22px 0 10px;font-size:12px;color:var(--accent-ink)}
-.syntax-dialog-content pre{margin:0;padding:16px;border:1px solid var(--line);border-radius:12px;background:#f7f5ff;white-space:pre-wrap;overflow-wrap:anywhere}
-.syntax-dialog-content code{font:12px/1.8 'DM Mono',monospace}
-.syntax-dialog-content .syntax-note{margin:22px 0 0;border-top:1px solid var(--line);padding-top:14px;font-size:11px;color:#767086}
 @media (max-width:1400px){
   .workspace{--sidebar-width:180px;--examples-space:250px;--inspector-space:220px}
   .canvas-toolbar{padding:0 12px;gap:8px}
@@ -274,11 +261,6 @@ body.dragging{user-select:none;-webkit-user-select:none}
   .inspector{padding-left:12px;padding-right:12px}
   .learning-header{padding-left:8px;padding-right:8px}
   .learning-section{padding-left:6px;padding-right:6px}
-}
-@media (max-width:600px){
-  .syntax-dialog-header{padding:18px 18px 14px}
-  .syntax-dialog-header h2{font-size:17px}
-  .syntax-dialog-content{padding:2px 18px 18px}
 }
 .tool-button.icon-only{padding:8px 11px}
 .tool-button:disabled{opacity:.4;cursor:default;background:var(--panel);color:var(--muted)}
@@ -671,14 +653,6 @@ dialog::backdrop{background:#211d3466}
 .exercise-use:hover code{background:var(--accent-soft)}
 .exercise-checks li.skipped{color:var(--muted)}
 .exercise-checks li.skipped b{color:var(--muted)}
-.learning-tabs{display:flex;gap:2px;margin-top:5px}
-.learning-tab{border:0;border-radius:8px;background:none;padding:4px 8px;font:700 14px 'DM Sans',sans-serif;color:var(--muted);cursor:pointer}
-.learning-tab:first-child{margin-left:-8px}
-.learning-tab[aria-selected="true"]{color:var(--ink);background:var(--accent-soft)}
-.learning-tab:hover{color:var(--ink)}
-.learning-tab:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.syntax-host{display:flex;flex-direction:column;flex:1;min-height:0}
-.syntax-host[hidden],.exercise-body[hidden]{display:none}
 /* The sidebar never scrolls sideways: long rows shrink and wrap instead. */
 .node-library{overflow-x:hidden}
 #value-library>.library-item{min-width:0;gap:5px;padding:7px 4px}
