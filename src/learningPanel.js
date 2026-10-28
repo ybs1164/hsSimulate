@@ -1,4 +1,4 @@
-import { syntaxLessons, exampleProblems } from './learningContent.js'
+import { syntaxLessons, exampleProblems, lessonGuide, lessonSource } from './learningContent.js'
 
 // This module owns only learning UI state; it never receives or mutates a graph.
 export function initLearningPanel({ workspace, onModalOpen }) {
@@ -45,19 +45,59 @@ export function initLearningPanel({ workspace, onModalOpen }) {
     </header>
     <div class="syntax-dialog-content">
       <p id="syntax-dialog-description"></p>
-      <h3>코드 예제</h3><pre><code></code></pre>
+      <p class="syntax-support"></p>
+      <h3>기본 문법</h3><p class="syntax-form"></p>
+      <h3>짧은 예제 · Haskell</h3><pre><code></code></pre>
+      <p class="syntax-expected"></p>
       <h3>예제 해설</h3><p class="syntax-explanation"></p>
-      <p class="syntax-note">Haskell 문법 학습용 예제입니다. 현재 그래프 실행기의 지원 범위와는 다를 수 있습니다.</p>
+      <details class="syntax-guide"><summary>프로그램 공통 조작 · 작업 보관</summary><ol></ol></details>
+      <h3>프로그램에서 따라하기</h3><ol class="syntax-steps"></ol>
+      <h3>값을 바꿔보기</h3><p class="syntax-experiment"></p>
+      <h3>주의할 점</h3><p class="syntax-caution"></p>
+      <footer class="syntax-note"><p class="syntax-source"></p><p class="syntax-license"></p></footer>
     </div>`
   document.body.append(dialog)
   const closeButton = dialog.querySelector('.syntax-close')
+
+  function fillList(list, items) {
+    list.replaceChildren(...items.map((text) => {
+      const item = document.createElement('li')
+      item.textContent = text
+      return item
+    }))
+  }
+  function sourceLink(text, url) {
+    const link = document.createElement('a')
+    link.textContent = text
+    link.href = url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    return link
+  }
+  fillList(dialog.querySelector('.syntax-guide ol'), lessonGuide)
+  dialog.querySelector('.syntax-license').append(
+    `${lessonSource.author}. ${lessonSource.adaptation} `,
+    sourceLink(lessonSource.license, lessonSource.licenseUrl),
+  )
 
   function openLesson(lesson, trigger) {
     returnFocus = trigger
     dialog.querySelector('h2').textContent = lesson.title
     dialog.querySelector('#syntax-dialog-description').textContent = lesson.description
+    dialog.querySelector('.syntax-support').textContent = lesson.support === 'graph'
+      ? '프로그램에서 그래프로 실습 가능 · 아래 코드는 대응하는 Haskell 표기입니다.'
+      : '개념 설명 · 코드는 외부 Haskell 환경용입니다. 아래에서는 같은 동작의 그래프를 실습합니다.'
+    dialog.querySelector('.syntax-form').textContent = lesson.syntax
     dialog.querySelector('code').textContent = lesson.code
+    dialog.querySelector('.syntax-expected').textContent = `예상 결과 (설명용): ${lesson.expected}`
     dialog.querySelector('.syntax-explanation').textContent = lesson.explanation
+    fillList(dialog.querySelector('.syntax-steps'), lesson.steps)
+    dialog.querySelector('.syntax-experiment').textContent = lesson.experiment
+    dialog.querySelector('.syntax-caution').textContent = lesson.caution
+    dialog.querySelector('.syntax-source').replaceChildren(
+      '참고: ', sourceLink(lessonSource.title, new URL(lesson.source, lessonSource.url).href),
+    )
+    dialog.querySelector('.syntax-guide').open = false
     onModalOpen()
     // A native modal dialog makes the rest of the document inert, including
     // the canvas and its DOM port overlay, and contains keyboard focus.
@@ -147,7 +187,13 @@ export function initLearningPanel({ workspace, onModalOpen }) {
         dialog.close()
       } else if (eventName === 'keydown' && event.key === 'Tab') {
         event.preventDefault()
-        closeButton.focus() // The close button is the dialog's only tab stop.
+        const stops = [...dialog.querySelectorAll('button, summary, a[href]')]
+          .filter((item) => item.getClientRects().length)
+        const current = stops.indexOf(document.activeElement)
+        const next = event.shiftKey
+          ? (current <= 0 ? stops.length - 1 : current - 1)
+          : (current + 1) % stops.length
+        stops[next].focus()
       }
     }, { capture: true })
   }

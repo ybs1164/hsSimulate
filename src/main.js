@@ -1,5 +1,8 @@
 import './style.css'
 import { initLearningPanel } from './learningPanel.js'
+import { initWorkspaceResize } from './workspaceResize.js'
+import { createExecutionTrace, createExecutionPlayback } from './executionTrace.js'
+import { createBlankProject, isManagedMain, managedMain, MAIN_GUIDANCE, MAIN_PROTECTION, programRunTarget, returnsProgram } from './programEntry.js'
 import { applySubst, constructorArity, ftv, generalize, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
@@ -59,7 +62,7 @@ app.innerHTML = `
           <button class="library-item" data-type="lambda"><span class="lib-icon function-icon">λ</span><span><b>Lambda</b><small>\\x -> … (anonymous function)</small></span></button>
           <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Booleans</b><small>True · False</small></span></button>
         </nav>
-        <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong>GHC 9.6.3 <i>●</i></strong></div></div>
+        <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong title="JavaScript 그래프 실행기 · GHC를 호출하지 않습니다">Graph JS <i>●</i></strong></div></div>
       </aside>
       <section class="canvas-panel">
         <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
@@ -75,7 +78,19 @@ const canvas = document.querySelector('#graph-canvas')
 const ctx = canvas.getContext('2d')
 const editor = document.querySelector('#port-editor')
 const inspector = document.querySelector('#inspector-content')
-const state = { functionStack: [], multi: new Set(), zoom: 1, offset: { x: 0, y: 0 }, selected: 'add', running: false, drag: null, wire: null, pan: null, snapTarget: null, activeFunction: null, suppressClick: false }
+const state = { functionStack: [], multi: new Set(), zoom: 1, offset: { x: 0, y: 0 }, selected: 'add', drag: null, wire: null, pan: null, snapTarget: null, activeFunction: null, suppressClick: false }
+const executionLayer = document.createElement('div')
+executionLayer.className = 'execution-layer'
+executionLayer.setAttribute('aria-hidden', 'true')
+document.querySelector('.canvas-wrap').append(executionLayer)
+const executionSummary = document.createElement('span')
+executionSummary.className = 'execution-summary'
+executionSummary.setAttribute('role', 'status')
+executionSummary.setAttribute('aria-live', 'polite')
+executionSummary.hidden = true
+document.querySelector('.footer-spacer').before(executionSummary)
+let executionContext = null
+const execution = createExecutionPlayback({ onChange: renderExecutionOverlay })
 const nodes = {
   add: { id: 'add', type: 'function', x: 300, y: 190, label: 'add', params: ['n'], mounted: [null], paramScopes: ['local'], color: '#6c5ce7', scope: 'main', builtin: 'succ', readonly: true, expression: 'λn f x. f (n f x)' },
   identity: { id: 'identity', type: 'function', x: 820, y: 190, label: 'identity', params: ['x'], mounted: [null], paramScopes: ['local'], color: '#4f8ef7', scope: 'main', builtin: 'identity', readonly: true, expression: 'λx. x' },
@@ -343,7 +358,7 @@ function renderFunctionLibrary() {
   functionLibrary.innerHTML = Object.values(nodes).filter((n) => isFunction(n) && !isHiddenDefinition(n)).map((node) => `
     <button class="library-item function-library-item ${state.activeFunction === node.id ? 'active' : ''}" data-function-id="${node.id}">
       <span class="lib-icon function-icon">ƒ</span>
-      <span><b>${node.label}</b><small>${functionChainHtml(node, nodes)}</small></span>
+      <span><b>${node.label}</b><small>${isManagedMain(node) ? 'START · ' : ''}${functionChainHtml(node, nodes)}</small></span>
     </button>
   `).join('')
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
@@ -2109,6 +2124,9 @@ function draw() {
   for (let y = state.offset.y % 24; y < h; y += 24) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke() }
   materializeLiterals(activeNodes())
   placeNewArguments()
+  // Ordinary edits already end in draw(). Playback itself never draws or
+  // checkpoints: its rings live in a separate, noninteractive DOM overlay.
+  if (executionContext && (activeNodes() !== executionContext.graph || currentSnapshot() !== executionContext.snapshot)) resetExecution()
   drawReferenceLinks()
   drawOutputLink()
   Object.values(activeNodes()).filter((n) => isVisible(n)).forEach(n => {
@@ -2121,14 +2139,68 @@ function draw() {
   drawLinkHighlights()
   drawWire()
   updatePortEditor(pass)
+  renderExecutionOverlay()
   document.querySelector('#node-count').textContent = Object.keys(activeNodes()).length
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
+  document.querySelector('#run').title = managedMain(nodes) ? '프로그램 전체 실행: main의 Output을 계산합니다. 다른 함수의 ▶ / Play function은 개별 테스트입니다.' : '기존 프로젝트의 ENTRY POINT 실행 (미지정 시 선택한 함수). ▶ / Play function은 개별 테스트입니다.'
   document.querySelector('#back-graph').hidden = !state.activeFunction
   document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
   if (!state.drag && !state.wire) scheduleCheckpoint()
+}
+function resetExecution() {
+  executionContext = null
+  execution.cancel()
+}
+function replayExecution(graph, fn, events, details = {}) {
+  executionContext = { graph, snapshot: currentSnapshot() }
+  execution.play(events, { rootId: fn.id, rootLabel: fn.label, ...details })
+}
+function renderExecutionOverlay() {
+  executionLayer.replaceChildren()
+  const info = execution.info
+  if (!info || !executionContext || activeNodes() !== executionContext.graph) {
+    executionLayer.dataset.phase = 'idle'
+    executionSummary.hidden = true
+    executionSummary.textContent = ''
+    return
+  }
+  const graph = executionContext.graph
+  const labels = { running: '계산 중', done: '완료', error: '오류', result: '결과' }
+  const glyphs = { running: '●', done: '✓', error: '!', result: '→' }
+  function ring(id, status, detail = {}) {
+    const node = graph[id]
+    if (!node || !isVisible(node)) return // never paint a different host as if this node ran
+    const rect = isFunction(node) ? functionBlockScreenRect(node) : valueBlockScreenRect(node)
+    const mark = document.createElement('div')
+    mark.className = `execution-mark execution-${status}`
+    mark.dataset.executionNode = id
+    mark.dataset.state = status
+    mark.style.left = `${rect.left - 4}px`
+    mark.style.top = `${rect.top - 4}px`
+    mark.style.width = `${rect.right - rect.left + 8}px`
+    mark.style.height = `${rect.height + 8}px`
+    mark.style.borderRadius = `${rect.height / 2 + 4}px`
+    const badge = document.createElement('span')
+    badge.textContent = `${glyphs[status]} ${detail.validation ? '검사 오류' : labels[status]}`
+    badge.style.fontSize = `${Math.max(8, 11 * state.zoom)}px`
+    mark.append(badge)
+    if (status === 'error') mark.dataset.origin = String(Boolean(detail.origin))
+    executionLayer.append(mark)
+  }
+  execution.states.forEach((status, id) => ring(id, status.state, status))
+  if (!execution.playing && !info.error && info.resultId) ring(info.resultId, 'result')
+  executionLayer.dataset.phase = execution.playing ? 'playing' : info.error ? 'error' : 'done'
+  executionLayer.dataset.root = info.rootId
+  const last = info.last
+  const name = graph[last?.nodeId]?.label || last?.nodeId || info.rootLabel
+  executionSummary.hidden = false
+  executionSummary.textContent = execution.playing ? `기록 재생 · ${name} · ${labels[execution.states.get(last.nodeId)?.state]}`
+    : info.error ? `${info.validation ? '실행 전 검사 오류' : '실행 오류'} · ${info.error}`
+      : `실행 완료 · ${info.rootLabel} → ${graph[info.resultId] ? nodeDisplayText(graph[info.resultId]) : '완료'}`
+  executionSummary.title = executionSummary.textContent
 }
 // A function node renders as one unified stadium block — the ƒ head badge
 // and every parameter slot live inside the SAME silhouette (no separate
@@ -2272,6 +2344,7 @@ function fixCallSlots(node) {
 }
 function isSignatureEditable(node) {
   if (viewingReadonly()) return false
+  if (isManagedMain(node)) return false
   if (nodes[node.id] === node && node.custom && !node.library) return 'signature' // a taken-over definition keeps the library's type
   if (nodes[node.sourceFunctionId]?.lambda) return 'signature'
   if (hasVariadicSlots(node, definitions)) return 'elements'
@@ -2551,6 +2624,7 @@ function renderValueInspector(n) {
 // through the function's own ports instead; a custom function still called
 // from some body would leave those calls dangling.
 function deleteBlocker(n) {
+  if (nodes[n.id] === n && isManagedMain(n)) return MAIN_PROTECTION
   if (n.readonly) return "Builtin functions can't be deleted"
   if (n.type === 'output' || n.type === 'parameter') return "A function's Output and parameters can't be deleted"
   if (n.custom && nodes[n.id] === n) {
@@ -2759,6 +2833,7 @@ function ambiguityRow(n) {
 // A custom function's own definition can be renamed (calls refer to it by id, and follow).
 function functionNameRow(n) {
   if (!(nodes[n.id] === n && n.custom && !isHiddenDefinition(n))) return ''
+  if (isManagedMain(n)) return `<div class="property"><label>PROGRAM ENTRY · main</label><div class="inspector-note">${MAIN_PROTECTION}</div></div>`
   return `<div class="property"><label>NAME</label><input class="value-input" id="function-rename" value="${escapeAttr(n.label)}" title="Rename this function — every call follows" spellcheck="false" /></div>`
 }
 // A call to (or the definition of) a customized derived function says so, with the way back.
@@ -2808,9 +2883,18 @@ function updateInspector() {
   if (editDefinitionButton) editDefinitionButton.onclick = () => editDefinition(state.activeFunction)
   const restoreLibrary = document.querySelector('#restore-library')
   if (restoreLibrary) restoreLibrary.onclick = () => restoreLibraryDefinition(restoreLibrary.dataset.id)
+  if (isManagedMain(nodes[state.activeFunction]) || isManagedMain(n)) {
+    inspector.insertAdjacentHTML('beforeend', `<div class="inspector-note program-entry-note">${MAIN_GUIDANCE}<br/><br/>Run graph: main 전체 실행. 각 노드의 ▶ / Play function: 선택 함수만 개별 테스트.<br/><br/>이 main은 앱의 순수 계산 시작 함수입니다. DEFINITION은 함수 정의 참고용이며, 이 앱은 JavaScript로 그래프를 실행합니다. 실제 Haskell 실행 파일의 main :: IO ()와는 다릅니다. Haskell로 옮길 때는 계산을 별도 함수/모듈에 두고 IO main에서 print로 출력하세요.</div>`)
+  }
   const evaluate = document.querySelector('#evaluate')
+  if (evaluate) evaluate.title = '선택한 함수만 개별 테스트합니다. 프로그램 전체 실행은 상단 Run graph를 사용하세요.'
   if (evaluate) evaluate.onclick = () => executeFunction(n)
   const entryToggle = document.querySelector('#entry-toggle')
+  if (entryToggle && managedMain(nodes)) {
+    entryToggle.disabled = true
+    entryToggle.title = '새 프로젝트의 전체 실행 시작점은 main입니다. 다른 함수는 Play function으로 테스트하세요.'
+    entryToggle.textContent = isManagedMain(n) ? '● main · 프로그램 시작점' : '전체 실행은 main · 개별 테스트는 Play function'
+  }
   if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
   const fnRename = document.querySelector('#function-rename')
   if (fnRename) fnRename.onchange = () => {
@@ -2868,26 +2952,43 @@ function updateInspector() {
 // call yields a number/boolean node; anything with open slots yields a
 // curried node carrying both its residual type and its runtime closure, so it
 // can be plugged in and played again later.
-function executeFunction(fn) {
+function executeFunction(fn, { graph = activeNodes(), displayGraph = graph, anchor = fn } = {}) {
+  resetExecution()
   if (!isFunction(fn)) return
   if (viewingReadonly()) return showToast('This is a read-only definition — play the function where it is used')
-  const graph = activeNodes()
+  if (isManagedMain(fn)) {
+    const problem = programRunTarget({ nodes, functionBodies, entry: entryId })?.problem
+    if (problem) return showToast(problem)
+  }
   const pass = typePass(graph)
   const entry = pass.perNode.get(fn.id)
   const bad = entry?.invalidSlots?.[0]
-  if (bad !== undefined) return showToast(`"${fn.params[bad]}" doesn't fit ${paramDisplayName(fn, bad)} :: ${expectedParamType(fn, bad, graph)}`)
+  if (bad !== undefined) {
+    const message = `"${fn.params[bad]}" doesn't fit ${paramDisplayName(fn, bad)} :: ${expectedParamType(fn, bad, graph)}`
+    replayExecution(displayGraph, fn, [{ phase: 'error', nodeId: displayGraph === graph ? fn.mounted[bad] || fn.id : anchor.id, validation: true, origin: true }], { error: message, validation: true })
+    return showToast(message)
+  }
   const ambiguous = runBlocker(graph, fn.id)
-  if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
+  if (ambiguous) {
+    replayExecution(displayGraph, fn, [{ phase: 'error', nodeId: anchor.id, validation: true, origin: true }], { error: ambiguous, validation: true })
+    return showToast(`Can't run — ${ambiguous}`)
+  }
+  // For whole-program main, evaluate its real definition with the normal
+  // dictionaries once, but replay the initial body frame currently on screen.
+  const trace = createExecutionTrace(displayGraph)
   let result
   try {
-    result = evaluator.run(graph, fn.id)
+    result = evaluator.run(graph, fn.id, { onNode: trace.record })
   } catch (error) {
-    if (error instanceof EvalError) return showToast(error.message)
+    if (error instanceof EvalError) {
+      trace.fail(anchor.id, error)
+      replayExecution(displayGraph, fn, trace.events, { error: error.message })
+      return showToast(error.message)
+    }
     throw error
   }
-  state.running = true
   const id = `output-${++outputId}`
-  const position = { x: functionBlockRight(fn) + 90, y: fn.y + (outputId % 2) * 45 }
+  const position = { x: (isFunction(anchor) ? functionBlockRight(anchor) : anchor.x + chipHalfWidth(anchor)) + 90, y: anchor.y + (outputId % 2) * 45 }
   const valueType = entry ? valueTypeOfEntry(entry) : null
   if (isClosure(result)) {
     const appliedCount = entry?.applied?.filter(Boolean).length ?? 0
@@ -2897,21 +2998,21 @@ function executeFunction(fn) {
     // each use fills in (inferGraph's rootParams).
     const own = pass.rootParams?.[fn.id] || []
     const resolvedScheme = valueType ? generalize(own, valueType) : undefined
-    graph[id] = { id, type: 'curried', typeName: valueType ? showQual(resolvedScheme.preds, valueType) : functionSignature(fn), resolvedScheme, closure: result, ...position, label: `${fn.label} · ${appliedCount}/${fn.params.length}`, value: 'ƒ', remaining: result.args.filter((a) => a === null).length, color: '#a96ef0' }
+    displayGraph[id] = { id, type: 'curried', typeName: valueType ? showQual(resolvedScheme.preds, valueType) : functionSignature(fn), resolvedScheme, closure: result, ...position, label: `${fn.label} · ${appliedCount}/${fn.params.length}`, value: 'ƒ', remaining: result.args.filter((a) => a === null).length, color: '#a96ef0' }
   } else if (isData(result) || typeof result === 'string') {
     // A data value (a declared type, a list, a Maybe — e.g. `Model {clicks = 1, perClick = 2}`) or a Char.
     const resolvedScheme = valueType ? generalize((entry.preds || []).filter((p) => [...ftv(p.type)].some((v) => ftv(valueType).has(v))), valueType) : undefined
-    graph[id] = { id, type: 'value', data: result, resolvedScheme, ...position, label: 'result', color: '#3cbe9e' }
+    displayGraph[id] = { id, type: 'value', data: result, resolvedScheme, ...position, label: 'result', color: '#3cbe9e' }
   } else {
     const booleanResult = typeof result === 'boolean'
     // Inherit the function's actual resolved result type when it's concrete
     // (e.g. Play `sqrt` on a Double literal → the result node is Double too,
     // not a hardcoded Int) via the same annotation mechanism a literal uses.
     const concreteType = !booleanResult && valueType?.kind === 'con' ? valueType.name : undefined
-    graph[id] = { id, type: booleanResult ? 'boolean' : 'number', typeName: booleanResult ? 'Bool' : (concreteType || 'Int'), annotation: concreteType, ...position, label: 'result', value: String(result), color: booleanResult ? '#ed6b84' : '#8c7cf2' }
+    displayGraph[id] = { id, type: booleanResult ? 'boolean' : 'number', typeName: booleanResult ? 'Bool' : (concreteType || 'Int'), annotation: concreteType, ...position, label: 'result', value: String(result), color: booleanResult ? '#ed6b84' : '#8c7cf2' }
   }
   state.selected = id; updateInspector(); draw()
-  setTimeout(() => { state.running = false; draw() }, 300)
+  replayExecution(displayGraph, fn, trace.events, { resultId: id })
 }
 // The node under a canvas point (hidden ones — inside a folded call — have no hitbox).
 function hitNode(x, y) {
@@ -3158,6 +3259,7 @@ canvas.addEventListener('dblclick', (event) => {
 })
 function enterFunction(id) {
   if (nodes[id]?.readonly) return
+  resetExecution()
   const view = !functionBodies[id] && viewBodies[id]
   if (view && !laidOutViews.has(id)) { layoutBody(view); laidOutViews.add(id) }
   if (!view && !functionBodies[id]) functionBodies[id] = { output: { id: 'output', type: 'output', x: 570, y: 255, label: 'Output', value: 'open', color: '#2fbf8f' } }
@@ -3171,13 +3273,30 @@ function enterFunction(id) {
   fitToView()
 }
 document.querySelector('#back-graph').onclick = () => {
+  resetExecution()
   state.activeFunction = state.functionStack.pop() || null
   state.selected = state.activeFunction ? 'output' : 'add'
   renderFunctionLibrary(); updateInspector(); fitToView()
 }
-// Plays the entry function (always in `main`), falling back to whichever
-// function is selected when no entry has been set.
+// Whole-program execution: new projects use their managed main; old
+// projects keep their explicit entry (or the existing selection fallback).
 function runEntry() {
+  resetExecution()
+  const target = programRunTarget({ nodes, functionBodies, entry: entryId })
+  if (target && isManagedMain(target.fn)) {
+    if (target.problem) {
+      if (state.activeFunction !== target.fn.id) enterFunction(target.fn.id)
+      return showToast(target.problem)
+    }
+    const ambiguous = runBlocker(nodes, target.fn.id)
+    if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
+    if (valueTypeOfEntry(typePass(nodes).perNode.get(target.fn.id))?.kind === 'fun') {
+      return showToast('main의 Output이 아직 함수입니다. 호출 노드의 빈 입력을 채워 계산 결과를 Output에 연결하세요. 부분 적용 테스트는 해당 노드의 Play function을 사용하세요.')
+    }
+    if (startGameIfProgram(target.fn.id)) return
+    if (state.activeFunction !== target.fn.id) enterFunction(target.fn.id)
+    return executeFunction(target.fn, target)
+  }
   const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
   if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
   if (entryId && nodes[entryId] && startGameIfProgram(entryId)) return
@@ -3204,6 +3323,8 @@ let play = null // { game, entry, modelType, speed, running, last, acc, frame, s
 // The Program the function `id` evaluates to (or null), its model type, and
 // whether its `step` is an action of (ℝ≥0, +) — then any span of time is one call.
 function programInfo(id) {
+  const programType = valueTypeOfEntry(typePass(nodes).perNode.get(id))
+  if (!returnsProgram(programType)) return null
   let program
   try {
     program = evaluator.run(nodes, id)
@@ -3212,7 +3333,6 @@ function programInfo(id) {
     throw error
   }
   if (!isProgram(program)) return null
-  const programType = valueTypeOfEntry(typePass(nodes).perNode.get(id))
   const modelType = programType?.kind === 'app' && programType.fn.kind === 'app' ? programType.fn.arg : null
   const law = modelType && !ftv(modelType).size
     ? checkFunctionLaw('action', program.args[3], tfun(tcon('Double'), tfun(modelType, modelType)), { ev: evaluator, types })
@@ -3443,6 +3563,7 @@ function currentSnapshot() { return serializeProject({ nodes, functionBodies, ty
 // — `nodes`/`functionBodies` are shared with the evaluator, so they're
 // refilled rather than reassigned.
 function loadProject(project) {
+  resetExecution()
   Object.keys(nodes).forEach((id) => delete nodes[id])
   Object.assign(nodes, project.nodes)
   Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
@@ -3452,7 +3573,7 @@ function loadProject(project) {
   applyTypes(project.types || {}, project.classes || {}, project.instances || {})
   if (typeEditor) { if (types[typeEditor.original]) { typeEditor = editorFor(typeEditor.original); renderTypeEditor() } else closeTypeEditor() }
   if (classEditor) { if (classes[classEditor.original] || classEditor.builtin) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }
-  entryId = project.entry
+  entryId = managedMain(nodes)?.id || project.entry
   outputId = project.outputId
   if (state.activeFunction && !allBodies[state.activeFunction]) state.activeFunction = null
   if (!activeNodes()[state.selected]) state.selected = state.activeFunction ? 'output' : 'add'
@@ -3460,7 +3581,7 @@ function loadProject(project) {
   renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
 }
 function restoreSnapshot(snapshot) { loadProject(parseProject(snapshot)) }
-const defaultSnapshot = currentSnapshot()
+const defaultSnapshot = serializeProject(createBlankProject(builtinNodes, builtinBodies))
 let checkpointTimer = null
 function scheduleCheckpoint() {
   clearTimeout(checkpointTimer)
@@ -3500,8 +3621,18 @@ function redo() {
 }
 document.querySelector('#undo').onclick = undo
 document.querySelector('#redo').onclick = redo
-// Reset is an ordinary (undoable) edit back to the built-in starting graph.
-document.querySelector('#reset').onclick = () => { state.activeFunction = null; restoreSnapshot(defaultSnapshot); fitToView() }
+// Reset always means the whole project, even while editing a body. The
+// derived-definition and game resets elsewhere keep their existing scope.
+document.querySelector('#reset').title = '프로젝트 전체 초기화: 모든 작업을 지우고 빈 main을 준비합니다. 실행 취소할 수 있습니다.'
+document.querySelector('#reset').onclick = () => {
+  stopGame()
+  flushCheckpoint()
+  state.activeFunction = null
+  state.functionStack = []
+  state.multi.clear()
+  restoreSnapshot(defaultSnapshot)
+  enterFunction('main')
+}
 document.querySelector('#export').onclick = () => {
   const url = URL.createObjectURL(new Blob([currentSnapshot()], { type: 'application/json' }))
   const link = Object.assign(document.createElement('a'), { href: url, download: 'hs-simulate-project.json' })
@@ -3628,6 +3759,17 @@ initLearningPanel({
 })
 // Inspector visibility has its own column and controls, independent of learning panels.
 const workspace = document.querySelector('.workspace')
+initWorkspaceResize({
+  workspace,
+  sidebar: workspace.querySelector('.sidebar'),
+  onResizeStart: () => {
+    endDrag(); endWire()
+    if (typeDrag) endTypeDrag(null)
+    state.pan = null
+    canvas.classList.remove('panning')
+    draw()
+  },
+})
 const inspectorPanel = document.querySelector('.inspector')
 inspectorPanel.id = 'graph-inspector'
 const closeInspector = document.querySelector('.close-inspector')
@@ -3657,12 +3799,20 @@ reopenInspector.addEventListener('click', () => {
 })
 // Restore the autosaved project, if any, then start history from whatever
 // is on screen.
+let restoredProject = false
 try {
   const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
+  if (saved) {
+    loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
+    restoredProject = true
+  }
 } catch (error) {
   showToast(`Couldn't restore the saved project: ${error.message}`)
 }
+if (!restoredProject) loadProject(parseProject(defaultSnapshot))
+const initialMain = managedMain(nodes)
+if (initialMain) enterFunction(initialMain.id)
 renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
 history.reset(currentSnapshot())
+if (!restoredProject) persist(currentSnapshot())
 updateHistoryButtons()

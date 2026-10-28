@@ -48,7 +48,7 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .avatar{border:0;border-radius:var(--radius-full);width:30px;height:30px;background:var(--ink);color:#fff;font:600 10px 'DM Mono';cursor:pointer}
 
 /* ----- Workspace layout ----- */
-.workspace{--sidebar-width:200px;--syntax-space:220px;--examples-space:220px;--inspector-space:250px;--syntax-width:var(--syntax-space);--examples-width:var(--examples-space);--inspector-width:var(--inspector-space);display:grid;grid-template-columns:var(--examples-width) var(--syntax-width) var(--sidebar-width) minmax(calc(360px + var(--syntax-space) - var(--syntax-width) + var(--examples-space) - var(--examples-width) + var(--inspector-space) - var(--inspector-width)),1fr) var(--inspector-width);flex:1;min-height:0;overflow-x:auto;overflow-y:hidden}
+.workspace{--sidebar-width:200px;--syntax-space:220px;--examples-space:220px;--inspector-space:250px;--syntax-width:var(--syntax-space);--examples-width:var(--examples-space);--inspector-width:var(--inspector-space);--graph-min-width:360px;--sidebar-extra:max(0px,calc(var(--workspace-width,var(--sidebar-width)) - var(--sidebar-width)));display:grid;grid-template-columns:var(--examples-width) var(--syntax-width) var(--workspace-width,var(--sidebar-width)) minmax(max(var(--graph-min-width),calc(var(--graph-min-width) + var(--syntax-space) - var(--syntax-width) + var(--examples-space) - var(--examples-width) + var(--inspector-space) - var(--inspector-width) - var(--sidebar-extra))),1fr) var(--inspector-width);flex:1;min-height:0;overflow-x:auto;overflow-y:hidden}
 .workspace > *{grid-row:1;min-width:0}
 .examples-panel{grid-column:1}
 .syntax-panel{grid-column:2}
@@ -56,7 +56,14 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .canvas-panel{grid-column:4}
 .inspector{grid-column:5}
 .sidebar,.inspector{background:var(--panel)}
-.sidebar{border-right:1px solid var(--line);display:flex;flex-direction:column;padding:28px 18px 18px;min-height:0}
+.sidebar{border-right:1px solid var(--line);display:flex;flex-direction:column;padding:28px 18px 18px;min-height:0;position:relative}
+.sidebar > .workspace-resizer{position:absolute;inset:0 0 0 auto;width:8px;z-index:5;cursor:ew-resize;touch-action:none;user-select:none;outline:none}
+.sidebar > .workspace-resizer::after{content:'';position:absolute;inset:0 0 0 auto;width:2px;background:var(--line)}
+.sidebar > .workspace-resizer:hover::after,.sidebar > .workspace-resizer:focus-visible::after,.workspace.is-workspace-resizing > .sidebar > .workspace-resizer::after{background:var(--accent)}
+.sidebar > .workspace-resizer:focus-visible{box-shadow:inset 0 0 0 2px var(--accent-soft-2)}
+.workspace.is-workspace-resizing,.workspace.is-workspace-resizing *{cursor:ew-resize!important;user-select:none!important;-webkit-user-select:none!important}
+.sidebar .search input{min-width:0;flex:1}
+.sidebar .library-item > span:not(.lib-icon){flex:1}
 .node-library{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--muted-2) transparent}
 .node-library::-webkit-scrollbar{width:6px}
 .node-library::-webkit-scrollbar-thumb{background:var(--muted-2);border-radius:3px}
@@ -112,6 +119,18 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .canvas-wrap{position:relative;flex:1;min-height:0;overflow:hidden}
 .canvas-wrap canvas{display:block;width:100%;height:100%;cursor:grab;position:absolute;inset:0;z-index:1}
 .canvas-wrap canvas.panning{cursor:grabbing}
+.execution-layer{position:absolute;inset:0;z-index:3;pointer-events:none;overflow:hidden}
+.execution-layer .execution-mark{position:absolute;box-sizing:border-box;border:2px solid #238b63;pointer-events:none;color:#166c4c}
+.execution-layer .execution-mark>span{position:absolute;top:-11px;left:8px;padding:1px 5px;white-space:nowrap;border-radius:5px;background:#e2f5eb;font-weight:700;line-height:1.5}
+.execution-layer .execution-running{border-color:#c17c05;border-style:dashed;color:#895400;animation:execution-pulse .7s ease-in-out infinite alternate}
+.execution-layer .execution-running>span{background:#fff1cd}
+.execution-layer .execution-error{border:3px double #b92d30;color:#982124}
+.execution-layer .execution-error>span{background:#ffe3df}
+.execution-layer .execution-result{border-color:#238b63;border-style:dashed}
+.canvas-footer>span.execution-summary{display:block;min-width:0;max-width:65%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font:10px 'DM Mono',sans-serif}
+.canvas-footer>span.execution-summary[hidden]{display:none}
+@keyframes execution-pulse{from{opacity:.55}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.execution-layer .execution-running{animation:none}}
 .canvas-hint{position:absolute;left:24px;bottom:23px;display:flex;gap:8px;align-items:center;color:var(--muted-2);font:10px 'DM Mono';pointer-events:none;background:var(--panel);border:1px solid var(--line);padding:7px 12px;border-radius:var(--radius-full)}
 .canvas-hint i{font-style:normal;color:var(--muted-2)}
 .mouse-icon{font-size:14px;color:var(--muted)}
@@ -263,6 +282,15 @@ body.dragging{user-select:none;-webkit-user-select:none}
 .syntax-dialog-content pre{margin:0;padding:16px;border:1px solid var(--line);border-radius:12px;background:#f7f5ff;white-space:pre-wrap;overflow-wrap:anywhere}
 .syntax-dialog-content code{font:12px/1.8 'DM Mono',monospace}
 .syntax-dialog-content .syntax-note{margin:22px 0 0;border-top:1px solid var(--line);padding-top:14px;font-size:11px;color:#767086}
+.syntax-dialog-content .syntax-support{padding:10px 12px;border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);font-size:12px}
+.syntax-dialog-content .syntax-expected{font:12px/1.7 'DM Mono',monospace;overflow-wrap:anywhere}
+.syntax-dialog-content ol{margin:10px 0;padding-left:22px;font-size:13px;line-height:1.85;word-break:keep-all;overflow-wrap:anywhere}
+.syntax-dialog-content li + li{margin-top:9px}
+.syntax-dialog-content .syntax-guide{margin-top:22px;border-block:1px solid var(--line);padding:12px 0}
+.syntax-dialog-content summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--accent-ink)}
+.syntax-dialog-content .syntax-note p{font-size:11px}
+.syntax-dialog-content a{color:var(--accent-ink);text-underline-offset:3px;overflow-wrap:anywhere}
+.syntax-dialog-content a:focus-visible,.syntax-dialog-content summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @media (max-width:1400px){
   .workspace{--sidebar-width:180px;--syntax-space:190px;--examples-space:190px;--inspector-space:220px}
   .canvas-toolbar{padding:0 12px;gap:8px}

@@ -245,6 +245,7 @@ const shown = (key) => key.replace('@', ' ').replace(' List', ' []')
  */
 export function createEvaluator(registry) {
   let steps = 0
+  let trace = null // optional, scoped to one explicit run; never persisted
 
   // [arity, implementation]. Implementations receive argument thunks — and,
   // after them, the call's dictionaries — and force only what they need.
@@ -891,7 +892,26 @@ export function createEvaluator(registry) {
   /** A node's value as a memoized thunk, within one call frame (`env`). */
   function nodeValue(graph, id, env) {
     if (env.memo.has(id)) return env.memo.get(id)
-    const t = delay(() => computeNode(graph, id, env))
+    const t = delay(() => {
+      const observer = trace
+      if (!observer) return computeNode(graph, id, env)
+      // Observe demand, not construction of a thunk. Do not force or inspect
+      // the returned value here: doing so would change lazy branch behavior.
+      const emit = (phase, extra = {}) => {
+        try { observer.onNode({ phase, nodeId: id, graph, frame: env.memo, ...extra }) } catch { /* diagnostics must not change evaluation */ }
+      }
+      emit('start')
+      try {
+        const value = computeNode(graph, id, env)
+        emit('done')
+        return value
+      } catch (error) {
+        const origin = !observer.errors.has(error)
+        observer.errors.add(error)
+        emit('error', { message: error.message || String(error), origin })
+        throw error
+      }
+    })
     env.memo.set(id, t)
     return t
   }
@@ -966,8 +986,8 @@ export function createEvaluator(registry) {
 
   return {
     /** Evaluate node `nodeId` of `graph` to JSON-safe data: a number, a boolean, a data value, or a closure. */
-    run(graph, nodeId) {
-      return guarded(() => serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map(), elab: elab?.forGraph(graph) || {} })), graph)
+    run(graph, nodeId, { onNode } = {}) {
+      return guarded(() => serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map(), elab: elab?.forGraph(graph) || {} })), graph, onNode)
     },
     /** Apply builtin `name` to values, with the dictionaries `evidence` describes (closed evidence: see classEnv.js) — used by the law checker. */
     invoke(name, values, evidence = []) {
@@ -988,14 +1008,18 @@ export function createEvaluator(registry) {
     },
   }
 
-  function guarded(run, graph = null) {
+  function guarded(run, graph = null, onNode = null) {
+    const previousTrace = trace
+    trace = typeof onNode === 'function' ? { onNode, errors: new Set() } : null
     steps = 0
-    elab = registry.elaboration?.(graph) || null
     try {
+      elab = registry.elaboration?.(graph) || null
       return run()
     } catch (e) {
       if (e instanceof RangeError) throw new EvalError('Recursion too deep')
       throw e
+    } finally {
+      trace = previousTrace
     }
   }
 }

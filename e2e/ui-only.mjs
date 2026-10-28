@@ -196,6 +196,18 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   // A cold Vite start can take a while to serve the app: wait for it to render.
   for (let i = 0; i < 120 && !(await js(`!!document.querySelector('.add-type')`).catch(() => false)); i++) await sleep(250)
   await sleep(500)
+  await check('a fresh project opens exactly one protected main with an empty Output', async () => {
+    const p = await project()
+    const mains = Object.values(p.nodes).filter((n) => n.programEntry)
+    expect(mains.length === 1 && mains[0].label === 'main' && p.entry === mains[0].id, 'missing or duplicated default main')
+    expect((await js(`document.querySelector('#graph-name').textContent`)) === 'ƒ main', 'fresh main is not open')
+    expect(!p.functionBodies[mains[0].id].output.source, 'main must start empty')
+    await js(`document.querySelector('#run').click()`); await sleep(100)
+    expect((await js(`document.querySelector('#toast').textContent`)).includes('main의 Output'), 'missing empty-main guidance')
+    expect(Object.keys((await project()).functionBodies.main).length === 1, 'an empty run changed main')
+    await send('Page.reload'); await sleep(700)
+    expect(Object.values((await project()).nodes).filter((n) => n.programEntry).length === 1, 'reload duplicated main')
+  })
   console.log('Learning panels:')
   await check('independent panels preserve the graph, search and example selection in all four layouts', async () => {
     await js(`document.querySelector('.example-list button').click()`)
@@ -229,6 +241,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     return `canvas widths ${widths.join(' → ')}`
   })
   console.log('Building a game through the UI only (learning panels collapsed):')
+  await back() // new projects open main; the following helpers start at top level
 
   await check('declare Model and Msg in the type editor', async () => {
     await declareRecordType('Model', [['count', 'Double']])
@@ -275,7 +288,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await back()
   })
   await check('main = program initial view handle step', async () => {
-    await createFunction('main', []); await openBody('main')
+    await openBody('main') // reuse the default entry, never create another main
     expect((await js(`document.querySelector('#graph-name').textContent`)) === 'ƒ main', 'breadcrumb should read ƒ main')
     const pr = await add('prelude', 'program')
     for (const [i, f] of ['initial', 'view', 'handle', 'step'].entries()) await plug(await add('main', f), pr, i)

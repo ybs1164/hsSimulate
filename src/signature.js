@@ -1,3 +1,5 @@
+import { isManagedMain } from './programEntry.js'
+
 // Editing a custom function's signature. A function's parameters live in
 // three places that must agree: its definition node (`nodes[id].params`, one
 // slot each), the parameter nodes of its body (`functionBodies[id]`, in
@@ -49,7 +51,7 @@ function freshName(taken, base = 'p') {
 export function addParameter(project, fnId, name) {
   const def = project.nodes[fnId]
   const body = project.functionBodies[fnId]
-  if (!def?.custom || !body) return null
+  if (!def?.custom || !body || isManagedMain(def)) return null
   const params = bodyParameters(project, fnId)
   const label = name || freshName(params.map((p) => p.label))
   let k = params.length
@@ -130,7 +132,7 @@ export function moveParameter(project, fnId, from, to) {
  */
 export function renameFunction(project, fnId, label) {
   const def = project.nodes[fnId]
-  if (!def?.custom || def.lambda || def.override) return false
+  if (!def?.custom || def.lambda || def.override || isManagedMain(def)) return false
   def.label = label
   for (const { node } of callsTo(project, fnId)) node.label = label
   return true
