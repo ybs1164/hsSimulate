@@ -674,7 +674,7 @@ export function declToDraft(d) {
     name: d.name,
     keyword: d.keyword,
     params: [...(d.params || [])],
-    constructors: d.constructors.map((c) => ({ name: c.name, fields: c.fields.map((f) => ({ name: f.name || '', type: asHaskell(f.type) })) })),
+    constructors: d.constructors.map((c) => ({ name: c.name, ...(c.key === undefined ? {} : { key: c.key }), fields: c.fields.map((f) => ({ name: f.name || '', type: asHaskell(f.type), ...(f.key === undefined ? {} : { key: f.key }) })) })),
     deriving,
   }
 }

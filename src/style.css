@@ -341,6 +341,45 @@ body.dragging{user-select:none;-webkit-user-select:none}
 #type-panel[hidden]{display:none}
 .te-status{flex:1;font:11px 'DM Mono';color:var(--muted)}
 .te-status.ok{color:#1f8f74}
+.te-simple{max-width:840px;width:100%;margin:0 auto;padding:28px 32px 64px;overflow:auto;min-height:0}
+.te-simple>.decl-head{font-size:24px;margin-bottom:20px;gap:12px;flex-wrap:wrap}
+.te-constructors{display:grid;gap:16px;margin-bottom:18px}
+.te-simple .te-ctor{border:1px solid var(--line,#e5e1ef);border-radius:16px;background:#fff;padding:18px 20px}
+.te-simple .te-ctor>.decl-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.te-simple .te-ctor>.decl-head:has(.te-ctor-options){margin-bottom:8px}
+.te-simple .te-field{display:flex;align-items:center;gap:12px;padding:7px 0}
+.te-simple .te-field .te-ftype{flex:1;min-width:0}
+.te-simple .te-field>.te-ident{min-width:7ch;text-align:left}
+.te-field-actions{position:relative;font-size:12px}
+.te-field-actions>summary{cursor:pointer;list-style:none;padding:2px 7px;color:var(--muted)}
+.te-field-actions[open]{display:flex;gap:5px;align-items:center}
+.te-field-actions button{border:1px solid var(--line);border-radius:6px;background:#fff;padding:4px 7px;cursor:pointer;white-space:nowrap;font-size:11px}
+.match-outer-values{font-size:11px;color:var(--muted);padding:8px 0}
+.match-outer-values summary{cursor:pointer;padding:5px}
+.te-use{margin-left:auto;border:0;background:#f0edfc;color:#6552b7;border-radius:8px;padding:7px 10px;cursor:pointer;white-space:nowrap}
+.te-ctor-options{font-size:12px;color:var(--muted)}
+.te-ctor-options summary{cursor:pointer}
+.te-details{margin-top:28px;padding-top:18px;border-top:1px solid var(--line,#e5e1ef);font-size:13px}
+.te-details summary,.type-functions summary{cursor:pointer;color:var(--muted)}
+.te-settings{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:18px 0;font:11px/1.7 'DM Mono'}
+.te-function-group{margin:14px 0}
+.te-function-group>summary{margin-bottom:10px}
+.te-structure{height:360px;min-height:240px;border:1px solid var(--line,#e5e1ef);border-radius:12px;margin-top:10px}
+.type-library-head{display:flex;align-items:center;gap:4px}
+.type-library-head .type-item{flex:1;min-width:0}
+.type-functions{padding:0 8px 10px 32px;font-size:11px}
+.type-functions>summary{padding:5px 0}
+.constructor-options{display:grid;gap:6px;max-height:55vh;overflow:auto;margin:14px 0}
+.constructor-options button{width:100%;padding:12px}
+.match-arm-button{position:absolute;border:1px solid #ddd6f4;border-radius:9px;background:#f5f1ff;color:#62508e;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;pointer-events:auto;padding:0 5px}
+.match-arm-button:hover,.match-open:hover{background:#eae2ff}
+.match-branches{display:grid;gap:12px;margin:16px 0}
+.match-branch-row{padding:12px;border:1px solid var(--line,#e5e1ef);border-radius:10px}
+.match-open{border:0;background:#f5f1ff;color:#62508e;padding:8px 10px;border-radius:7px;font-family:ui-monospace,monospace;cursor:pointer;width:100%;text-align:left}
+.match-binders{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.match-binders input{min-width:0;max-width:100%;width:9ch;border:1px solid #ddd6f4;border-radius:6px;padding:5px;font:12px ui-monospace,monospace}
+.match-default{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--muted);margin-top:10px}
+@media(max-width:680px){.te-simple{padding:18px 14px 40px}.te-simple .te-ctor{padding:12px}.te-simple .te-field{gap:7px}}
 .te-status.bad{color:#c0335e}
 .te-hint{font:11px/1.6 'DM Mono';color:var(--muted);margin:0 0 18px;max-width:720px}
 .te-x{border:0;border-radius:50%;width:22px;height:22px;cursor:pointer;font:12px 'DM Mono'}

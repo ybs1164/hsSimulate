@@ -4,6 +4,7 @@ import { findExerciseFunction } from './grader.js'
 import { applySubst, classShown, constructorArity, constructorKind, showKind, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
+import { branchPattern, captureMatchValue, convertCaseToMatch, copyOwnedFunctions, createMatch, deleteMatch, ensureTypeKeys, matchCaseId, matchProblem, nameRecordFields, pasteOwnedFunctions, remapMatchNode, renameMatchBinder, setMatchDefault } from './matchGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { classArity, reduce, predsOnVar, pickDefault, entails, findInstance, headName, listInstances, literalClass, numericTypes, setDynamicClasses, setDynamicInstances, superclassesOf } from './prelude.js'
 import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
@@ -35,7 +36,7 @@ import { PRELUDE, libraryDefs, preludeDefs, preludeTypeDefs, preludeTypes } from
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
-const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
+const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './matchGraph.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 import { BUILTIN_GROUPS, CLASS_NOTES, classLabel } from './classGroups.js'
 // Classes print under their Haskell names (Ring as Num, …) everywhere the app shows a type.
@@ -232,8 +233,16 @@ let layouts = {}
 const viewDefs = {}
 const viewBodies = {}
 const laidOutViews = new Set()
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? libraryDefs[id] ?? viewDefs[id] })
-const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
+const definitions = new Proxy({}, {
+  get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? libraryDefs[id] ?? viewDefs[id],
+  ownKeys: () => [...new Set([nodes, derivedDefs, classDefs, libraryDefs, viewDefs].flatMap(Object.keys))],
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+})
+const allBodies = new Proxy({}, {
+  get: (_, id) => functionBodies[id] ?? viewBodies[id],
+  ownKeys: () => [...new Set([...Object.keys(functionBodies), ...Object.keys(viewBodies)])],
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+})
 function clearViews() {
   for (const id of Object.keys(viewDefs)) delete viewDefs[id]
   for (const id of Object.keys(viewBodies)) delete viewBodies[id]
@@ -375,11 +384,24 @@ function reachableFunctions(graph, ids) {
 /** Why running node `nodeId` of `graph` must be refused (an ambiguity it depends on), or null. */
 function runBlocker(graph, nodeId) {
   const inside = subtreeOf(graph, nodeId)
-  const local = typePass(graph).ambiguities.main.find((a) => inside.has(a.nodeId))
+  for (const id of inside) {
+    const problem = graph[id]?.match && matchProblem(graph[id], graph, definitions, functionBodies)
+    if (problem) return problem
+  }
+  const localTypes = typePass(graph)
+  if ([...inside].some((id) => graph[id]?.match) && localTypes.brokenEdges.some((e) => inside.has(e.nodeId))) return '패턴 매칭 분기의 타입이나 연결을 확인하세요'
+  const local = localTypes.ambiguities.main.find((a) => inside.has(a.nodeId))
   if (local) return local.message
   projectPassCache = null
-  const inner = projectPass().ambiguities.functions
+  const projectTypes = projectPass()
+  const inner = projectTypes.ambiguities.functions
   for (const fn of reachableFunctions(graph, inside)) {
+    const broken = projectTypes.brokenFunctions[fn]?.[0]
+    if (broken && (nodes[fn]?.matchBranch || Object.values(functionBodies[fn]).some((n) => n.match))) return broken.message || `${nodes[fn]?.label || fn}: 분기의 타입이 맞지 않습니다`
+    for (const node of Object.values(functionBodies[fn])) {
+      const problem = node.match && matchProblem(node, functionBodies[fn], definitions, functionBodies)
+      if (problem) return problem
+    }
     if (inner[fn]?.length) return `${nodes[fn]?.lambda ? 'a λ' : nodes[fn]?.label ?? fn}: ${inner[fn][0].message}`
   }
   return null
@@ -436,14 +458,20 @@ function renderFunctionLibrary() {
 // reference to the body's parameter, shown just as the parameter itself).
 function renderParameterLibrary() {
   const graph = activeNodes()
-  const params = state.activeFunction ? Object.values(graph).filter((n) => n.type === 'parameter') : []
+  const params = state.activeFunction ? Object.values(graph).filter((n) => n.type === 'parameter' && n.label !== '_') : []
   document.querySelector('#parameter-title').hidden = !params.length
   const library = document.querySelector('#parameter-library')
-  library.innerHTML = params.map((p) => {
+  const item = (p) => {
     const q = resolvedValueQual(p)
     return `<button class="library-item parameter-item" data-parameter-id="${escapeAttr(p.id)}" title="Add a use of this parameter to the canvas"><span class="lib-icon number-icon">#</span><span><b>${escapeAttr(p.label)}</b><small>${qualChainHtml(q.preds, q.type)}</small></span></button>`
-  }).join('')
+  }
+  library.innerHTML = params.filter((p) => !p.matchCapture).map(item).join('') + (params.some((p) => p.matchCapture) ? `<details class="match-outer-values" data-disclosure="outer-values:${state.activeFunction}"><summary>바깥 값</summary>${params.filter((p) => p.matchCapture).map(item).join('')}</details>` : '')
   library.querySelectorAll('.parameter-item').forEach((item) => { item.onclick = () => addParameterUse(item.dataset.parameterId) })
+  if (nodes[state.activeFunction]?.matchBranch) {
+    library.insertAdjacentHTML('beforeend', '<button class="library-item" id="match-capture">+ 바깥 값 가져오기</button>')
+    library.querySelector('#match-capture').onclick = chooseMatchCapture
+  }
+  restoreDisclosureState(library)
 }
 function addParameterUse(parameterId) {
   if (readonlyBlocked()) return
@@ -471,6 +499,47 @@ function createLambda() {
   renderFunctionLibrary()
   showToast('λ를 추가했어요 — 더블클릭(또는 본체 열기)해서 정의하고, 바깥 값을 슬롯에 꽂으면 캡처해요')
 }
+
+function beginPatternMatch(target) {
+  if (!state.activeFunction || readonlyBlocked()) return
+  let type = resolvedValueQual(target).type
+  while (type?.kind === 'app') type = type.fn
+  const choices = Object.values({ ...preludeTypes, ...types }).filter((d) => definitions[matchCaseId(d.name)])
+  const add = (decl) => {
+    const node = createMatch({ nodes, functionBodies }, activeNodes(), decl, target.id, { ownerId: state.activeFunction, ...freePosition(activeNodes(), 180 + decl.constructors.length * SLOT_STRIDE) })
+    state.selected = node.id
+    renderFunctionLibrary(); updateInspector(); draw(); fitToView()
+  }
+  const known = choices.find((d) => d.name === type?.name)
+  if (known) return add(known)
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker'
+  dialog.innerHTML = `<h3>매칭할 타입</h3><div class="constructor-options">${choices.map((d, i) => `<button class="library-item" data-choice="${i}">${escapeAttr([d.name, ...d.params].join(' '))}</button>`).join('') || '<p>먼저 타입을 추가하세요.</p>'}</div><form method="dialog"><button class="tool-button">취소</button></form>`
+  dialog.querySelectorAll('[data-choice]').forEach((b) => { b.onclick = () => { add(choices[Number(b.dataset.choice)]); dialog.close() } })
+  dialog.addEventListener('close', () => dialog.remove())
+  document.body.append(dialog); dialog.showModal()
+}
+
+function chooseMatchCapture() {
+  const info = nodes[state.activeFunction]?.matchBranch
+  if (!info) return
+  const graph = info.ownerId ? functionBodies[info.ownerId] : nodes
+  const node = graph?.[info.matchId]
+  const branch = [...(node?.match.branches || []), node?.match.defaultBranch].find((b) => b?.fnId === state.activeFunction)
+  if (!branch) return
+  // Do not capture the match itself or any expression depending on its result.
+  const choices = Object.values(graph).filter((n) => n.id !== node.id && !n.matchInternal && !isHiddenDefinition(n) && n.type !== 'output' && !subtreeOf(graph, n.id).has(node.id) && !branch.captures.includes(n.id))
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker'
+  dialog.innerHTML = `<h3>바깥 값 가져오기</h3><div class="constructor-options">${choices.map((n, i) => `<button class="library-item" data-choice="${i}">${escapeAttr(nodeDisplayText(n, graph))}</button>`).join('') || '<p>가져올 값이 없습니다. 바깥 함수에서 값을 추가하세요.</p>'}</div><form method="dialog"><button class="tool-button">닫기</button></form>`
+  dialog.querySelectorAll('[data-choice]').forEach((b) => { b.onclick = () => {
+    captureMatchValue({ nodes, functionBodies }, graph, branch, choices[Number(b.dataset.choice)].id)
+    if (branch === node.match.defaultBranch) node.match.branches.forEach((arm, i) => { if (arm.useDefault) setMatchDefault({ nodes, functionBodies }, graph, node, i) })
+    dialog.close(); renderFunctionLibrary(); updateInspector(); draw()
+  } })
+  dialog.addEventListener('close', () => dialog.remove())
+  document.body.append(dialog); dialog.showModal()
+}
 // The name always opens the definition; the separate + always inserts a call.
 function onLibraryFunction(id) {
   if (nodes[id]?.custom) enterFunction(id)
@@ -485,7 +554,7 @@ function renderPreludeLibrary() {
   }).join('')}`).join('')
   // The Prelude's own data types (library.js): their constructors and eliminators.
   const byType = {}
-  for (const def of Object.values(preludeTypeDefs)) (byType[def.derived.type] ||= []).push(def)
+  for (const def of Object.values(preludeTypeDefs)) if (def.derived.op !== 'case') (byType[def.derived.type] ||= []).push(def)
   // Each constructor and eliminator can be customized like a declared type's (✎).
   // A type taken over is listed in TYPES instead; one that can be taken over has its own ✎.
   const head = (d) => (d.name === '(,)' ? '(a, b)' : [d.name, ...d.params].join(' '))
@@ -587,17 +656,59 @@ const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
   document.querySelector('#type-palette').innerHTML = typePaletteHtml()
   const byType = Object.groupBy(Object.values(derivedDefs).filter((def) => !def.primitive), (def) => def.derived.type)
+  const row = (def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="정의 편집">✎</button></div>`
   typeLibrary.innerHTML = Object.values(types).map((d) => `
     <div class="type-entry">
+      <div class="type-library-head">
       <button class="library-item type-item" data-type-name="${d.name}" title="Edit declaration">
         <span class="lib-icon type-icon">T</span>
-        <span><b>${[d.name, ...(d.params || [])].join(' ')}${d.library ? ' <i class="customized">Prelude · yours</i>' : ''}</b><small>${d.constructors.map((c) => c.name).join(' | ')}</small></span>
+        <span><b>${[d.name, ...(d.params || [])].join(' ')}${d.library ? ' <i class="customized">✎</i>' : ''}</b>${d.constructors.length > 1 ? `<small>${d.constructors.map((c) => c.name).join(' | ')}</small>` : ''}</span>
       </button>
-      ${(byType[d.name] || []).map((def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎ custom</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="${nodes[def.id]?.override ? 'Open its custom body' : 'Customize: redefine it with a body of your own'}">✎</button></div>`).join('')}
+      <button class="add-call add-type-call" data-type-name="${d.name}" title="생성자 호출 추가 · 캔버스로 드래그">+</button></div>
+      ${d.constructors.length > 1 ? (byType[d.name] || []).filter((def) => def.derived.op === 'construct').map(row).join('') : ''}
+      <details class="type-functions" data-disclosure="type-functions:${escapeAttr(d.name)}"><summary>필드 · 함수</summary>${(byType[d.name] || []).filter((def) => !['case', 'construct'].includes(def.derived.op)).map(row).join('')}${d.constructors.length === 1 ? (byType[d.name] || []).filter((def) => def.derived.op === 'construct').map(row).join('') : ''}</details>
     </div>`).join('')
   typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeEditor(item.dataset.typeName) })
+  typeLibrary.querySelectorAll('.add-type-call').forEach((item) => {
+    item.onclick = () => addTypeCall(item.dataset.typeName)
+    item.onpointerdown = (event) => {
+      if (event.button !== 0) return
+      const start = { x: event.clientX, y: event.clientY }
+      const move = (e) => { if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) item.dataset.dragging = 'true' }
+      const up = (e) => {
+        document.removeEventListener('pointermove', move)
+        const dragged = item.dataset.dragging
+        delete item.dataset.dragging
+        if (!dragged) return
+        const rect = canvas.getBoundingClientRect()
+        if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) addTypeCall(item.dataset.typeName, { x: (e.clientX - rect.left - state.offset.x) / state.zoom, y: (e.clientY - rect.top - state.offset.y) / state.zoom })
+        item.onclick = null
+        setTimeout(() => { item.onclick = () => addTypeCall(item.dataset.typeName) }, 0)
+      }
+      document.addEventListener('pointermove', move)
+      document.addEventListener('pointerup', up, { once: true })
+    }
+  })
   typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
   typeLibrary.querySelectorAll('.derived-edit').forEach((item) => { item.onclick = () => editDerived(item.dataset.editId) })
+  restoreDisclosureState(typeLibrary)
+}
+
+function addTypeCall(name, position) {
+  const d = types[name]
+  if (!d) return
+  const add = (ctor) => {
+    addFunctionCall(`type:${name}:${ctor.name}`)
+    if (position && activeNodes()[state.selected]) Object.assign(activeNodes()[state.selected], position)
+    updateInspector(); draw()
+  }
+  if (d.constructors.length === 1) return add(d.constructors[0])
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker constructor-picker'
+  dialog.innerHTML = `<h3>${escapeAttr(name)} 생성자</h3><div class="constructor-options">${d.constructors.map((c, i) => `<button class="library-item" data-choice="${i}">${escapeAttr(c.name)}</button>`).join('')}</div><form method="dialog"><button class="tool-button">취소</button></form>`
+  dialog.querySelectorAll('[data-choice]').forEach((button) => { button.onclick = () => { add(d.constructors[Number(button.dataset.choice)]); dialog.close() } })
+  dialog.addEventListener('close', () => dialog.remove())
+  document.body.append(dialog); dialog.showModal()
 }
 // Whether `id` (or the primitive `prim:<id>`) is something a Prelude type derives.
 const definitionsOfPrelude = (id) => !!preludeTypeDefs[id.replace(/^prim:/, '')]
@@ -644,13 +755,8 @@ function resetDerivedFunction(id) {
 // constructor gives every case call a new branch (typeEdits.js).
 const typePanel = document.querySelector('#type-panel')
 let typeEditor = null // { original: name of the declaration being edited (null until first applied), draft, appliedDraft: the draft as last applied }
-let draftKeys = 0
 function keyed(draft) {
-  for (const c of draft.constructors) {
-    c.key ??= ++draftKeys
-    for (const fl of c.fields) fl.key ??= ++draftKeys
-  }
-  return draft
+  return ensureTypeKeys(draft)
 }
 function editorFor(name) {
   const draft = keyed(declToDraft(types[name]))
@@ -770,6 +876,10 @@ function applyTypeDraft() {
     if (noticed.length) showToast(`${d.name} no longer has ${noticed.join(', ')} (it isn't possible after this edit)`)
   }
   const { before, next, nextClasses, nextInstances } = checked
+  next[d.name].constructors.forEach((c, i) => {
+    c.key = d.constructors[i].key
+    c.fields.forEach((f, j) => { f.key = d.constructors[i].fields[j].key })
+  })
   const changed = before && typeEditor.appliedDraft ? migrateTypeEdit({ nodes, functionBodies }, before, next[d.name], draftKeyMap(typeEditor.appliedDraft, d)) : 0
   if (before && d.name !== before.name) renameTypeInAnnotations(before.name, d.name)
   if (before && d.name !== before.name) moveLayout(layoutKey('type', before.name), layoutKey('type', d.name))
@@ -891,24 +1001,21 @@ function renderTypeEditor(error = '') {
   const ident = (kind, name, title, data = '') => `<button class="te-ident te-ident-${kind}" data-ident="${kind}"${data} title="${escapeAttr(title)} — click to rename">${escapeAttr(name)}</button>`
   const field = (ci, f, fi, record) => {
     const t = fieldType(f)
-    return `<div class="te-field" data-field-row="${fi}">${record ? `${ident('field', f.name, 'Field name', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></div>`
+    const getId = `type:${typeEditor.original}:${f.name}`
+    const actions = d.constructors.length === 1 && derivedDefs[getId] ? `<details class="te-field-actions"><summary title="필드 사용">⋯</summary>${[['읽기', f.name], ['바꾸기', `set ${f.name}`], ['고치기', `over ${f.name}`]].map(([label, name]) => `<button data-use-derived="type:${typeEditor.original}:${name}">${label}</button>`).join('')}</details>` : ''
+    return `<div class="te-field" data-field-row="${fi}">${ident('field', f.name || `field${fi + 1}`, '필드 이름', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i><span class="te-ftype" data-fi="${fi}" title="필드 타입 선택">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span>${actions}<button class="te-x" data-te="drop-field" data-fi="${fi}" title="필드 삭제">−</button></div>`
   }
   // The kinds the declaration gives the type and its parameters (once applied).
   const kindOf = (i) => { try { return applied ? showKind(i === undefined ? constructorKind(applied.name) : paramKind(applied, i), '▸') : '' } catch { return '' } }
   const sub = (n) => String(n).replace(/\d/g, (x) => '₀₁₂₃₄₅₆₇₈₉'[x])
   const cards = {
     type: () => `
-      <div class="decl-kind">type${kindOf() ? ` :: ${escapeAttr(kindOf())}` : ''}</div>
       <div class="decl-head">
-        <button class="te-keyword" data-te="keyword" title="${d.keyword === 'data' ? 'data: any constructors — click for newtype (exactly one constructor with one field)' : 'newtype: exactly one constructor with one field — click for data'}">${d.keyword}</button>
         ${ident('type', d.name, 'Type name')}
-        ${(d.params || []).map((v) => `<span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span>`).join(' ')}
+        ${(d.params || []).map((v, i) => `<span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span><button class="te-x" data-te="drop-param" data-pi="${i}" title="타입 매개변수 삭제">−</button></span>`).join(' ')}
+        <button class="te-drop te-add-param" data-te="add-param" title="타입 매개변수 추가" aria-label="Add type parameter">+</button>
       </div>
-      <div class="decl-actions">
-        <button class="te-drop te-add-param" data-te="add-param" title="Add type parameter — click to choose or drop a variable" aria-label="Add type parameter">+</button><small>parameter</small>
-        <button class="te-drop te-add-ctor" data-te="add-ctor" title="Another constructor (a value is one of them): drag a type here for one holding a field of it, or click for one without fields">+ constructor</button>
-      </div>
-      ${derivingText ? `<div class="hs-deriving" title="Derived by itself whenever the fields allow">${escapeAttr(derivingText)}</div>` : ''}`,
+      `,
     param: (n) => `
       <div class="decl-kind">parameter${kindOf(n.index) ? ` :: ${escapeAttr(kindOf(n.index))}` : ''}</div>
       <span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(n.name), namer)}">${escapeAttr(n.name)}</span><button class="te-x" data-te="drop-param" data-pi="${n.index}" title="Remove this type parameter">−</button></span>`,
@@ -916,14 +1023,14 @@ function renderTypeEditor(error = '') {
       const ci = n.index, c = d.constructors[ci]
       const record = c.fields.some((f) => f.name)
       return `
-      <div class="decl-kind">constructor ι${sub(ci + 1)}${d.constructors.length > 1 ? ' · drag up/down to reorder' : ''}</div>
       <div class="decl-head">
-        ${ident('ctor', c.name, `Constructor — a value of ${d.name} is made by exactly one of its constructors`, ` data-ci="${ci}"`)}
-        ${c.fields.length ? `<button class="te-mode${record ? ' on' : ''}" data-te="toggle-record" title="${record ? 'Record syntax: Con { name :: A } — click for unnamed fields, Con A' : 'Unnamed fields: Con A — click for record syntax, Con { name :: A }'}">{ record }</button>` : ''}
+        ${d.constructors.length === 1 && c.name === d.name ? `<details class="te-ctor-options"><summary>생성자 설정</summary>${ident('ctor', c.name, '생성자 이름', ` data-ci="${ci}"`)}</details>` : ident('ctor', c.name, '생성자 이름', ` data-ci="${ci}"`)}
+        <button class="te-use" data-te="use-ctor" title="이 생성자를 함수처럼 추가">+ 사용</button>
+        ${ci ? '<button class="te-x" data-te="move-ctor" title="생성자 위로 이동">↑</button>' : ''}
         ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
       </div>
       <div class="decl-fields">${c.fields.map((f, fi) => field(ci, f, fi, record)).join('')}<button class="te-drop te-add" data-te="add-field" title="Add field — click to choose or drop a type" aria-label="Add field">+</button></div>
-      <div class="hs-comment te-sig">${escapeAttr(c.name)} ::&nbsp;${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</div>`
+      `
     },
     derived: (n) => `
       <div class="decl-kind">${{ get: 'projections π', update: 'updates (set / over)', case: 'copairing [f₁, …, fₙ]', fold: 'recursor (fold)' }[n.op] ?? 'derived'}</div>
@@ -936,13 +1043,25 @@ function renderTypeEditor(error = '') {
   }
   typePanel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
-      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
+      <span class="te-status ${error ? 'bad' : 'ok'}" role="status">${error ? escapeAttr(error) : ''}</span>
       ${universeButtonHtml()}
       ${applied?.library ? `<button class="tool-button" data-te="delete" title="Drop your declaration: ${escapeAttr(d.name)} is the Prelude's again">↺ Prelude's ${escapeAttr(d.name)}</button>` : '<button class="tool-button" data-te="delete">Delete type</button>'}
       <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
     </div>
-    <p class="te-hint decl-hint">Click a name to rename it. Click + to choose a type, or drag one from Types. Drag a card to move it.</p>
-    <div class="decl-host"></div>`
+    <div class="te-simple">
+      ${cards.type()}
+      <div class="te-constructors ${d.constructors.every((c) => !c.fields.length) ? 'te-choices' : ''}">${d.constructors.map((c, index) => `<section class="te-ctor" data-ci="${index}">${cards.ctor({ index })}</section>`).join('')}</div>
+      <button class="te-drop te-add-ctor" data-te="add-ctor" title="생성자 추가 또는 타입 드롭">+ 생성자</button>
+      <details class="te-details" data-disclosure="type-details:${escapeAttr(d.name)}"><summary>상세 설정</summary>
+        <div class="te-settings"><button class="te-keyword" data-te="keyword" title="data / newtype">${d.keyword}</button><small>${escapeAttr(kindOf())}</small><span>${escapeAttr(derivingText)}</span></div>
+        ${graphDetailsHtml()}
+        <details><summary>구조 그래프</summary><div class="decl-host te-structure"></div></details>
+      </details>
+    </div>`
+  function graphDetailsHtml() {
+    const groups = typeGraph(d, { derived: derived.filter((def) => def.derived.op !== 'case').map((def) => ({ id: def.id, label: def.label, op: def.derived.op })) }).nodes.filter((n) => n.kind === 'derived')
+    return groups.map((n) => `<details class="te-function-group"><summary>${{ get: '필드 읽기', update: '필드 갱신', fold: '재귀 함수' }[n.op] || n.op}</summary>${cards.derived(n)}</details>`).join('')
+  }
   // The declaration as a graph (declGraph.js): the type, its parameters, its constructors injecting into it, what it derives.
   const graph = typeGraph(d, { derived: derived.map((def) => ({ id: def.id, label: def.label, op: def.derived.op })) })
   graph.edges = graph.edges.map((e) => (e.field === undefined ? e : { ...e, toPort: `[data-field-row="${e.field}"]` }))
@@ -950,17 +1069,14 @@ function renderTypeEditor(error = '') {
   const at = layoutGraph(graph, layouts[key])
   drawDeclGraph(typePanel.querySelector('.decl-host'), {
     graph, at, viewKey: key, fixed: new Set(Object.keys(layouts[key] || {})),
-    card: (n) => cards[n.kind](n),
-    className: (n) => (n.kind === 'ctor' ? 'te-ctor' : ''),
-    onMoved: (id, positions) => {
+    card: (n) => `<b>${escapeAttr(n.name || n.op)}</b>${n.fields ? `<small>${n.fields.map((f) => escapeAttr(f.type)).join(', ')}</small>` : ''}`,
+    className: () => '',
+    onMoved: (_, positions) => {
       layouts[key] = { ...positions }
-      // The sum's order is the constructors' top-to-bottom order: dragging one past another reorders them (and every case's branches).
-      const order = graph.nodes.filter((n) => n.kind === 'ctor').sort((a, b) => positions[a.id].y - positions[b.id].y).map((n) => n.index)
-      if (id.startsWith('ctor:') && order.some((ci, i) => ci !== i)) return update(() => { d.constructors = order.map((ci) => d.constructors[ci]) })
       draw()
     },
   })
-  typePanel.querySelectorAll('.te-ctor').forEach((el) => { el.dataset.ci = graph.nodes.find((n) => n.id === el.dataset.node).index })
+  restoreDisclosureState(typePanel)
   // Every _ must be filled before the declaration can apply.
   const update = (mutate) => { mutate(d); renderTypeEditor(d.constructors.some((c) => c.fields.some((f) => /(^|[^\w'])_(?![\w'])/.test(f.type))) ? 'Fill each _ in a field — drag a type into it' : applyTypeDraft()) }
   // A type variable a field mentions must be a parameter of the type (as in Haskell): it's added by itself.
@@ -986,7 +1102,7 @@ function renderTypeEditor(error = '') {
       if (layouts[key]) layouts[key] = renameLayout(layouts[key], { [`ctor:${c.name}`]: `ctor:${name}` })
       c.name = name
     },
-    field: (name, el) => { d.constructors[Number(el.dataset.ci)].fields[Number(el.dataset.fi)].name = name },
+    field: (name, el) => { const ci = Number(el.dataset.ci); d.constructors[ci].fields[Number(el.dataset.fi)].name = name; nameRecordFields(d, ci, functionLabelsExcept()) },
   }
   typePanel.querySelectorAll('.te-ident').forEach((el) => {
     el.onclick = el.ondblclick = () => {
@@ -1032,8 +1148,14 @@ function renderTypeEditor(error = '') {
   typePanel.querySelectorAll('[data-te="drop-param"]').forEach((b) => { b.onclick = () => update(() => { d.params.splice(Number(b.dataset.pi), 1) }) })
   typePanel.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => editDerived(b.dataset.edit) })
   typePanel.querySelectorAll('[data-reset]').forEach((b) => { b.onclick = () => { resetDerivedFunction(b.dataset.reset); renderTypeEditor() } })
+  typePanel.querySelectorAll('[data-use-derived]').forEach((b) => { b.onclick = () => { const id = b.dataset.useDerived; closeTypeEditor(); addFunctionCall(id) } })
   typePanel.querySelectorAll('.te-ctor').forEach((row) => {
     const c = d.constructors[Number(row.dataset.ci)]
+    row.querySelector('[data-te="use-ctor"]').onclick = () => { closeTypeEditor(); addFunctionCall(`type:${d.name}:${c.name}`) }
+    row.querySelector('[data-te="move-ctor"]')?.addEventListener('click', () => update(() => {
+      const ci = Number(row.dataset.ci)
+      ;[d.constructors[ci - 1], d.constructors[ci]] = [d.constructors[ci], d.constructors[ci - 1]]
+    }))
     row.querySelectorAll('.te-ftype').forEach((slot) => {
       const fl = c.fields[Number(slot.dataset.fi)]
       let shown = hole()
@@ -1046,23 +1168,11 @@ function renderTypeEditor(error = '') {
       slot.onclick = () => chooseType('Change field type', changeType, { initial: fl.type })
       slot.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); slot.click() } }
     })
-    row.querySelector('[data-te="toggle-record"]')?.addEventListener('click', () => update(() => {
-      const record = c.fields.some((f) => f.name)
-      const taken = new Set(d.constructors.flatMap((o) => o.fields.map((f) => f.name)).filter(Boolean))
-      c.fields.forEach((f) => {
-        if (record) return void (f.name = '')
-        let k = 1
-        while (taken.has(`field${k}`)) k++
-        taken.add(f.name = `field${k}`)
-      })
-    }))
     row.querySelectorAll('[data-te="drop-field"]').forEach((b) => { b.onclick = () => update(() => { c.fields.splice(Number(b.dataset.fi), 1) }) })
     const addField = row.querySelector('[data-te="add-field"]')
     const appendField = (type) => update(() => {
-        const record = c.fields.some((f) => f.name)
-        let k = c.fields.length + 1
-        while (c.fields.some((f) => f.name === `field${k}`)) k++
-        c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: typeText(type) })
+        c.fields.push({ name: '', type: typeText(type) })
+        nameRecordFields(d, Number(row.dataset.ci), functionLabelsExcept())
         addParamsOf(type)
       })
     addField.onclick = () => chooseType('Add field', appendField)
@@ -1073,6 +1183,7 @@ function renderTypeEditor(error = '') {
     let k = d.constructors.length + 1
     while (d.constructors.some((c) => c.name === `${d.name}${k}`)) k++
     d.constructors.push({ name: `${d.name}${k}`, fields: type ? [{ name: '', type: typeText(type) }] : [] })
+    nameRecordFields(d, d.constructors.length - 1, functionLabelsExcept())
     if (type) addParamsOf(type)
   })
   $('[data-te="add-ctor"]').onclick = () => addCtor(null)
@@ -2003,6 +2114,7 @@ function bodyParams(fnId) { return Object.values(functionBodies[fnId] || {}).fil
 function chainInfo(node, pass) {
   const entry = pass.perNode.get(node.id)
   if (!entry) return null
+  if (node.match) return { segments: [valueTypeOfEntry(entry)], targets: [], opts: { preds: entry.preds } }
   // (A value node may share its source's entry — Output does — so it's the node's kind that decides.)
   if (node.type === 'function' && entry.paramTypes) {
     const editable = isSignatureEditable(node) === 'signature'
@@ -2145,7 +2257,7 @@ function drawCanvasChains(pass) {
     const isFn = node.type === 'function'
     const rect = isFn ? functionBlockScreenRect(node) : valueBlockScreenRect(node)
     el.style.top = `${rect.top + rect.height + 30 * state.zoom}px`
-    if (isFn && node.params.length && !isFolded(node)) {
+    if (isFn && !node.match && node.params.length && !isFolded(node)) {
       el.style.left = `${slotScreenCenter(node, 0).x - (SLOT_STRIDE / 2) * state.zoom}px`
       info.opts.widths = node.params.map(() => `calc(${SLOT_STRIDE * state.zoom}px + .7em)`)
     } else {
@@ -2167,6 +2279,12 @@ function drawSignatureBar() {
   if (!signatureBar.isConnected) document.querySelector('.canvas-wrap')?.append(signatureBar)
   const fnId = state.activeFunction
   const def = fnId && nodes[fnId]
+  if (def?.matchBranch) {
+    signatureBar.hidden = false
+    const fields = bodyParams(fnId).filter((p) => !p.matchCapture).map((p) => p.label)
+    signatureBar.innerHTML = `<span class="sig-name"><b>⑂ ${escapeAttr([def.label, ...fields].join(' '))}</b></span><span class="sig-hint">분기 본문 · ←로 함수에 돌아가기</span>`
+    return
+  }
   const info = def && chainInfo(def, typePass(nodes))
   signatureBar.hidden = !info
   if (!info) return
@@ -2303,6 +2421,7 @@ function commitSignature(fnId, edits, context, messages) {
   return ''
 }
 function canConnect(source, target, index) {
+  if (target.match && index < target.match.branches.length) return false
   const pass = typePass()
   const expected = pass.perNode.get(target.id)?.paramTypes?.[index]
   if (!expected) return false
@@ -2362,8 +2481,9 @@ function useAgain(n) {
 // everything plugged into them. Purely a view — it all stays plugged in.
 // Everything starts open.
 function isVisible(n) { // a λ's (lifted) definition is never drawn — its call node is the λ — nor a customized derived function (it's listed under its type)
-  if (isHiddenDefinition(n) || isBuiltinDefinition(n)) return false
-  for (let at = slotHost(n), guard = 0; at && guard < 500; at = slotHost(at.host), guard++) if (at.host.folded) return false
+  if (n.matchInternal || n.matchCapture || isHiddenDefinition(n) || isBuiltinDefinition(n)) return false
+  if (n.type === 'parameter' && n.label === '_' && nodes[state.activeFunction]?.matchBranch) return false
+  for (let at = slotHost(n), guard = 0; at && guard < 500; at = slotHost(at.host), guard++) if (at.host.folded || at.host.matchInternal) return false
   return true
 }
 // `mountedTo` is `hostId:slotIndex` — split at the last colon, since ids can
@@ -2413,6 +2533,7 @@ function drawUnfoldedLinks() {
 // right end stays put, so the link into the call it feeds doesn't jump, and
 // so does the camera; opening lays out just what it reveals, to its left.
 function foldKeepingRight(n, folded) {
+  if (n.match || n.matchInternal) return
   const right = rightEdge(n)
   n.folded = folded
   setRightEdge(n, right)
@@ -2569,7 +2690,7 @@ function drawFunctionBlock(node, pass, selected) {
   ctx.fillStyle = '#fff'; ctx.fill()
   ctx.shadowColor = 'transparent'; ctx.lineWidth = selected || broken ? 3 : 2; ctx.strokeStyle = broken ? '#e0537d' : selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
   ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
-  ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('ƒ', p.x, p.y + 1)
+  ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(node.match ? '⑂' : 'ƒ', p.x, p.y + 1)
   if (isFolded(node)) {
     ctx.textAlign = 'left'; ctx.fillStyle = '#211d34'; ctx.font = `600 ${CHIP_FONT * state.zoom}px ui-monospace, monospace`
     ctx.fillText(foldedText(node), p.x + FOLDED_TEXT_X * state.zoom, p.y + 1)
@@ -2640,6 +2761,7 @@ function label(node, p, baseY) {
 // `3` into add's slot and params[0] becomes '3'), so the declared name comes
 // from the builtin as shipped, or a custom function's body parameter nodes.
 function paramDisplayName(node, index) {
+  if (node.match) return index === node.match.branches.length ? '대상' : branchPattern(node.match.branches[index])
   const sourceId = node.sourceFunctionId || node.id
   const declared = builtinNodes[sourceId]?.params?.[index]
     ?? Object.values(functionBodies[sourceId] || {}).filter((n) => n.type === 'parameter')[index]?.label
@@ -2680,6 +2802,7 @@ function makeRoom(grown) {
 // Why a call node no longer matches what it calls (a type edit renamed a
 // constructor or field, or a signature changed underneath it), or null.
 function callProblem(node) {
+  if (node.match) return matchProblem(node, activeNodes(), definitions, functionBodies)
   if (node.type !== 'function' || !node.sourceFunctionId) return null
   const def = definitions[node.sourceFunctionId]
   if (!def) return `${node.label} no longer exists (renamed or deleted)`
@@ -2717,7 +2840,7 @@ function updatePortEditor(pass = typePass()) {
   const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
   // One fold toggle per call, on the top border above its head badge: folds
   // (or opens) all its slots, and everything plugged into them, at once.
-  visibleFunctions.filter((node) => node.params.length > 0).forEach((node) => {
+  visibleFunctions.filter((node) => !node.match && node.params.length > 0).forEach((node) => {
     const p = point(node)
     const size = 20 * state.zoom
     const toggle = document.createElement('button')
@@ -2734,6 +2857,20 @@ function updatePortEditor(pass = typePass()) {
   })
   visibleFunctions.filter((node) => !isFolded(node)).forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
+    if (node.match && index < node.match.branches.length) {
+      const branch = node.match.branches[index]
+      const button = document.createElement('button')
+      button.className = 'match-arm-button'
+      button.dataset.matchId = node.id; button.dataset.branchIndex = index
+      button.textContent = branchPattern(branch)
+      button.title = `${branchPattern(branch)} → 분기 본문 편집`
+      button.style.left = `${center.x - 58 * state.zoom}px`; button.style.top = `${center.y - 18 * state.zoom}px`
+      button.style.width = `${116 * state.zoom}px`; button.style.height = `${36 * state.zoom}px`; button.style.fontSize = `${11 * state.zoom}px`
+      button.onpointerdown = (event) => { event.stopPropagation(); event.preventDefault() }
+      button.onclick = () => enterFunction(branch.useDefault ? node.match.defaultBranch.fnId : branch.fnId)
+      editor.append(button)
+      return
+    }
     const mountedId = node.mounted[index]
     const mountedNode = mountedId ? activeNodes()[mountedId] : null
     const expectedType = pass.perNode.get(node.id)?.paramTypes?.[index]
@@ -3166,6 +3303,7 @@ function deleteNode(id) {
     if (child) { child.mountedTo = null; child.connected = false; child.x = n.x + 150 + i * 40; child.y = n.y + 120 }
   })
   delete graph[id]
+  if (n.match) deleteMatch({ nodes, functionBodies }, graph, n)
   if (graph === nodes && n.custom) delete functionBodies[id]
   // The last call to a λ is the λ: take its hidden definition and body with it.
   const lambdaId = n.sourceFunctionId
@@ -3223,6 +3361,7 @@ function scopeControls(n) {
   return `<details class="property" data-disclosure="scopes"><summary>Scope settings</summary><label for="function-scope">Function scope</label><select class="scope-select" id="function-scope">${options(n.scope)}</select>${n.params.map((_, i) => `<label class="scope-row">${escapeAttr(paramDisplayName(n, i))}<select class="param-scope" data-index="${i}">${options(n.paramScopes[i])}</select></label>`).join('')}</details>`
 }
 function renderFunctionInspector(n) {
+  if (n.match) return renderMatchInspector(n)
   const problem = callProblem(n)
   const editable = nodes[n.id] === n && n.custom
   return `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${escapeAttr(n.label)}</b><small>${editable ? 'Function definition' : 'Function call'}</small></div></div>
@@ -3234,7 +3373,22 @@ function renderFunctionInspector(n) {
     ${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}
     ${useAgainButton(n)}
     ${nodes[n.id] === n ? `<div class="property"><label>PROJECT ENTRY</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Project entry · unset' : 'Set as project entry'}</button></div>` : ''}
+    ${canConvertMatch(n) ? '<button class="use-again" id="convert-match">⑂ 패턴 매칭으로 변환</button>' : ''}
     ${callDefinitionBlock(n)}${customizedRow(n)}${editable ? functionLawsPanel(n) : ''}${scopeControls(n)}${deleteButton(n)}`
+}
+function canConvertMatch(n) {
+  const def = definitions[n.sourceFunctionId]
+  return state.activeFunction && !nodes[n.sourceFunctionId]?.override && def?.derived?.op === 'case' && n.mounted?.length === def.derived.arity && n.mounted.every((id) => activeNodes()[id])
+}
+function renderMatchInspector(n) {
+  const problem = matchProblem(n, activeNodes(), definitions, functionBodies)
+  const q = resolvedValueQual(n)
+  return `<div class="selected-node"><span class="selected-icon">⑂</span><div><b>${escapeAttr(n.match.type)} 패턴 매칭</b><small>분기를 눌러 본문을 작성하세요</small></div></div>
+    ${problem ? `<div class="property broken-call">${escapeAttr(problem)}</div>` : ''}
+    <div class="property"><label>결과 타입</label>${qualChainHtml(q.preds, q.type)}</div>
+    <div class="match-branches">${n.match.branches.map((b, i) => `<div class="match-branch-row"><button class="match-open" data-match-open="${i}">${escapeAttr(b.ctor)}${b.useDefault ? ' → _' : ' →'}</button>${!b.useDefault ? `<div class="match-binders">${b.fields.map((f, fi) => `<input aria-label="${escapeAttr(b.ctor)} 패턴 변수 ${fi + 1}" data-match-binder="${i}" data-field="${fi}" value="${escapeAttr(f.name)}" />`).join('')}</div>` : ''}<label class="match-default"><input type="checkbox" data-match-default="${i}" ${b.useDefault ? 'checked' : ''}/>기본 분기로 처리</label></div>`).join('')}</div>
+    ${n.match.defaultBranch ? '<button class="use-again" id="match-default-body">_ 기본 분기 편집 →</button>' : ''}
+    <button class="evaluate" id="evaluate">▶ Run this node</button>${useAgainButton(n)}${deleteButton(n)}`
 }
 function updateInspector() {
   const n = activeNodes()[state.selected]
@@ -3243,7 +3397,28 @@ function updateInspector() {
   inspector.innerHTML = (viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div></div><div class="property"><label>RESULT TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div><div class="property"><label>RETURN VALUE</label><div class="connection-tag">${n.source ? escapeAttr(nodeDisplayText(activeNodes()[n.source]) || n.value) : 'Connect a node to Output'}</div></div>${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}${state.activeFunction ? `${nodes[state.activeFunction]?.library || nodes[state.activeFunction]?.override ? customizedRow(nodes[state.activeFunction]) : ''}${definitionBlock(state.activeFunction)}` : ''}`
     : n.type === 'function' ? renderFunctionInspector(n) : renderValueInspector(n)) + enclosingDefinition(n)
+  if (!viewingReadonly() && state.activeFunction && !['output', 'law'].includes(n.type) && !n.matchInternal) inspector.insertAdjacentHTML('beforeend', '<button class="use-again" id="pattern-match">⑂ 패턴 매칭</button>')
   restoreDisclosureState(inspector)
+  inspector.querySelector('#pattern-match')?.addEventListener('click', () => beginPatternMatch(n))
+  inspector.querySelector('#convert-match')?.addEventListener('click', () => {
+    const name = definitions[n.sourceFunctionId].derived.type
+    convertCaseToMatch({ nodes, functionBodies }, activeNodes(), n, types[name] || preludeTypes[name], state.activeFunction)
+    renderFunctionLibrary(); updateInspector(); draw()
+  })
+  inspector.querySelectorAll('[data-match-open]').forEach((b) => { b.onclick = () => {
+    const branch = n.match.branches[Number(b.dataset.matchOpen)]
+    enterFunction(branch.useDefault ? n.match.defaultBranch.fnId : branch.fnId)
+  } })
+  inspector.querySelector('#match-default-body')?.addEventListener('click', () => enterFunction(n.match.defaultBranch.fnId))
+  inspector.querySelectorAll('[data-match-binder]').forEach((input) => { input.onchange = () => {
+    const branch = n.match.branches[Number(input.dataset.matchBinder)]
+    if (!renameMatchBinder({ nodes, functionBodies }, branch, Number(input.dataset.field), input.value.trim())) showToast('소문자로 시작하는 고유 이름 또는 _를 입력하세요')
+    renderFunctionLibrary(); updateInspector(); draw()
+  } })
+  inspector.querySelectorAll('[data-match-default]').forEach((input) => { input.onchange = () => {
+    setMatchDefault({ nodes, functionBodies }, activeNodes(), n, Number(input.dataset.matchDefault), input.checked)
+    renderFunctionLibrary(); updateInspector(); draw()
+  } })
   inspector.querySelectorAll('[data-select-input]').forEach((button) => { button.onclick = () => { state.selected = n.mounted[Number(button.dataset.selectInput)]; updateInspector(); draw() } })
   inspector.querySelectorAll('[data-disconnect-input]').forEach((button) => { button.onclick = () => {
     const i = Number(button.dataset.disconnectInput)
@@ -3964,6 +4139,13 @@ function setupTemplates() {
     stopGame()
     state.activeFunction = null
     loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
+    // Newly loaded templates teach the direct matching workflow. Imported
+    // projects retain their original case calls and offer explicit conversion.
+    for (const [ownerId, graph] of Object.entries(functionBodies)) for (const n of Object.values(graph)) {
+      const def = definitions[n.sourceFunctionId]
+      const decl = def?.derived?.op === 'case' && types[def.derived.type]
+      if (decl && !n.match && n.mounted?.length === def.derived.arity && n.mounted.every((id) => graph[id])) convertCaseToMatch({ nodes, functionBodies }, graph, n, decl, ownerId)
+    }
     layoutCustomDefinitions()
     fitToView()
     showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
@@ -4092,14 +4274,16 @@ function setupProjectActions() {
 // slots (the whole expression), and pastes them with fresh ids into the
 // graph in view. Builtins, Output and parameters aren't copied.
 let clipboard = null
+let clipboardOwned = null
 function copySelection() {
   const graph = activeNodes()
   const roots = (state.multi.size ? [...state.multi] : [state.selected]).map((id) => graph[id]).filter((n) => n && !n.readonly && n.type !== 'output' && n.type !== 'parameter' && !(graph === nodes && n.custom))
   if (!roots.length) return showToast('Nothing copyable selected (builtins, Output, parameters and function definitions stay put)')
   const take = new Map()
-  const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])) }
+  const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])); if (n.match?.defaultBranch) visit(graph[n.match.defaultBranch.callId]) }
   roots.forEach(visit)
   clipboard = [...take.values()]
+  clipboardOwned = copyOwnedFunctions({ nodes, functionBodies }, clipboard)
   showToast(`블록 ${clipboard.length}개를 복사했어요`)
 }
 function pasteClipboard() {
@@ -4107,6 +4291,7 @@ function pasteClipboard() {
   const graph = activeNodes()
   const stamp = Date.now()
   const ids = new Map(clipboard.map((n, i) => [n.id, `${n.id.replace(/-copy-\d+-\d+$/, '')}-copy-${stamp}-${i}`]))
+  pasteOwnedFunctions({ nodes, functionBodies }, clipboardOwned || { nodes: {}, functionBodies: {} }, ids, state.activeFunction)
   state.multi.clear()
   for (const original of clipboard) {
     const n = structuredClone(original)
@@ -4117,6 +4302,7 @@ function pasteClipboard() {
     if (n.mountedTo) { const [host, slot] = splitMountedTo(n.mountedTo); n.mountedTo = ids.has(host) ? `${ids.get(host)}:${slot}` : null; if (!n.mountedTo) n.connected = false }
     if (n.type === 'ref' && ids.has(n.target)) n.target = ids.get(n.target)
     if (n.type === 'ref' && !graph[n.target] && !ids.has(original.target)) continue // its original isn't in this graph
+    remapMatchNode(n, ids, state.activeFunction)
     graph[n.id] = n
     if (!n.mountedTo) state.multi.add(n.id)
   }

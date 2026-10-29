@@ -23,9 +23,13 @@ export function blankGameUnits() {
     unit('types', 'Msg', '버튼이 보내는 메시지예요. 이 게임에는 하나뿐이에요: Increment.', [
       { id: 'bg-msg', kind: 'declare', title: 'Msg 선언', name: 'Msg', declaration: 'data Msg = Increment deriving (Eq, Show)',
         prompt: '메시지 타입 Msg를 선언하세요: 필드 없는 생성자 Increment 하나. Eq와 Show를 유도하세요.', hint: '생성자 Increment 하나, 필드 없음.' },
-      { id: 'bg-casemsg-type', kind: 'type', title: 'caseMsg의 타입', expr: 'caseMsg', answer: 'r -> Msg -> r',
-        prompt: 'Msg를 선언하면 분기 함수 caseMsg가 생겨요. 생성자마다 결과 하나씩, 마지막에 Msg를 받아요. caseMsg의 타입을 쓰세요.', hint: '생성자가 하나이고 필드가 없으니 결과 r 하나, 그리고 Msg.',
-        explain: 'case msg of { Increment -> … } 를 함수로 쓴 것이에요. 생성자가 늘면 인자도 늘어요.' },
+      { id: 'bg-casemsg-type', kind: 'choice', title: '메시지 패턴 매칭',
+        prompt: '함수 안에서 msg를 선택하고 패턴 매칭을 누르면 어떤 분기가 생길까요?',
+        options: [
+          { text: 'Increment → 분기 결과', correct: true, why: 'Msg의 생성자 Increment에 맞는 분기를 만들고 그 안에서 결과를 작성해요.' },
+          { text: 'count → 분기 결과', why: 'count는 Model의 필드예요. 패턴은 선택한 값의 타입에 맞춰 생겨요.' },
+          { text: '별도의 caseMsg 함수를 먼저 만들어야 한다', why: '함수 본문에서 바로 패턴 매칭을 추가할 수 있어요.' },
+        ] },
     ]),
     unit('program', 'initial', '처음 상태예요: count가 0인 Model.', [
       { id: 'bg-initial', kind: 'build', title: 'initial 만들기', name: 'initial', params: [], signature: 'Model', types: ['Model'],
@@ -35,10 +39,10 @@ export function blankGameUnits() {
     unit('program', 'handle', '메시지를 받아 상태를 바꿔요. Increment면 count에 1을 더해요.', [
       { id: 'bg-apply-type', kind: 'type', title: 'apply의 타입', expr: 'apply', answer: '(a -> b) -> a -> b', engine: 'apply',
         prompt: 'apply f x 는 함수 f를 x에 적용해요. apply의 타입을 쓰세요.', hint: '첫 인자는 함수 (a -> b), 둘째는 그 함수가 받는 a.',
-        explain: 'caseMsg가 고른 Model -> Model 함수를 apply로 m에 적용해요.' },
+        explain: '패턴 매칭의 분기에서도 바깥 값 m을 가져와 함수를 적용할 수 있어요.' },
       { id: 'bg-handle', kind: 'build', title: 'handle 만들기', name: 'handle', params: ['msg', 'm'], signature: 'Msg -> Model -> Model', types: ['Model', 'Msg'],
-        prompt: 'handle msg m을 만드세요: Increment이면 count에 1을 더한 Model.', uses: ['caseMsg', 'over count', '(+)', 'apply'],
-        hint: 'apply (caseMsg (over count (1 +)) msg) m. (+)의 첫 슬롯에만 1을 넣으면 (1 +) 함수가 돼요.',
+        prompt: 'handle msg m을 만드세요: Increment이면 count에 1을 더한 Model.', uses: ['패턴 매칭', 'over count', '(+)'],
+        hint: 'msg에서 패턴 매칭을 열고 Increment 분기에 over count (1 +) m을 작성하세요. m은 바깥 값에서 가져올 수 있어요.',
         tests: [{ args: ['Increment', 'Model 2'], after: ['count'], expect: '3.0' }, { args: ['Increment', 'Model 0'], after: ['count'], expect: '1.0' }] },
     ]),
     unit('program', 'view', '화면이에요: 센 수를 보여 주는 글과 +1 버튼.', [

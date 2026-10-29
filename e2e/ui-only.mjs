@@ -63,7 +63,7 @@ async function activeGraph() {
   const p = await project()
   if (await js(`document.querySelector('#back-graph').hidden`)) return { p, graph: p.nodes }
   const name = (await js(`document.querySelector('#graph-name').textContent`)).split(' / ').pop().replace(/^ƒ /, '').replace(/ · .*$/, '')
-  const fn = Object.values(p.nodes).find((n) => n.custom && n.label === name && !n.lambda) || Object.values(p.nodes).find((n) => n.lambda && name === 'λ')
+  const fn = Object.values(p.nodes).find((n) => n.custom && n.label === name && !n.lambda) || Object.values(p.nodes).find((n) => n.lambda && (n.label === name || name === 'λ'))
   return { p, graph: p.functionBodies[fn.id] }
 }
 async function toScreen(graph) {
@@ -115,7 +115,7 @@ async function dragType(chipAttr, toExpr) {
 }
 // Names in the type editor are buttons: click one, type, Enter.
 const rename = (sel, value) => js(`(() => { document.querySelector(${JSON.stringify(sel)}).click(); const input = document.querySelector('.te-rename'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event('change')) })()`)
-const editorStatus = () => js(`document.querySelector('.te-status').textContent`)
+const editorStatus = () => js(`document.querySelector('.te-status').textContent || (document.querySelector('.te-status').classList.contains('ok') ? 'applied' : '')`)
 async function declareRecordType(name, fields) {
   await js(`document.querySelector('.add-type').click()`); await sleep(250)
   await rename('.te-ident-type', name); await sleep(150)
@@ -197,6 +197,103 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   // A cold Vite start can take a while to serve the app: wait for it to render.
   for (let i = 0; i < 480 && !(await js(`!!document.querySelector('.exercise-item')`).catch(() => false)); i++) await sleep(250)
   await sleep(500)
+  if (process.argv.includes('--match-only')) {
+    console.log('Types and pattern matching:')
+    await check('create a record and use its type directly as a constructor', async () => {
+      await declareRecordType('Box', [['item', 'Int']])
+      await js(`document.querySelector('.add-type-call[data-type-name="Box"]').click()`)
+      const p = await project()
+      const ctor = Object.values(p.nodes).find((n) => n.sourceFunctionId === 'type:Box:Box')
+      expect(ctor?.params.length === 1 && p.types.Box.constructors[0].record, 'type did not add its record constructor')
+      await fill(ctor.id, 0, '7')
+      expect(await js(`!document.querySelector('#type-library [data-function-id="type:Box:caseBox"]')`), 'caseBox is still in the library')
+    })
+    await check('match a parameter in its function and return the bound field', async () => {
+      await createFunction('unwrap', ['box']); await openBody('unwrap')
+      await js(`document.querySelector('.parameter-item').click(); document.querySelector('#pattern-match').click()`)
+      await sleep(250)
+      await js(`[...document.querySelectorAll('.type-picker [data-choice]')].find((e) => e.textContent === 'Box').click()`)
+      await sleep(400)
+      const n = Object.values((await activeGraph()).graph).find((n) => n.match)
+      expect(n?.match.branches.length === 1, 'no match branch')
+      await js(`document.querySelector('.match-arm-button').click()`); await sleep(400)
+      await js(`[...document.querySelectorAll('.parameter-item')].find((e) => e.querySelector('b').textContent === 'item').click()`)
+      const branch = (await activeGraph()).graph
+      const value = Object.values(branch).find((n) => n.type === 'ref' && branch[n.target]?.label === 'item')
+      await toOutput(value.id)
+      await back()
+      await toOutput(n.id)
+      writeFileSync(join(tmpdir(), 'hs-match-block.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+      await back()
+      const unwrap = await add('function', 'unwrap')
+      const p = await project()
+      const ctor = Object.values(p.nodes).find((n) => n.sourceFunctionId === 'type:Box:Box')
+      await plug(ctor.id, unwrap, 0)
+      await clickNode(unwrap)
+      expect(await js(`document.querySelector('#inspector-content').textContent.includes('case box of')`), 'definition does not print case syntax')
+      await js(`document.querySelector('#evaluate').click()`); await sleep(500)
+      const result = Object.values((await project()).nodes).filter((n) => n.type === 'value' || n.type === 'number').pop()
+      expect(result?.data === 7 || result?.value === '7', `expected 7, got ${JSON.stringify(result)}`)
+      const shot = join(tmpdir(), 'hs-pattern-matching.png')
+      writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+      return shot
+    })
+    await check('field identities survive editing, reload and undo', async () => {
+      await js(`document.querySelector('.type-item[data-type-name="Box"]').click()`); await sleep(200)
+      await rename('.te-ident-field[data-fi="0"]', 'payload')
+      await js(`document.querySelector('[data-te="close"]').click()`)
+      let p = await project()
+      const fn = Object.values(p.nodes).find((n) => n.custom && n.label === 'unwrap')
+      const matching = Object.values(p.functionBodies[fn.id]).find((n) => n.match)
+      expect(matching.match.branches[0].fields[0].name === 'payload', 'pattern did not follow field rename')
+      const key = p.types.Box.constructors[0].fields[0].key
+      await js(`document.querySelector('#undo').click()`)
+      expect((await project()).types.Box.constructors[0].fields[0].name === 'item', 'undo did not restore field name')
+      await js(`document.querySelector('#redo').click()`)
+      expect((await project()).types.Box.constructors[0].fields[0].name === 'payload', 'redo did not restore field name')
+      await send('Page.reload')
+      for (let i = 0; i < 100 && !(await js(`!!document.querySelector('.add-type-call[data-type-name="Box"]')`).catch(() => false)); i++) await sleep(100)
+      p = await project()
+      expect(p.types.Box.constructors[0].fields[0].key === key && Object.values(p.functionBodies[fn.id]).some((n) => n.match), 'reload lost the pattern or field identity')
+      await openBody('unwrap')
+      await js(`document.querySelector('.match-arm-button').click()`); await sleep(250)
+      expect(await js(`[...document.querySelectorAll('.parameter-item b')].some((e) => e.textContent === 'payload')`), 'renamed binding not available after reload')
+      await back(); await back()
+    })
+    await check('multiple constructors require a choice, and a type can be dragged onto the canvas', async () => {
+      await js(`document.querySelector('.add-type').click()`)
+      await rename('.te-ident-type', 'Signal')
+      await rename('.te-ident-ctor', 'Off')
+      await js(`document.querySelector('[data-te="add-ctor"]').click()`)
+      await rename('.te-ctor[data-ci="1"] .te-ident-ctor', 'On')
+      await js(`document.querySelector('[data-te="close"]').click()`)
+      await js(`document.querySelector('.add-type-call[data-type-name="Signal"]').click()`)
+      expect(await js(`!!document.querySelector('.constructor-picker[open]')`), 'constructor choice did not open')
+      expect(!Object.values((await project()).nodes).some((n) => n.sourceFunctionId?.startsWith('type:Signal:')), 'a constructor was silently selected')
+      await js(`document.querySelector('.constructor-picker [data-choice="1"]').click()`)
+      expect(Object.values((await project()).nodes).some((n) => n.sourceFunctionId === 'type:Signal:On'), 'chosen constructor was not added')
+      const before = Object.values((await project()).nodes).filter((n) => n.sourceFunctionId === 'type:Box:Box').length
+      await js(`(() => { const b = document.querySelector('.add-type-call[data-type-name="Box"]'); for (let p = b.parentElement; p; p = p.parentElement) if (p.tagName === 'DETAILS') p.open = true; b.scrollIntoView({ block: 'nearest' }) })()`)
+      await sleep(150)
+      const rects = await js(`(() => { const b = document.querySelector('.add-type-call[data-type-name="Box"]'); b.scrollIntoView({ block: 'nearest' }); const a = b.getBoundingClientRect(), c = document.querySelector('#graph-canvas').getBoundingClientRect(); return [{ x: a.x + a.width / 2, y: a.y + a.height / 2 }, { x: c.x + c.width / 2, y: c.y + c.height / 2 }] })()`)
+      await drag(rects[0], rects[1])
+      const after = Object.values((await project()).nodes).filter((n) => n.sourceFunctionId === 'type:Box:Box').length
+      expect(after === before + 1, `drag added ${after - before} constructors`)
+    })
+    await check('a newly loaded game template uses direct matches and still plays', async () => {
+      await setField('#template', 'blankGame'); await sleep(500)
+      const p = await project()
+      expect(Object.values(p.functionBodies).some((body) => Object.values(body).some((n) => n.match)), 'template has no native matches')
+      await js(`document.querySelector('#run').click()`); await sleep(500)
+      expect(await js(`!document.querySelector('#play-panel').hidden`), 'game did not start')
+      const button = await portCenter('.play-view button')
+      await mouse('mousePressed', button.x, button.y); await mouse('mouseReleased', button.x, button.y); await sleep(250)
+      expect(await js(`document.querySelector('.play-view').textContent.includes('Count: 1')`), 'template message match did not update the model')
+    })
+    console.log(errors.length ? `Page errors:\n${errors.join('\n')}` : 'No page errors.')
+    cleanup(failures || errors.length ? 1 : 0)
+    await new Promise(() => {})
+  }
   console.log('Learning panels:')
   await check('the learning panel: collapsing keeps the graph, search and exercise selection', async () => {
     await js(`document.querySelector('.exercise-item').click()`)
@@ -280,7 +377,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
     await rename('.te-ident-type', 'Msg'); await sleep(150)
     await rename('.te-ident-ctor', 'Increment'); await sleep(150)
-    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
+    const sig = await js(`document.querySelector('#type-library [data-function-id="type:Msg:Increment"] .type-chain').title`)
     await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
     const p = await project()
     expect(sig === 'Msg', sig)
@@ -413,23 +510,22 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(p.nodes[stepId].label === 'tick' && callLabels.length && callLabels.every((l) => l === 'tick'), `${p.nodes[stepId].label} / ${callLabels}`)
     return `step → tick (${callLabels.length} call)`
   })
-  await check('the type editor is a graph of the declaration with no text boxes; fields are dragged in', async () => {
+  await check('the compact type editor automatically names record fields and keeps details folded', async () => {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
     const boxes = await js(`document.querySelectorAll('#type-panel input, #type-panel select, #type-panel textarea').length`)
     await rename('.te-ident-type', 'Shape'); await sleep(150)
     await dragType('data-con="Maybe"', `document.querySelector('[data-te="add-field"]')`)
     const waiting = await editorStatus()
     await dragType('data-con="Int"', `document.querySelector('.te-ftype[data-fi="0"] .tn-hole')`)
-    await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(200)
-    // the type card, then each constructor card injecting into it (with an edge per constructor)
-    const source = await js(`[...document.querySelectorAll('.decl-type .decl-head, .decl-ctor')].map((c) => [...c.querySelectorAll('.te-keyword, .te-ident, .te-ftype')].map((e) => e.textContent).join(' ')).map((t, i) => (i === 1 ? '= ' : '') + t).join(' / ') + ' / edges ' + document.querySelectorAll('.decl-edge-inject').length`)
+    const source = await js(`document.querySelector('.te-ident-type').textContent + ' ' + document.querySelector('.te-ftype').textContent`)
+    const simple = await js(`!document.querySelector('[data-te="toggle-record"]') && !document.querySelector('.te-details').open`)
     const p = await project()
     const status = await editorStatus()
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
     expect(boxes === 0, `${boxes} text boxes in the type editor`)
     expect(status.includes('applied'), status)
     expect(/Fill each _/.test(waiting), waiting)
-    expect(/= Shape MaybeInt/.test(source) && / edges 1$/.test(source) && /^data Shape/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && !p.types.Shape.constructors[0].fields[0].name, source)
+    expect(simple && /Shape MaybeInt/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && p.types.Shape.constructors[0].record && p.types.Shape.constructors[0].fields[0].name, source)
     return source.split(' / ').slice(0, 2).join(' ')
   })
   await check('a type with a parameter', async () => {
@@ -437,7 +533,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await rename('.te-ident-type', 'Box'); await sleep(150)
     await dragType('data-var="a"', `document.querySelector('[data-te="add-param"]')`)
     await dragType('data-var="a"', `document.querySelector('[data-te="add-field"]')`)
-    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
+    const sig = await js(`document.querySelector('#type-library [data-function-id="type:Box:Box"] .type-chain').title`)
     // a type variable used in a field becomes a parameter by itself
     await dragType('data-var="b"', `document.querySelector('[data-te="add-ctor"]')`)
     const params = await js(`[...document.querySelectorAll('.te-param')].map((e) => e.textContent.replace('−', '')).join(' ')`)
@@ -453,7 +549,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await dragType('data-varapp="f"', `document.querySelector('[data-te="add-field"]')`)
     await dragType('data-var="a"', `document.querySelector('.te-ftype .tn-hole')`)
     const params = await js(`[...document.querySelectorAll('.te-param')].map((e) => e.textContent.replace('−', '')).join(' ')`)
-    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
+    const sig = await js(`document.querySelector('#type-library [data-function-id="type:Wrap:Wrap"] .type-chain').title`)
     const status = await editorStatus()
     const kind = await js(`document.querySelector('#type-palette .type-chip[data-con="Wrap"]')?.title ?? ''`)
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
@@ -737,7 +833,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('.prelude-take-type[data-type-name="Color"]').click()`); await sleep(500)
     const taken = (await project()).types.Color?.library
     // naming the fields derives projections; a constructor more is refused: the runtime reads Color's values
-    await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(400)
+    await rename('.te-ident-field[data-fi="0"]', 'redChannel'); await sleep(400)
     const projections = Object.keys((await project()).types.Color.constructors[0].fields.filter((f) => f.name)).length
     await js(`document.querySelector('[data-te="add-ctor"]').click()`); await sleep(300)
     const refused = await editorStatus()

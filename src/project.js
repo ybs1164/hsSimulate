@@ -11,9 +11,10 @@
 // Comparing snapshots as strings is what lets the history skip no-op
 // checkpoints (pan/zoom live in main.js's view state, not here).
 import { classArity } from './prelude.js'
+import { ensureTypeKeys } from './matchGraph.js'
 
 export const STORAGE_KEY = 'hs-simulate:project'
-const VERSION = 4
+const VERSION = 5
 
 export class ProjectError extends Error {}
 
@@ -32,7 +33,7 @@ export function parseProject(text) {
   } catch {
     throw new ProjectError('Not a valid JSON file')
   }
-  if (!isRecord(data) || ![1, 2, 3, VERSION].includes(data.version)) throw new ProjectError('Not an hs/simulate project (or an unsupported version)')
+  if (!isRecord(data) || ![1, 2, 3, 4, VERSION].includes(data.version)) throw new ProjectError('Not an hs/simulate project (or an unsupported version)')
   if (data.instances !== undefined && !isRecord(data.instances)) throw new ProjectError('Project has malformed instances')
   if (data.types !== undefined && !isRecord(data.types)) throw new ProjectError('Project has malformed type declarations')
   if (data.classes !== undefined && !isRecord(data.classes)) throw new ProjectError('Project has malformed class declarations')
@@ -68,6 +69,7 @@ export function parseProject(text) {
  */
 const MOVED_TO_PRELUDE = { fromIntegral: 'prelude:fromIntegral', round: 'prelude:round' }
 export function upgradeProject(project) {
+  for (const decl of Object.values(project.types || {})) ensureTypeKeys(decl)
   for (const [from, to] of Object.entries(MOVED_TO_PRELUDE)) {
     const old = project.nodes[from]
     if (old && !old.builtin) continue // a function of the project's own by that id

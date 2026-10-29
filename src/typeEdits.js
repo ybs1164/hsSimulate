@@ -22,6 +22,7 @@
 // new slots start empty, dropped slots unplug what they held) and moves
 // customizations along.
 import { derivedDefinitions } from './typeDecls.js'
+import { migrateMatch } from './matchGraph.js'
 
 export const PRIM_PREFIX = 'prim:'
 
@@ -197,6 +198,11 @@ export function migrateTypeEdit(project, oldDecl, newDecl, keys) {
   for (const graph of graphs(project)) {
     for (const node of Object.values(graph)) {
       if (node.type !== 'function' || !node.sourceFunctionId) continue
+      if (node.match?.type === oldDecl.name) {
+        migrateMatch(project, graph, node, oldDecl, newDecl, keys)
+        changed++
+        continue
+      }
       const isPrim = node.sourceFunctionId.startsWith(PRIM_PREFIX)
       const r = renames.get(isPrim ? node.sourceFunctionId.slice(PRIM_PREFIX.length) : node.sourceFunctionId)
       if (!r) continue

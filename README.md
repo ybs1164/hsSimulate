@@ -43,10 +43,10 @@ npm run preview
 7. 좌측 `+` 버튼으로 함수 이름과 매개변수를 입력하면 커스텀 함수가 생성됩니다. 함수 목록에서 생성한 함수를 열고, 본체의 매개변수 노드 또는 다른 함수 호출 노드를 `Output`에 연결해 동작을 정의합니다.
 8. 선택한 노드는 `Delete`/`Backspace` 키 또는 Inspector의 `Delete node`로 지웁니다. 기초 함수, 함수의 `Output`·매개변수, 아직 호출되고 있는 커스텀 함수는 지울 수 없습니다.
 9. `↶`/`↷`(`Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z`)로 실행 취소·다시 실행합니다. 프로젝트는 브라우저(localStorage)에 자동 저장되어 새로고침해도 유지되며, `Project` 메뉴의 `Save project (.json)` / `Open project`로 JSON 파일을 저장하고 불러올 수 있습니다.
-10. 좌측 `Types`의 `+`로 타입을 만들면 **타입 편집기**가 열립니다. 타입은 그것을 이루는 생성자 함수들로 표시됩니다: 생성자마다 함수 블록이 있고, 필드는 블록 안에 `이름 :: 타입`으로 적습니다(모두 이름을 붙이면 레코드). 필드·생성자 추가/삭제, `data`/`newtype`, `deriving`(stock · 점별 anyclass · via Generically · newtype)을 고르면 생성자 시그니처와 유도 함수가 바로 갱신되고, 유효한 편집은 즉시 적용됩니다(실행 취소 가능). 다음 함수가 만들어져 타입 아래에 표시됩니다(클릭하면 캔버스에 호출 노드 추가).
+10. 좌측 `Types`에서 타입 이름을 누르면 **타입 편집기**가 열리고, 옆의 `+`를 누르거나 캔버스로 드래그하면 생성자 호출을 추가합니다. 생성자가 여러 개이면 하나를 고릅니다. 생성자는 일반 함수와 같이 부분 적용하거나 다른 함수에 전달할 수 있습니다. 편집기는 타입 이름·생성자·필드 중심으로 표시하며 새 필드는 이름이 자동으로 붙는 record입니다. 유효한 편집은 즉시 적용되고 실행 취소할 수 있습니다. `data`/`newtype`, 유도 함수와 구조 그래프는 상세 설정에서 확인합니다.
     - 생성자(주입) `Model :: Double → Double → Model`, `Tick :: Double → Event`
     - 레코드 필드의 사영 `clicks :: Model → Double`과 lens식 갱신 `set clicks :: Double → Model → Model`, `over clicks :: (Double → Double) → Model → Model`
-    - 분기 함수(쌍대짝) `caseEvent :: a → (Double → a) → (Int → a) → Event → a` — `maybe`/`either`/`bool`과 같은 모양
+    - 함수 안에서 매개변수나 중간값을 선택하고 **패턴 매칭**을 누르면 생성자별 분기가 생깁니다. 분기 버튼으로 본문을 열어 필드를 지역 변수로 사용하고, 바깥 값은 사이드바에서 가져옵니다. 중첩 매칭·재귀·`_`·기본 분기를 지원하며 결과는 `case … of`로 출력됩니다. `caseEvent` 같은 별도 분기 함수는 기본 목록에서 생략합니다. 기존 프로젝트의 호출은 유지되고 완전히 연결된 호출은 속성 패널에서 패턴 매칭으로 변환할 수 있습니다.
     - `deriving`은 stock `Eq`, `Ord`(사전순), `Show`를 지원하며, GHC처럼 `Ord`는 `Eq`가 필요하고 모든 필드가 그 클래스를 가져야 합니다. 생성자 필드는 하스켈처럼 지연 평가됩니다.
 11. 좌측 `Add from library`에는 리스트·Maybe·텍스트 함수가 하스켈 이름 그대로 있습니다: `[ , , ]`(슬롯 수만큼의 리스트, `+`로 추가), `[]`, `(:)`, `foldr`(리스트의 재귀자), `map`, `length`, `(++)`, `(!?)`, `Nothing`, `Just`, `maybe`(Maybe = 1 + a의 쌍대짝), `show`. 리스트는 하스켈처럼 지연 평가되는 유도 타입(`[] | x : xs`)이라 무한 리스트도 필요한 만큼만 계산됩니다. `String = [Char]`이며, `Text` 노드나 슬롯의 `"글자"`·`'c'` 리터럴로 만들 수 있습니다. `Eq a ⇒ Eq [a]`처럼 문맥 있는 인스턴스로 리스트·Maybe의 비교·출력이 타입 검사됩니다.
 12. 카테고리 이론의 대수 구조도 하스켈 클래스 이름 그대로 있습니다(`src/categoryClasses.js`). `Semigroup`/`Monoid`(`(<>)`, `mempty`) — 리스트는 자유 모노이드입니다. 한 대상에 구조가 여럿인 `Double`(+와 *)은 `Monoid`가 아니며, 필요하면 `newtype`을 선언해 고릅니다. `Functor`·`Foldable`(`fmap`, `foldMap` — 자유 모노이드에서 나가는 유일한 준동형), `PartialOrd`·`Lattice`(`leq`, `(\/)`, `(/\)` — 순서 집합은 thin 카테고리), `VectorSpace`(`(*^)`). 곱 타입은 등식만으로 정의되는 구조를 점별로 가질 수 있습니다(Lawvere 이론): `deriving anyclass (AddSemigroup, AddMonoid, AddGroup, VectorSpace, PartialOrd, Lattice …)`, `deriving (Semigroup, Monoid) via Generically T`. `Field`나 `Ord`처럼 곱에서 살아남지 않는 구조는 이유와 함께 거부됩니다. 숫자 리터럴은 곱을 따라 대각선으로 퍼지고(ℤ → R×S), `mempty`는 관찰될 때 맞는 모양(`[]`, `Nothing`, 필드별 `mempty`)이 됩니다.
@@ -84,7 +84,7 @@ npm run preview
 - `ADD A VALUE`에서 숫자·텍스트·리스트·불리언·람다를 추가합니다. Types, Classes, 라이브러리는 필요할 때 펼치고, 검색하면 일치 항목이 자동으로 펼쳐집니다. 검색 후 Enter는 첫 결과를 추가합니다.
 - 상단 실행 버튼에는 실제 실행할 함수 이름이 표시됩니다. Inspector의 `Run this node`는 선택 노드만 평가합니다.
 - Inspector는 선택 노드의 입력과 추론 타입을 표시합니다. 함수 전체 시그니처는 본문 위에, 코드 정의·법칙 검사·scope 설정은 접이식 영역에 있습니다. 연결된 입력은 클릭해 선택하거나 `×`로 해제합니다.
-- 타입 편집기의 이름은 클릭으로 변경하고, `+` 및 필드 타입은 클릭해서 선택하거나 기존처럼 Types에서 드래그합니다. 복합 타입은 선택 창에 `Maybe Int`, `[a]`처럼 입력합니다.
+- 타입 편집기의 이름은 클릭으로 변경하고, `+` 및 필드 타입은 클릭해서 선택하거나 Types에서 드래그합니다. 복합 타입은 선택 창에 `Maybe Int`, `[a]`처럼 입력합니다. 필드의 `⋯`에서 읽기·갱신을 추가하고, 생성자 순서는 `↑`로 바꿉니다. 구조 그래프에서 카드를 옮겨도 생성자 순서는 유지됩니다.
 - `Help`에서 조작법을 확인합니다. Inspector의 `×`로 패널을 닫고 상단 `Inspector`로 다시 엽니다. 좁은 화면에서는 Inspector가 겹쳐 열립니다.
 
 ## 캔버스 조작

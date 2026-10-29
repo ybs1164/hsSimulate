@@ -25,6 +25,7 @@
 //   plain data once forced (`run` returns them that way), so they can be
 //   stored on a node and survive save/load.
 import { parseLiteral } from './literals.js'
+import { matchProblem } from './matchGraph.js'
 import { cons, just, left, nil, nothing, ordering, pair, right, stdGen, unit } from './dataTypes.js'
 import { METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 
@@ -1155,6 +1156,8 @@ export function createEvaluator(registry) {
   }
 
   function functionNodeValue(graph, node, env) {
+    const problem = matchProblem(node, graph, registry.nodes, registry.functionBodies || {})
+    if (problem) throw new EvalError(problem)
     const callee = node.sourceFunctionId || node.id
     const arity = definition(callee).builtin === 'listOf' ? (node.params || []).length : arityOf(callee)
     const args = Array(arity).fill(null)

@@ -180,6 +180,13 @@ function bodyErrors(registry, bodies, fnId) {
   const pass = inferGraph(registry, bodies, body)
   const out = []
   if (pass.brokenEdges.length) out.push(`연결 ${pass.brokenEdges.length}곳의 타입이 맞지 않아요.`)
+  const visitBranches = (ownerId) => {
+    for (const [id, def] of Object.entries(registry)) if (def.matchBranch?.ownerId === ownerId) {
+      if (pass.brokenFunctions[id]?.length) out.push(`${def.label} 분기의 연결 타입이 맞지 않아요.`)
+      visitBranches(id)
+    }
+  }
+  visitBranches(fnId)
   for (const [id, entry] of pass.perNode) {
     if (entry.error) out.push(entry.error)
     else if (entry.invalidSlots?.length && body[id]) out.push(`${body[id].label ?? id}의 슬롯에 맞지 않는 값이 있어요.`)

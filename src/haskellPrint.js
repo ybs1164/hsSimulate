@@ -139,7 +139,7 @@ function printBody(fnId, definitions, functionBodies, options = {}) {
     const n = body[id]
     if (!n) return atom([{ text: 'undefined' }])
     if (n.type === 'ref') return expr(n.target, via)
-    if (n.type === 'parameter') return atom([tok(n.label, via, { role: 'param' })])
+    if (n.type === 'parameter') return options.parameterValues?.get(n.id) || atom([tok(n.label, via, { role: 'param' })])
     if (refCount.get(id) && !options.inline) {
       if (!shared.has(id)) {
         const name = claimed.get(id) ?? freshName(id)
@@ -171,6 +171,7 @@ function printBody(fnId, definitions, functionBodies, options = {}) {
     if (n.type === 'text') return atom([tok(JSON.stringify(String(n.value ?? '')), n.id, { role: 'literal' })])
     if (n.type === 'output') return n.source ? expr(n.source) : atom([{ text: 'undefined' }])
     if (n.type !== 'function') return atom([tok(n.label || '?', n.id)])
+    if (n.match) return printMatch(n)
     const callee = definitions[n.sourceFunctionId || n.id]
     // A λ node is a call to its (lambda-lifted) function: print the lambda
     // itself, applied to whatever its slots capture — a β-redex.
@@ -221,6 +222,38 @@ function printBody(fnId, definitions, functionBodies, options = {}) {
     if (!holes.length) return e
     const binders = holes.flatMap((h, i) => [...(i ? [{ text: ' ' }] : []), tok(h.name, n.id, { role: 'hole', slot: h.slot })])
     return lambda([tok('\\', n.id, { role: 'call' }), ...binders, { text: ' -> ' }, ...e.tokens])
+  }
+
+  function printMatch(n) {
+    const at = n.match.branches.length
+    const source = n.mounted?.[at]
+    const target = source ? expr(source) : atom([{ text: 'undefined' }])
+    const arms = n.match.branches.filter((b) => !b.useDefault)
+    if (n.match.branches.some((b) => b.useDefault) && n.match.defaultBranch) arms.push({ ...n.match.defaultBranch, ctor: '_', fields: [] })
+    const fieldNames = new Set(arms.flatMap((b) => b.fields.map((f) => f.name)))
+    fieldNames.forEach((name) => used.add(name))
+    const captureValues = new Map()
+    const valueFor = (id) => {
+      if (captureValues.has(id)) return captureValues.get(id)
+      let value = expr(id)
+      // A pattern binder must not shadow an outer variable substituted here.
+      if (value.tokens.some((t) => fieldNames.has(t.text))) {
+        const name = freshName('outer')
+        bindings.push({ name, id, value: value.tokens })
+        value = atom([{ text: name, id, scope: fnId, role: 'binding' }])
+      }
+      captureValues.set(id, value)
+      return value
+    }
+    const rows = arms.map((branch) => {
+      const params = Object.values(functionBodies[branch.fnId] || {}).filter((p) => p.type === 'parameter')
+      const captures = new Map(branch.captures.map((id, i) => [params[i]?.id, id]))
+      const parameterValues = { get: (id) => captures.has(id) ? valueFor(captures.get(id)) : undefined }
+      const inner = printBody(branch.fnId, definitions, functionBodies, { parameterValues })
+      const rhs = inner ? inner.bindings.length ? [{ text: 'let { ' }, ...inner.bindings.flatMap((b, i) => [...(i ? [{ text: '; ' }] : []), { text: b.name, id: b.id, scope: branch.fnId, role: 'binding' }, { text: ' = ' }, ...b.value]), { text: ' } in ' }, ...inner.rhs] : inner.rhs : [{ text: 'undefined' }]
+      return [{ text: branch.ctor, id: n.id, scope: fnId, role: 'call' }, ...branch.fields.flatMap((f, i) => [{ text: ' ' }, { text: f.name, id: params[branch.captures.length + i]?.id, scope: branch.fnId, role: 'param' }]), { text: ' -> ' }, ...rhs]
+    })
+    return lambda([tok('case', n.id, { role: 'call' }), { text: ' ' }, ...target.tokens, { text: ' of { ' }, ...rows.flatMap((row, i) => [...(i ? [{ text: '; ' }] : []), ...row]), { text: ' }' }])
   }
 
   // A do block `do { s₁; s₂; … }` (braces and semicolons, so it reads the

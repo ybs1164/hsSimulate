@@ -69,8 +69,8 @@ export function clickCounterUnits() {
     ]),
     unit('game', 'handle', '메시지마다 동작 하나를 골라요. 결과가 Model -> Model 함수라서 매개변수는 msg 하나예요.', [
       { id: 'cc-handle', kind: 'build', title: 'handle 만들기', name: 'handle', params: ['msg'], signature: 'Msg -> Model -> Model', types: [...types, 'Msg'],
-        prompt: 'handle msg = caseMsg onClick buyClick buyAuto msg 를 만드세요. 매개변수는 msg 하나, 시그니처의 결과 자리에는 Model -> Model.', uses: ['caseMsg', 'onClick', 'buyClick', 'buyAuto'],
-        hint: 'caseMsg가 고른 함수가 그대로 결과예요 — apply가 필요 없어요.',
+        prompt: 'msg를 패턴 매칭해서 Click이면 onClick, Buy이면 buyClick, BuyAuto이면 buyAuto를 반환하세요. 매개변수는 msg 하나, 결과는 Model -> Model 함수예요.', uses: ['패턴 매칭', 'onClick', 'buyClick', 'buyAuto'],
+        hint: 'msg에서 패턴 매칭을 열고 각 분기의 Output에 슬롯이 비어 있는 해당 함수를 연결하세요.',
         tests: [{ args: ['Click', model(12)], after: clicks, expect: '13' }, { args: ['Buy', model(12)], after: ['perClick'], expect: '2' }] },
     ]),
     unit('game', 'initial', '처음 상태예요: 빈 지갑, 클릭당 1.', [
