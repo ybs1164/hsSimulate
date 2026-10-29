@@ -420,7 +420,7 @@ function renderPreludeLibrary() {
     const def = preludeDefs[`prelude:${builtin}`]
     const sch = builtin === 'listOf' ? listOfScheme(3) : builtinSchemes[builtin]
     const mine = nodes[def.id]?.library // taken over: your own graph runs
-    return `<button class="derived-item${mine ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${mine ? ' · your own graph (double-click a call to open it)' : ''}"><b>${def.label}${mine ? ' ✎' : ''}</b><small>${qualChainHtml(sch.preds, sch.type)}</small></button>`
+    return `<button class="derived-item${mine ? ' edited' : ''}" data-function-id="${def.id}" title="Add to the canvas${mine ? ' · your own graph (double-click a call to open it)' : ''}${def.description ? ' · ' + escapeAttr(def.description) : ''}"><b>${def.label}${mine ? ' ✎' : ''}</b><small>${qualChainHtml(sch.preds, sch.type)}</small></button>`
   }).join('')}`).join('')
   // The Prelude's own data types (library.js): their constructors and eliminators.
   const byType = {}
@@ -2887,6 +2887,8 @@ function updateInspector() {
     inspector.insertAdjacentHTML('beforeend', `<div class="inspector-note program-entry-note">${MAIN_GUIDANCE}<br/><br/>Run graph: main 전체 실행. 각 노드의 ▶ / Play function: 선택 함수만 개별 테스트.<br/><br/>이 main은 앱의 순수 계산 시작 함수입니다. DEFINITION은 함수 정의 참고용이며, 이 앱은 JavaScript로 그래프를 실행합니다. 실제 Haskell 실행 파일의 main :: IO ()와는 다릅니다. Haskell로 옮길 때는 계산을 별도 함수/모듈에 두고 IO main에서 print로 출력하세요.</div>`)
   }
   const evaluate = document.querySelector('#evaluate')
+  const help = preludeDefs[n.sourceFunctionId || n.id]?.description
+  if (help) inspector.insertAdjacentHTML('beforeend', `<div class="property"><label>사용 방법</label><div class="inspector-note">${escapeAttr(help)}</div></div>`)
   if (evaluate) evaluate.title = '선택한 함수만 개별 테스트합니다. 프로그램 전체 실행은 상단 Run graph를 사용하세요.'
   if (evaluate) evaluate.onclick = () => executeFunction(n)
   const entryToggle = document.querySelector('#entry-toggle')

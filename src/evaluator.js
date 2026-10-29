@@ -31,6 +31,9 @@ import { METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 export class EvalError extends Error {}
 
 const MAX_STEPS = 1_000_000
+// A small, explicit bound also limits deferred field chains in lazy records.
+// Keep the shared step budget below as a second limit on work inside f.
+export const MAX_REPEAT_COUNT = 100
 
 class Thunk {
   constructor(compute) {
@@ -297,6 +300,15 @@ export function createEvaluator(registry) {
     and: [2, (p, q) => bool(p) && bool(q)], // lazy in q, as Haskell's (&&)
     or: [2, (p, q) => bool(p) || bool(q)],
     not: [1, (p) => !bool(p)],
+    // App helper, not a Haskell Prelude function. Iterate in constant JS
+    // stack space, forcing each result only to WHNF (not its lazy fields).
+    repeatN: [3, (n, f, x) => {
+      const count = listCount(n, 'repeatN')
+      if (count > MAX_REPEAT_COUNT) throw new EvalError(`repeatN: 최대 ${MAX_REPEAT_COUNT}회까지 지원합니다 (반복 한도 초과)`)
+      let value = x
+      for (let i = 0; i < count; i++) value = now(applyValue(f, [value]))
+      return force(value)
+    }],
 
     // Prelude functions on lists and Maybe (dataTypes.js). Lazy throughout,
     // so they work on infinite lists as far as they're consumed.
@@ -310,6 +322,20 @@ export function createEvaluator(registry) {
       return go(xs)
     }],
     map: [2, (f, xs) => mapList(f, xs)],
+    filter: [2, (p, xs) => filterList(p, xs)],
+    any: [2, (p, xs) => testList(p, xs, true)],
+    all: [2, (p, xs) => testList(p, xs, false)],
+    take: [2, (n, xs) => takeList(listCount(n, 'take'), xs)],
+    drop: [2, (n, xs) => {
+      let remaining = listCount(n, 'drop')
+      let rest = xs
+      while (remaining-- > 0) {
+        const l = listStep(rest)
+        if (l.ctorIndex === 0) return nil
+        rest = l.args[1]
+      }
+      return force(rest)
+    }],
     length: [1, (xs) => {
       let n = 0
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) n++
@@ -407,6 +433,44 @@ export function createEvaluator(registry) {
       return l.ctorIndex === 0 ? force(ys) : cons(l.args[0], delay(() => go(l.args[1])))
     }
     return go(xs)
+  }
+
+  // Reuse the runtime's closures and lazy list cells, never JS coercions or
+  // mutable arrays. Filtering skips a rejected prefix iteratively; accepted
+  // tails are delayed. take 0 does not even inspect xs or its elements.
+  function filterList(p, xs) {
+    const go = (t) => {
+      let rest = t
+      for (;;) {
+        const l = listStep(rest)
+        if (l.ctorIndex === 0) return nil
+        if (bool(applyValue(p, [l.args[0]]))) return cons(l.args[0], delay(() => go(l.args[1])))
+        rest = l.args[1]
+      }
+    }
+    return go(xs)
+  }
+  function takeList(n, xs) {
+    if (n <= 0) return nil
+    const l = listStep(xs)
+    return l.ctorIndex === 0 ? nil : cons(l.args[0], delay(() => takeList(n - 1, l.args[1])))
+  }
+  function testList(p, xs, stopAt) {
+    for (let l = listStep(xs); l.ctorIndex === 1; l = listStep(l.args[1])) {
+      // Check the actual Bool, once per visited element. Do not demand the
+      // remainder (or run p on it) after a decisive result.
+      if (bool(applyValue(p, [l.args[0]])) === stopAt) return stopAt
+    }
+    return !stopAt
+  }
+  function listCount(t, name) {
+    const n = num(t)
+    if (!Number.isSafeInteger(n)) throw new EvalError(`${name}: n must be a safe Int (−9007199254740991 … 9007199254740991)`)
+    return n
+  }
+  function listStep(t) {
+    if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
+    return list(t)
   }
 
   /** `properFraction x` taken apart: the integral part (forced) and the fractional part (a thunk). */

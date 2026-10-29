@@ -54,6 +54,7 @@ export function initLearningPanel({ workspace, onModalOpen }) {
       <h3>프로그램에서 따라하기</h3><ol class="syntax-steps"></ol>
       <h3>값을 바꿔보기</h3><p class="syntax-experiment"></p>
       <h3>주의할 점</h3><p class="syntax-caution"></p>
+      <div class="syntax-more-examples"></div>
       <footer class="syntax-note"><p class="syntax-source"></p><p class="syntax-license"></p></footer>
     </div>`
   document.body.append(dialog)
@@ -94,6 +95,31 @@ export function initLearningPanel({ workspace, onModalOpen }) {
     fillList(dialog.querySelector('.syntax-steps'), lesson.steps)
     dialog.querySelector('.syntax-experiment').textContent = lesson.experiment
     dialog.querySelector('.syntax-caution').textContent = lesson.caution
+    const more = dialog.querySelector('.syntax-more-examples')
+    more.replaceChildren()
+    for (const example of lesson.examples || []) {
+      const section = document.createElement('section')
+      const appendText = (tag, value) => {
+        const el = document.createElement(tag)
+        el.textContent = value
+        section.append(el)
+        return el
+      }
+      appendText('h3', example.title)
+      const pre = appendText('pre', '')
+      const code = document.createElement('code')
+      code.textContent = example.code
+      pre.append(code)
+      appendText('p', `예상 결과 (설명용): ${example.expected}`)
+      appendText('p', example.explanation)
+      appendText('h3', '프로그램에서 따라하기')
+      fillList(appendText('ol', ''), example.steps)
+      appendText('h3', '값을 바꿔보기')
+      appendText('p', example.experiment)
+      appendText('h3', '주의할 점')
+      appendText('p', example.caution)
+      more.append(section)
+    }
     dialog.querySelector('.syntax-source').replaceChildren(
       '참고: ', sourceLink(lessonSource.title, new URL(lesson.source, lessonSource.url).href),
     )

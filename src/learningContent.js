@@ -100,6 +100,36 @@ export const syntaxLessons = [
     steps: ['Workspace의 Lists 또는 PRELUDE의 [ , , ]로 리스트 노드를 만듭니다.', '리스트 오른쪽 +로 입력이 세 개가 되게 하고 왼쪽부터 1, 2, 3을 넣습니다.', 'PRELUDE Lists의 length를 추가하고 리스트 출력을 xs에 연결합니다.', 'length를 Play function으로 실행합니다.'],
     experiment: '리스트 오른쪽 +로 원소 4를 하나 더 넣으면 length의 예상 결과는 4입니다.',
     caution: '슬롯에 [1,2,3] 전체를 쓰지 않습니다. 1과 True는 같은 리스트에 넣을 수 없습니다. 앱은 head/tail 대신 안전한 (!?)를 제공하며 인덱스는 0부터, 결과는 Just 값 또는 Nothing입니다.',
+    examples: [
+      {
+        title: 'take · 앞부분 가져오기', code: 'take 2 [1, 2, 3]', expected: '[1,2]',
+        explanation: 'take :: Int -> [a] -> [a]. n개보다 짧으면 있는 원소만 돌려주며 원래 리스트는 바꾸지 않습니다. 문자열도 [Char]라 take 2 "하스켈"은 "하스"입니다.',
+        steps: ['먼저 Export로 작업을 보관합니다. main 본체에서 Lists의 +로 세 입력을 만들고 1, 2, 3을 넣습니다.', 'Search nodes에서 take를 찾아 PRELUDE Lists의 take를 추가합니다. n에 2를 넣고 리스트 출력을 xs에 연결합니다.', 'take 출력을 main의 Output에 연결하고 상단 Run graph를 누릅니다. result에서 실제 결과를 확인합니다. main이 없는 기존 프로젝트에서는 take를 선택해 Play function으로 테스트합니다.'],
+        experiment: 'n을 0 또는 -1로 바꾸면 [], 5로 바꾸면 [1,2,3]입니다. xs에 큰따옴표를 포함한 "하스켈"을 넣으면 문자 단위로 가져옵니다.',
+        caution: 'n은 Int이며 1.5나 True는 맞지 않습니다. 앱에서 개수는 ±9007199254740991 범위의 안전한 정수만 지원합니다. 리스트 식 전체를 슬롯에 입력하지 마세요. 개수를 비워 두면 부분 적용 함수가 됩니다. result의 Show 표기에서는 한글이 숫자 이스케이프로 보일 수 있습니다.',
+      },
+      {
+        title: 'drop · 앞부분 건너뛰기', code: 'drop 2 [1, 2, 3]', expected: '[3]',
+        explanation: 'drop :: Int -> [a] -> [a]. 앞의 n개를 건너뛴 나머지를 돌려줍니다. 원본 리스트는 그대로입니다. Inspector의 Use again으로 참조를 만들어 take와 drop에 나누어 연결할 수 있습니다. drop 2 "하스켈"은 "켈"입니다.',
+        steps: ['take 예제와 같은 방식으로 Lists에 1, 2, 3을 넣습니다.', 'Search nodes에서 drop을 찾아 추가하고 n에 2를 넣습니다. 리스트 출력을 xs에 연결합니다.', 'drop 출력을 main의 Output에 연결하고 Run graph를 누릅니다. 개별 테스트는 drop을 선택해 Play function으로 실행합니다.'],
+        experiment: 'n이 0이나 -1이면 [1,2,3], 5이면 []입니다. xs를 "하스켈"로 바꾸면 문자열의 앞부분을 건너뜁니다.',
+        caution: 'take와 drop은 원소의 위치로 나눕니다. 조건으로 고르려면 다음 map 항목의 filter 실습을 보세요. 개수의 타입·안전한 정수 범위는 take와 같습니다.',
+      },
+      {
+        title: 'any · 하나라도 조건을 만족하는가', code: 'any ((==) 2) [1, 2, 3]', expected: 'True',
+        explanation: 'any :: (a -> Bool) -> [a] -> Bool. 조건이 True인 원소 하나를 찾으면 True입니다. 더 확인할 필요가 없으므로 그 뒤 원소에는 조건 함수를 적용하지 않습니다. 빈 리스트는 False입니다.',
+        steps: ['main 본체에서 (==)를 추가해 x에 2만 넣고 y는 비웁니다. 이 부분 적용 함수가 원소 하나를 받아 Bool을 돌려줍니다.', 'Lists의 +로 입력 세 개를 만들고 1, 2, 3을 넣습니다. Search nodes에서 any를 찾아 PRELUDE Lists의 노드를 추가합니다.', '(==) 출력을 any의 p에, 리스트 출력을 xs에 연결합니다. any 출력을 Output에 연결하고 상단 Run graph로 실행합니다.'],
+        experiment: '(==)의 x만 9로 바꾸면 False입니다. 리스트 대신 [] 노드를 xs에 연결해도 False입니다. 문자열에서는 any ((==) \'a\') "banana"가 True입니다.',
+        caution: 'p에는 완성된 Bool 대신 입력 하나가 빈 함수를 연결합니다. 숫자를 반환하는 함수는 맞지 않습니다. 단락 평가는 이 검사의 뒷부분을 건너뛴다는 뜻이며, 모든 상위 계산이나 리스트 생성 방식을 바꾸지는 않습니다. 새 무한 리스트 생성 기능도 아닙니다.',
+      },
+      {
+        title: 'all · 모두 조건을 만족하는가', code: 'all ((==) 2) [2, 2]', expected: 'True',
+        explanation: 'all :: (a -> Bool) -> [a] -> Bool. 조건이 False인 원소 하나를 찾으면 바로 False입니다. 빈 리스트에서는 조건을 어기는 원소가 없기 때문에 True입니다.',
+        steps: ['any와 같은 방식으로 (==)의 x에 2만 넣고 y는 비워 둡니다. Lists에 입력 두 개를 만들고 각각 2를 넣습니다.', 'Search nodes에서 all을 찾아 추가합니다. 부분 적용 (==) 출력을 p에, 리스트 출력을 xs에 연결합니다.', 'all 출력을 main의 Output에 연결하고 Run graph로 실행합니다. 값 변경 후 다시 실행해야 새 result가 생깁니다.'],
+        experiment: '리스트의 두 번째 값만 3으로 바꾸면 False입니다. []를 xs에 연결하면 True입니다. any는 한 번의 True에서, all은 한 번의 False에서 멈춘다는 차이를 비교하세요.',
+        caution: 'any와 같은 Bool 조건 함수가 필요합니다. p의 입력 타입과 리스트 원소 타입을 맞추세요. any/all의 결과는 Bool이므로 Output을 Int로 고정하면 맞지 않습니다. 조건 함수의 내부 호출은 기존 애니메이션에서 펼쳐 표시하지 않습니다. 숫자 결과인 repeatN의 개별 실행에서 구체 타입을 고정하는 방법은 재귀 항목의 실습을 참고하세요.',
+      },
+    ],
   },
   {
     id: 'tuples', title: '튜플: 서로 다른 값을 한 쌍으로', support: 'graph', source: 'starting-out.html',
@@ -139,7 +169,16 @@ export const syntaxLessons = [
     explanation: '각 원소를 두 배로 만듭니다. (*)에 2 하나만 넣은 부분 적용이 변환 함수입니다.',
     steps: ['(*)를 추가해 x에 2만 넣고 y는 비웁니다.', 'Lists에 +로 입력 세 개를 만들고 1, 2, 3을 넣습니다.', 'PRELUDE Lists의 map을 추가하고 (*) 출력을 f에, 리스트 출력을 xs에 연결합니다.', 'map을 Play function으로 실행합니다.'],
     experiment: '(*)의 x만 3으로 바꾸면 예상 결과는 [3,6,9]입니다.',
-    caution: 'filter는 조건에 맞는 원소만 남기는 별도 Haskell 함수지만 현재 내장 목록에는 없습니다. map이 필터링까지 하지는 않습니다. f에는 완성된 숫자가 아닌 함수가 필요합니다.',
+    caution: 'map은 원소를 바꾸고 filter는 조건에 맞는 원소만 남깁니다. f에는 완성된 숫자가 아닌 함수가 필요합니다. 아래 filter의 p는 반드시 Bool을 반환해야 합니다.',
+    examples: [
+      {
+        title: 'filter · 조건에 맞는 원소 고르기', code: 'filter ((==) 2) [1, 2, 3, 2]', expected: '[2,2]',
+        explanation: 'filter :: (a -> Bool) -> [a] -> [a]. (==) 2는 입력이 2와 같은지 검사하는 함수입니다. True인 두 원소만 순서대로 남기며 원본은 바뀌지 않습니다. String도 리스트이므로 filter ((==) \'a\') "banana"는 "aaa"입니다.',
+        steps: ['작업을 Export로 보관한 뒤 main 본체에서 NODES의 (==)를 추가합니다. x에 2만 넣고 y는 비워 부분 적용 함수를 만듭니다.', 'Lists의 +로 네 입력을 만들고 1, 2, 3, 2를 넣습니다.', 'Search nodes에서 filter를 찾아 PRELUDE Lists의 filter를 추가합니다. (==) 출력을 p에, 리스트 출력을 xs에 연결합니다.', 'filter 출력을 main의 Output에 연결하고 Run graph를 누릅니다. 개별 테스트는 filter를 선택해 Play function으로 실행합니다.', '직접 만든 조건 함수도 사용할 수 있습니다. NODES 옆 +로 입력 하나인 함수를 만들고 본체에서 비교 결과를 Output에 연결합니다. main 본체로 돌아와 Workspace의 그 함수를 클릭하면 호출 노드가 추가됩니다. 입력을 비운 출력을 p에 연결합니다.'],
+        experiment: '(==)의 x만 3으로 바꾸면 [3], 9로 바꾸면 []입니다. Lists 대신 [] 노드를 xs에 연결하면 빈 리스트를 확인합니다.',
+        caution: 'p에 숫자를 돌려주는 (*)를 연결하면 타입 오류입니다. JavaScript처럼 0과 다른 숫자를 True로 취급하지 않습니다. p를 실행해 나온 Bool 한 개 대신 아직 입력을 기다리는 함수를 연결하세요. 내부 원소별 반복은 별도 애니메이션으로 펼치지 않습니다. 빈 문자열은 내부의 빈 리스트와 같아 result에서 []로 보일 수 있습니다.',
+      },
+    ],
   },
   {
     id: 'patterns', title: '패턴 매칭과 안전한 첫 원소', support: 'concept', source: 'syntax-in-functions.html',
@@ -170,6 +209,15 @@ export const syntaxLessons = [
     steps: ['NODES의 +로 sumDown, 매개변수 n을 만들고 Open body →로 엽니다.', '본체에 (<=), (-), (+), select를 추가합니다. PARAMETERS의 n을 클릭해 각 연결에 쓸 재사용 노드를 하나씩 추가하세요. 같은 출력 점을 다시 끌면 기존 연결이 이동합니다.', 'n을 (<=)의 x에 연결하고 y에 0을 넣습니다. 결과를 select의 condition에 연결하고 whenTrue에 0을 넣습니다.', 'n을 (-)의 x에 연결하고 y에 1을 넣습니다. NODES의 sumDown을 호출로 추가해 (-) 출력을 그 n에 연결합니다.', 'n을 (+)의 x에, 재귀 sumDown 출력을 y에 연결합니다. (+) 출력을 select의 whenFalse에, select 출력을 Output에 연결합니다.', '← main으로 돌아가 sumDown의 n에 3을 넣고 Play function으로 실행합니다.'],
     experiment: 'main의 n만 4로 바꾸면 예상 결과는 10입니다.',
     caution: '연결이 덜 된 재귀를 중간에 실행하지 마세요. 기저 조건이나 n - 1이 빠지면 끝나지 않거나 실행 제한 오류가 날 수 있습니다. 작은 정수로 실습하세요.',
+    examples: [
+      {
+        title: 'repeatN · 상태 변환을 정해진 횟수만큼 적용', code: 'repeatN 3 ((+) 2) 0', expected: '6',
+        explanation: 'repeatN :: Int -> (a -> a) -> a -> a. 시작값 x에 같은 함수 f를 n번 적용하는 앱 전용 보조 함수이며 Haskell Prelude 표준 함수가 아닙니다. 0 → 2 → 4 → 6으로 계산합니다. 숫자뿐 아니라 입력·출력이 같은 Model 타입인 사용자 함수도 전달할 수 있습니다.',
+        steps: ['main 본체에서 (+)를 추가하고 x에 2만 넣습니다. y는 비워 두어 숫자를 하나 더 받는 함수로 만듭니다.', 'Search nodes에서 repeatN을 찾아 App helpers의 노드를 추가합니다. n에 3, x에 0을 넣고 (+) 출력을 f에 연결합니다.', 'repeatN 출력을 Output에 연결하고 상단 Run graph를 누릅니다. 부분 적용 함수를 전달할 때는 빈 y를 채우지 않습니다.', '개별 테스트에서 구체 타입이 필요하면 캔버스의 Output 바로 아래에 있는 타입 블록으로 Workspace TYPES의 Int를 드래그해 고정합니다. repeatN을 선택하여 Play function을 누릅니다.'],
+        experiment: 'n만 4로 바꾸면 8, 0이나 -1이면 시작값 0입니다. 시작값 x를 5로 두고 n을 0으로 바꾸면 5입니다. (*)의 x에 2만 넣은 함수와 시작값 1, n 4를 쓰면 16입니다.',
+        caution: 'n은 take/drop과 같은 안전한 정수 Int 정책이며 양수는 최대 100회입니다. 초과하면 계산 전에 반복 한도 오류가 나고, 함수가 복잡하면 기존 평가 한도에도 걸릴 수 있습니다. 음수·0은 f를 실행하지 않습니다. f는 a → a여야 하므로 숫자에서 Bool로 바꾸는 isZero는 맞지 않습니다. 반복은 순수 계산 한 번이며 실제 클릭 이벤트·대기·프레임별 화면 갱신을 만들지 않습니다. 내부 반복을 별도 애니메이션으로 펼치지도 않습니다.',
+      },
+    ],
   },
 ]
 export const exampleProblems = [

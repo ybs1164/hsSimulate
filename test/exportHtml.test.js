@@ -5,6 +5,8 @@ import { buildClickCounter } from '../src/examples/clickCounter.js'
 import { BundleError, bundleModules, buildPlayerHtml, PLAYER_MODULES } from '../src/exportHtml.js'
 import { derivedDefinitions } from '../src/typeDecls.js'
 import { elaborate } from '../src/typedEvaluator.js'
+import { libraryDefs } from '../src/library.js'
+import { buildRepetitionGame } from './fixtures/repetitionGame.js'
 
 const sources = Object.fromEntries(PLAYER_MODULES.map((name) => [name, readFileSync(new URL(`../src/${name}.js`, import.meta.url), 'utf8')]))
 const loadBundle = (code) => new Function(`${code}\nreturn __m`)()
@@ -44,4 +46,18 @@ test('the page embeds the project as JSON that survives a closing script tag in 
 test('unsupported module syntax is reported, not silently mis-bundled', () => {
   assert.throws(() => bundleModules({ ...sources, literals: "export default function f() {}\n" }), BundleError)
   assert.throws(() => bundleModules({ ...sources, runtime: undefined }), BundleError)
+})
+
+test('exported runtime evaluates repeatN, any and all in one minimal Program', () => {
+  const p=buildRepetitionGame()
+  const used=new Set(Object.values(p.functionBodies).flatMap(b=>Object.values(b)).map(n=>n.sourceFunctionId).filter(Boolean))
+  const base=Object.fromEntries([...used].filter(id=>!p.nodes[id]&&!id.startsWith('type:')&&!libraryDefs[id]).map(id=>[id,{id,type:'function',builtin:id,label:id}]))
+  const definitions={...libraryDefs,...base,...Object.fromEntries(derivedDefinitions(p.types).map(d=>[d.id,d])),...p.nodes}
+  const elaboration=elaborate({nodes:definitions,functionBodies:p.functionBodies,types:p.types},definitions)
+  const modules=loadBundle(bundleModules(sources))
+  const ev=modules.evaluator.createEvaluator({nodes:definitions,functionBodies:p.functionBodies,types:p.types,elaboration:()=>elaboration})
+  const game=modules.runtime.createGame(ev,ev.run(definitions,p.entry))
+  assert.deepEqual(game.view().children.slice(0,3).map(w=>w.text),['repeatN: 6','any: True','all: True'])
+  game.dispatch(game.view().children[3].msg)
+  assert.equal(game.view().children[0].text,'repeatN: 7')
 })

@@ -75,6 +75,7 @@ export const builtinSchemes = {
   and: scheme([], [], tfun(Bool, tfun(Bool, Bool))),
   or: scheme([], [], tfun(Bool, tfun(Bool, Bool))),
   not: scheme([], [], tfun(Bool, Bool)),
+  repeatN: scheme(['a'], [], tfun(Int, tfun(tfun(a, a), tfun(a, a)))),
 
   // Prelude functions on the built-in inductive types (src/dataTypes.js),
   // under their Haskell names. `foldr` and `maybe` are the recursors of
@@ -84,6 +85,11 @@ export const builtinSchemes = {
   cons: scheme(['a'], [], tfun(a, tfun(tlist(a), tlist(a)))),
   foldr: scheme(['a', 'b'], [], tfun(tfun(a, tfun(b, b)), tfun(b, tfun(tlist(a), b)))),
   map: scheme(['a', 'b'], [], tfun(tfun(a, b), tfun(tlist(a), tlist(b)))),
+  filter: scheme(['a'], [], tfun(tfun(a, Bool), tfun(tlist(a), tlist(a)))),
+  any: scheme(['a'], [], tfun(tfun(a, Bool), tfun(tlist(a), Bool))),
+  all: scheme(['a'], [], tfun(tfun(a, Bool), tfun(tlist(a), Bool))),
+  take: scheme(['a'], [], tfun(Int, tfun(tlist(a), tlist(a)))),
+  drop: scheme(['a'], [], tfun(Int, tfun(tlist(a), tlist(a)))),
   length: scheme(['a'], [], tfun(tlist(a), Int)),
   append: scheme(['a'], [], tfun(tlist(a), tfun(tlist(a), tlist(a)))),
   index: scheme(['a'], [], tfun(tlist(a), tfun(Int, Maybe(a)))),

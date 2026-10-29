@@ -95,6 +95,10 @@ test('lessons distinguish support, expected output, practice and attribution', (
     assert.ok(l.steps.length >= 3 && l.steps.every((s) => typeof s === 'string' && s.length))
     assert.ok(['graph', 'concept'].includes(l.support))
     assert.ok(scenarios[l.id], `${l.id}: executable graph or equivalent has regression coverage`)
+    for (const e of l.examples || []) {
+      for (const key of ['title', 'code', 'expected', 'explanation', 'experiment', 'caution']) assert.ok(e[key]?.trim(), `${l.id} example: ${key}`)
+      assert.ok(e.steps.length >= 3)
+    }
   }
 })
 for (const lesson of syntaxLessons) {
@@ -106,3 +110,16 @@ for (const lesson of syntaxLessons) {
     if (extraChange) { extraChange(); assert.equal(s.run(id), extraExpected) }
   })
 }
+test('additional list/filter lesson examples use actual UI nodes and documented results', () => {
+  const s = setup()
+  const xs = s.add('[ , , ]', ['1', '2', '3'])
+  const lessons = syntaxLessons.find(l => l.id === 'lists').examples
+  for (const [index, fn] of ['take', 'drop'].entries()) {
+    const id = s.add(fn, ['2', s.ref(xs)])
+    assert.equal(s.run(id), lessons[index].expected)
+  }
+  const ys = s.add('[ , , ]', ['1', '2', '3', '2'])
+  const predicate = s.add('(==)', ['2', null])
+  const filtered = s.add('filter', [s.ref(predicate), s.ref(ys)])
+  assert.equal(s.run(filtered), syntaxLessons.find(l => l.id === 'map').examples[0].expected)
+})

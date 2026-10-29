@@ -79,6 +79,9 @@ const PRIMITIVE_NOTES = {
   traverse: METHOD('Traversable'), pure: METHOD('Applicative'), ap: METHOD('Applicative'), bind: METHOD('Monad'),
   nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
+  repeatN: 'app helper · bounded pure iteration, not Haskell Prelude; n <= 0 returns x without applying f; maximum 100 applications',
+  take: 'primitive · lazy list prefix; take n xs = [] when n <= 0; n must be a safe Int',
+  drop: 'primitive · skip a list prefix without forcing its elements; n must be a safe Int',
   mappend: METHOD('Semigroup'), mempty: METHOD('Monoid'), fmap: METHOD('Functor'), foldMap: METHOD('Foldable'),
   leq: METHOD('PartialOrd'), join: METHOD('Lattice'), meet: METHOD('Lattice'), scale: METHOD('VectorSpace'),
   show: METHOD('Show'), showFFloat: 'primitive · decimal rendering of a floating-point number', showCompact: 'primitive · compact rendering of a number (1.2K, 3.4M)',
@@ -115,6 +118,23 @@ const GRAPHS = {
     g.lambda(['f', 'x', 'acc'], (l) => l.call('prelude:cons', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
     g.call('prelude:nil', []),
     g.param(1),
+  ]),
+  filter: (g) => g.call('prelude:foldr', [
+    g.lambda(['p', 'x', 'acc'], (l) => l.call('select', [
+      l.call('apply', [l.param(0), l.param(1)]),
+      l.call('prelude:cons', [l.param(1), l.param(2)]),
+      l.param(2),
+    ]), [g.param(0)]),
+    g.call('prelude:nil', []),
+    g.param(1),
+  ]),
+  any: (g) => g.call('prelude:foldr', [
+    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:or', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    { lit: 'False' }, g.param(1),
+  ]),
+  all: (g) => g.call('prelude:foldr', [
+    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:and', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    { lit: 'True' }, g.param(1),
   ]),
   length: (g) => g.call('prelude:foldr', [g.lambda(['x', 'n'], (l) => l.call('plus', [l.param(1), { lit: '1' }])), { lit: '0' }, g.param(0)]),
   append: (g) => g.call('prelude:foldr', [g.call('prelude:cons', [null, null]), g.param(1), g.param(0)]),

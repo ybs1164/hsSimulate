@@ -725,6 +725,124 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     return `Color taken over and given back; instance Show Color where show = ${(await project()).nodes[inst.methods.show]?.label}`
   })
 
+  console.log('List function expansion:')
+  const listItems = data => {
+    const values = []
+    for (let cell = data; cell?.ctorIndex === 1; cell = cell.args[1]) values.push(cell.args[0])
+    return values
+  }
+  const lastListResult = async () => Object.values((await activeGraph()).graph).filter(n => n.type === 'value' && n.label === 'result').pop()
+  async function findListFunction(name) {
+    await setField('.search input', name, 'input')
+    const visible = await js(`!!document.querySelector('#prelude-library [data-function-id="prelude:${name}"]:not([hidden])')`)
+    expect(visible, `${name} missing from search`)
+    const id = await add('prelude', name)
+    await setField('.search input', '', 'input')
+    return id
+  }
+  await check('filter: search, partial predicate, numeric list, main run and animation', async () => {
+    await js(`document.querySelector('#reset').click()`); await sleep(500)
+    const predicate = await add('function', '(==)'); await fill(predicate, 0, '2')
+    const xs = await add('prelude', '[ , , ]')
+    for (let i = 0; i < 4; i++) { await addSlot(xs); await fill(xs, i, ['1', '2', '3', '2'][i]) }
+    const filtered = await findListFunction('filter')
+    await plug(predicate, filtered, 0); await plug(xs, filtered, 1); await toOutput(filtered)
+    await clickNode(filtered)
+    expect((await js(`document.querySelector('#inspector-content').textContent`)).includes('Bool을 반환'), 'missing filter help')
+    await js(`document.querySelector('#run').click()`); await sleep(2500)
+    expect(JSON.stringify(listItems((await lastListResult())?.data)) === '[2,2]', 'filter result mismatch')
+    expect(await js(`document.querySelector('.execution-mark[data-execution-node="${filtered}"]')?.dataset.state === 'done'`), 'filter completion not visualized')
+    return 'filter ((==) 2) [1,2,3,2] = [2,2]'
+  })
+  await check('filter: a user predicate and individual testing; numeric predicate refused', async () => {
+    await back()
+    await createFunction('isLetterA', ['x']); await openBody('isLetterA')
+    const equal = await add('function', '(==)'); await plug(await paramId('x'), equal, 0); await fill(equal, 1, "'a'"); await toOutput(equal)
+    await back(); await openBody('main')
+    const predicate = await add('function', 'isLetterA'), filtered = await findListFunction('filter')
+    await plug(predicate, filtered, 0); await fill(filtered, 1, '"banana"'); await toOutput(filtered)
+    await clickNode(filtered); await js(`document.querySelector('#evaluate').click()`); await sleep(500)
+    expect(listItems((await lastListResult())?.data).join('') === 'aaa', 'individual custom predicate failed')
+    await js(`document.querySelector('#run').click()`); await sleep(500)
+    expect(listItems((await lastListResult())?.data).join('') === 'aaa', 'main custom predicate failed')
+    const bad = await add('function', '(*)'); await fill(bad, 0, '2')
+    const invalid = await findListFunction('filter')
+    await fitConnectionIfClipped(`.out-port[data-node-id="${bad}"]`, `.param-slot[data-function-id="${invalid}"][data-index="0"]`)
+    await drag(await outPort(bad), await slotCenter(invalid, 0))
+    expect(!(await activeGraph()).graph[invalid].mounted[0], 'numeric predicate was accepted')
+    return 'isLetterA :: Char -> Bool; filter isLetterA "banana" = "aaa"'
+  })
+  for (const [name, expected] of [['take', 'ab'], ['drop', 'c']]) {
+    await check(`${name}: search, creation, input, wiring, individual/main execution and reload`, async () => {
+      const id = await findListFunction(name)
+      await fill(id, 0, '2'); await fill(id, 1, '"abc"'); await toOutput(id)
+      await clickNode(id)
+      expect((await js(`document.querySelector('#inspector-content').textContent`)).includes('n:'), 'missing count help')
+      await js(`document.querySelector('#evaluate').click()`); await sleep(500)
+      expect(listItems((await lastListResult())?.data).join('') === expected, 'individual result mismatch')
+      await js(`document.querySelector('#run').click()`); await sleep(500)
+      expect(listItems((await lastListResult())?.data).join('') === expected, 'main result mismatch')
+      const before = JSON.stringify(await project())
+      await send('Page.reload'); await sleep(800)
+      expect(JSON.stringify(await project()) === before, 'reload changed saved graph')
+      expect(await js(`document.querySelectorAll('.execution-mark').length === 0`), 'old animation restored')
+      if (await js(`document.querySelector('#back-graph').hidden`)) await openBody('main')
+      return `${name} 2 "abc" = "${expected}"; graph restored without execution marks`
+    })
+  }
+
+  console.log('Repetition and predicates:')
+  async function editInput(fnId, index, text) {
+    const { graph } = await activeGraph(), id = graph[fnId].mounted[index]
+    await js(`document.querySelector('#unfold-all').click(); document.querySelector('#fit').click()`); await sleep(200)
+    await clickNode(id)
+    await setField('#inspector-content .value-input', text, 'input'); await sleep(200)
+  }
+  const scalarResult = async () => Object.values((await activeGraph()).graph).filter(n => n.label === 'result' && ['number','boolean'].includes(n.type)).pop()?.value
+  await check('repeatN: UI construction, changed value, pinned individual test, error recovery and reload', async () => {
+    await js(`document.querySelector('#reset').click()`); await sleep(400)
+    const f=await add('function','(+)'); await fill(f,0,'2')
+    const repeat=await findListFunction('repeatN'); await fill(repeat,0,'3'); await fill(repeat,2,'0'); await plug(f,repeat,1); await toOutput(repeat)
+    await js(`document.querySelector('#run').click()`); await sleep(500)
+    expect(await scalarResult()==='6','repeatN main result')
+    await clickNode('output')
+    await dragType('data-con="Int"',`document.querySelector('.canvas-chain > .type-chain > .tc-seg.editable')`)
+    expect((await project()).functionBodies.main.output.annotation==='Int','main result not pinned')
+    await clickNode(repeat); await js(`document.querySelector('#evaluate').click()`); await sleep(300)
+    expect(await scalarResult()==='6','repeatN individual result')
+    await editInput(repeat,0,'4'); await js(`document.querySelector('#run').click()`); await sleep(300)
+    expect(await scalarResult()==='8','repeatN changed input result')
+    await editInput(repeat,0,'101'); await js(`document.querySelector('#run').click()`); await sleep(1500)
+    expect((await js(`document.querySelector('#toast').textContent`)).includes('반복 한도'),'missing repeat limit error')
+    expect(await js(`!!document.querySelector('.execution-mark[data-execution-node="${repeat}"][data-state="error"]')`),'missing error mark')
+    await editInput(repeat,0,'3'); await js(`document.querySelector('#run').click()`); await sleep(1500)
+    expect(await scalarResult()==='6','repeatN failed to recover')
+    expect(!(await js(`!!document.querySelector('.execution-mark[data-state="error"]')`)),'stale error mark')
+    const before=JSON.stringify(await project()); await send('Page.reload'); await sleep(800)
+    expect(JSON.stringify(await project())===before,'repeatN graph not restored')
+    expect(await js(`document.querySelectorAll('.execution-mark').length===0`),'reloaded repeatN trace')
+    return '3×(+2): 6; 4×: 8; 101 rejected; corrected: 6'
+  })
+  for(const [fn,values,changedIndex,changedValue] of [['any',['1','2','3'],0,'9'],['all',['2','2'],1,'3']]){
+    await check(`${fn}: search, partial predicate, list wiring, individual/main tests and edited values`,async()=>{
+      await js(`document.querySelector('#reset').click()`); await sleep(400)
+      const p=await add('function','(==)'); await fill(p,0,'2')
+      const list=await add('prelude','[ , , ]'); for(let i=0;i<values.length;i++){await addSlot(list);await fill(list,i,values[i])}
+      const id=await findListFunction(fn); await plug(p,id,0);await plug(list,id,1);await toOutput(id)
+      await js(`document.querySelector('#run').click()`);await sleep(400)
+      expect(await scalarResult()==='true',`${fn} initial result`)
+      await clickNode(id);await js(`document.querySelector('#evaluate').click()`);await sleep(300)
+      expect(await scalarResult()==='true',`${fn} individual result`)
+      await editInput(fn==='any'?p:list,changedIndex,changedValue)
+      await js(`document.querySelector('#run').click()`);await sleep(400)
+      expect(await scalarResult()==='false',`${fn} changed result`)
+      const before=JSON.stringify(await project());await send('Page.reload');await sleep(800)
+      expect(JSON.stringify(await project())===before,`${fn} graph not restored`)
+      expect(await js(`document.querySelectorAll('.execution-mark').length===0`),'reloaded predicate trace')
+      return 'True → False after a literal edit; saved graph restored'
+    })
+  }
+
   console.log(errors.length ? `Page errors:\n  ${errors.join('\n  ')}` : 'No page errors.')
   if (errors.length) failures++
   console.log(failures ? `${failures} check(s) failed` : 'All checks passed')
