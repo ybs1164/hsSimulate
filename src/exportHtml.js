@@ -10,7 +10,7 @@
 // mis-bundle.
 
 /** The modules an exported game needs, in dependency order. */
-export const PLAYER_MODULES = ['typeSystem', 'classEnv', 'dataTypes', 'literals', 'classMethods', 'evaluator', 'runtime', 'player']
+export const PLAYER_MODULES = ['typeSystem', 'classEnv', 'dataTypes', 'literals', 'classMethods', 'matchGraph', 'evaluator', 'runtime', 'player']
 
 export class BundleError extends Error {}
 

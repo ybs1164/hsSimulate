@@ -14,8 +14,8 @@
 // dictionaries, as a call in a graph would (`op`).
 import { isClosure, isData, showValue } from './evaluator.js'
 import { builtinSchemes } from './builtinSchemes.js'
-import { classClosure, entails, evidence } from './prelude.js'
-import { applySubst, pred, showType, tcon } from './typeSystem.js'
+import { classArity, classClosure, entails, evidence } from './prelude.js'
+import { applySubst, pred, showType, tapp, tcon } from './typeSystem.js'
 
 const MAX_SAMPLES = 5
 
@@ -54,6 +54,18 @@ export function samplesOf(type, types, fns, depth = 0) {
       const args = []
       for (let u = type; u.kind === 'app'; u = u.fn) args.unshift(u.arg)
       return declSamples(types[h.name], args, types, fns, depth)
+    }
+    if (isCon(h, '(,)') && type.fn.kind === 'app') { // pairs: the i-th sample of each side, rotating
+      const left = samplesOf(type.fn.arg, types, fns, depth + 1)
+      const right = samplesOf(type.arg, types, fns, depth + 1)
+      if (!left || !right) return null
+      return spread(Array.from({ length: Math.max(left.length, right.length) }, (_, i) => ({ kind: 'data', type: '(,)', ctor: '(,)', ctorIndex: 0, args: [left[i % left.length], right[(i + 1) % right.length]] })))
+    }
+    if (isCon(h, 'Either') && type.fn.kind === 'app') { // a Left or two, then Rights
+      const left = samplesOf(type.fn.arg, types, fns, depth + 1)
+      const right = samplesOf(type.arg, types, fns, depth + 1)
+      if (!left || !right) return null
+      return spread([...left.slice(0, 1).map((v) => ({ kind: 'data', type: 'Either', ctor: 'Left', ctorIndex: 0, args: [v] })), ...right.slice(0, 3).map((v) => ({ kind: 'data', type: 'Either', ctor: 'Right', ctorIndex: 1, args: [v] }))])
     }
     const inner = samplesOf(argOf(type), types, fns, depth + 1)
     if (!inner) return null
@@ -198,6 +210,7 @@ function functionSamples(type) {
  * `ctx = { ev, types }`. Returns `{ results: [{ cls, law, ok, counterexample }], skipped }`.
  */
 export function checkClassLaws(cls, type, ctx) {
+  if (classArity(cls) === 1) return checkConstructorLaws(cls, type, ctx)
   const samples = samplesOf(type, ctx.types, functionSamples)
   if (!samples) return { results: [], skipped: `can't build samples of ${showType(type)}` }
   // Functions (inside Endo) are compared extensionally, at samples of their domain.
@@ -216,6 +229,86 @@ export function checkClassLaws(cls, type, ctx) {
         counterexample = `error: ${e.message}`
       }
       results.push({ cls: c, law, ok: !counterexample, counterexample })
+    }
+  }
+  return { results, skipped: null }
+}
+
+// ---- Laws of the constructor classes ----------------------------------------
+// Functor, Applicative and Monad are about a type constructor `f`: their
+// laws are checked at `f Int`, with functions Int → Int ((+ 1), negate,
+// (* 3)) and Kleisli arrows Int → f Int (return . g, and \_ -> m).
+// Each law: [name, check(env) → a counterexample, or null].
+const CONSTRUCTOR_LAWS = {
+  Functor: [
+    ['identity: fmap id m = m', ({ op, eq, ms, c }) => ms.find((m) => !eq(op('fmap', c.id, m), m))],
+    ['composition: fmap (g . h) m = fmap g (fmap h m)', ({ op, eq, ms, fs, c }) => {
+      for (const m of ms) for (const g of fs) for (const h of fs) if (!eq(op('fmap', c.compose(g, h), m), op('fmap', g, op('fmap', h, m)))) return m
+      return null
+    }],
+  ],
+  Applicative: [
+    ['identity: pure id <*> v = v', ({ op, eq, ms, c }) => ms.find((v) => !eq(op('ap', op('pure', c.id), v), v))],
+    ['homomorphism: pure g <*> pure x = pure (g x)', ({ op, eq, xs, fs, ctx }) => {
+      for (const g of fs) for (const x of xs) if (!eq(op('ap', op('pure', g), op('pure', x)), op('pure', ctx.ev.apply(g, [x])))) return x
+      return null
+    }],
+    ['interchange: u <*> pure y = pure ($ y) <*> u', ({ op, eq, ms, xs, fs, c }) => {
+      for (const v of ms) for (const g of fs) {
+        const u = op('fmap', c.constant(g), v) // a container of functions, shaped like v
+        for (const y of xs) if (!eq(op('ap', u, op('pure', y)), op('ap', op('pure', c.applyTo(y)), u))) return v
+      }
+      return null
+    }],
+    ['fmap g v = pure g <*> v', ({ op, eq, ms, fs }) => {
+      for (const v of ms) for (const g of fs) if (!eq(op('fmap', g, v), op('ap', op('pure', g), v))) return v
+      return null
+    }],
+  ],
+  Monad: [
+    ['left identity: return x >>= k = k x', ({ op, eq, xs, ks, ctx }) => {
+      for (const k of ks) for (const x of xs) if (!eq(op('bind', op('pure', x), k), ctx.ev.apply(k, [x]))) return x
+      return null
+    }],
+    ['right identity: m >>= return = m', ({ op, eq, ms, c }) => ms.find((m) => !eq(op('bind', m, c.pure), m))],
+    ['associativity: (m >>= k) >>= h = m >>= (k >=> h)', ({ op, eq, ms, ks, c }) => {
+      for (const m of ms) for (const k of ks) for (const h of ks) if (!eq(op('bind', op('bind', m, k), h), op('bind', m, c.kleisli(k, h)))) return m
+      return null
+    }],
+  ],
+}
+
+/** Check the laws of constructor class `cls` (and its superclasses) for the type constructor `type` (`Maybe`, `Either e`, …). */
+function checkConstructorLaws(cls, type, ctx) {
+  const Int = tcon('Int')
+  const ms = samplesOf(tapp(type, Int), ctx.types, functionSamples)
+  if (!ms) return { results: [], skipped: `can't build samples of ${showType(tapp(type, Int))}` }
+  const dict = (c) => [dictOf(evidence([], pred(c, type)))]
+  const closure = (callee, args, dicts) => ({ kind: 'closure', callee: `#${callee}`, args, ...(dicts ? { dicts } : {}) })
+  const pure = closure('pure', [null], dict('Applicative'))
+  const c = {
+    id: closure('identity', [null]),
+    pure,
+    compose: (g, h) => closure('compose', [g, h, null]),
+    constant: (v) => closure('constFn', [v, null]),
+    applyTo: (y) => closure('apply', [null, y]),
+    kleisli: (k, h) => closure('kleisli', [k, h, null], dict('Monad')),
+  }
+  const fs = functionSamples(Int)
+  const has = (k) => classClosure(cls).includes(k)
+  const ks = has('Monad') ? [...fs.map((g) => c.compose(pure, g)), ...ms.slice(0, 2).map((m) => c.constant(m))] : []
+  const env = { op: opAt(type, ctx), eq: (a, b) => equalValues(a, b, ctx), ms, xs: [0, 1, -2], fs, ks, c, ctx }
+  const results = []
+  for (const k of classClosure(cls).reverse()) {
+    for (const [law, check] of CONSTRUCTOR_LAWS[k] || []) {
+      let counterexample = null
+      try {
+        const bad = check(env)
+        if (bad !== null && bad !== undefined) counterexample = show(bad, ctx)
+      } catch (e) {
+        counterexample = `error: ${e.message}`
+      }
+      results.push({ cls: k, law, ok: !counterexample, counterexample })
     }
   }
   return { results, skipped: null }

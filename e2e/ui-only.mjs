@@ -18,9 +18,9 @@ const chromePath = [process.env.CHROME, 'C:/Program Files/Google/Chrome/Applicat
 if (!chromePath) { console.error('No Chrome/Chromium found — set CHROME=/path/to/chrome'); process.exit(2) }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--port', String(PORT), '--strictPort'], { stdio: 'ignore' })
+const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], { stdio: 'ignore' })
 const profile = mkdtempSync(join(tmpdir(), 'hs-e2e-'))
-const chrome = spawn(chromePath, ['--headless=new', `--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profile}`, '--window-size=1600,1000', 'about:blank'], { stdio: 'ignore' })
+const chrome = spawn(chromePath, ['--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-background-networking', '--disable-sync', `--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profile}`, '--window-size=1600,1000', 'about:blank'], { stdio: 'ignore' })
 let failures = 0
 function cleanup(code) {
   try { chrome.kill() } catch {}
@@ -63,7 +63,7 @@ async function activeGraph() {
   const p = await project()
   if (await js(`document.querySelector('#back-graph').hidden`)) return { p, graph: p.nodes }
   const name = (await js(`document.querySelector('#graph-name').textContent`)).split(' / ').pop().replace(/^ƒ /, '').replace(/ · .*$/, '')
-  const fn = Object.values(p.nodes).find((n) => n.custom && n.label === name && !n.lambda) || Object.values(p.nodes).find((n) => n.lambda && name === 'λ')
+  const fn = Object.values(p.nodes).find((n) => n.custom && n.label === name && !n.lambda) || Object.values(p.nodes).find((n) => n.lambda && (n.label === name || name === 'λ'))
   return { p, graph: p.functionBodies[fn.id] }
 }
 async function toScreen(graph) {
@@ -105,16 +105,17 @@ const setField = (sel, value, event = 'change') => js(`(() => { const el = docum
 // Drag a type node from the workspace's TYPES — or a class from its CLASSES — (the chip with attribute `chipAttr`) onto element `toExpr`, with the real mouse.
 async function dragType(chipAttr, toExpr) {
   const from = `document.querySelector('#type-palette .type-chip[${chipAttr}], #class-palette .type-chip[${chipAttr}]')`
-  await js(`[${from}, ${toExpr}].forEach((el) => el.scrollIntoView({ block: 'nearest', behavior: 'instant' }))`)
+  await js(`[${from}, ${toExpr}].forEach((el) => { for (let p = el.parentElement; p; p = p.parentElement) if (p.tagName === 'DETAILS') p.open = true; el.scrollIntoView({ block: 'nearest', behavior: 'instant' }) })`)
+  await sleep(100)
   const at = async (expr) => { const r = JSON.parse(await js(`JSON.stringify(${expr}.getBoundingClientRect())`)); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } }
   const p = await at(from), q = await at(toExpr)
   await mouse('mousePressed', p.x, p.y)
   for (let k = 1; k <= 6; k++) { await mouse('mouseMoved', p.x + ((q.x - p.x) * k) / 6, p.y + ((q.y - p.y) * k) / 6); await sleep(20) }
   await mouse('mouseReleased', q.x, q.y); await sleep(350)
 }
-// Names in the type editor are tokens: double-click one, type, Enter.
-const rename = (sel, value) => js(`(() => { document.querySelector(${JSON.stringify(sel)}).dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); const input = document.querySelector('.te-rename'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event('change')) })()`)
-const editorStatus = () => js(`document.querySelector('.te-status').textContent`)
+// Names in the type editor are buttons: click one, type, Enter.
+const rename = (sel, value) => js(`(() => { document.querySelector(${JSON.stringify(sel)}).click(); const input = document.querySelector('.te-rename'); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event('change')) })()`)
+const editorStatus = () => js(`document.querySelector('.te-status').textContent || (document.querySelector('.te-status').classList.contains('ok') ? 'applied' : '')`)
 async function declareRecordType(name, fields) {
   await js(`document.querySelector('.add-type').click()`); await sleep(250)
   await rename('.te-ident-type', name); await sleep(150)
@@ -137,7 +138,7 @@ async function back() { await js(`document.querySelector('#back-graph').click()`
 async function add(kind, label) {
   const before = new Set(Object.keys((await activeGraph()).graph))
   const sel = kind === 'derived' ? '#type-library .derived-item' : kind === 'class' ? '#class-library .derived-item' : kind === 'prelude' ? '#prelude-library .derived-item' : '.function-library-item'
-  await js(`[...document.querySelectorAll(${JSON.stringify(sel)})].find((e) => e.querySelector('b').textContent === ${JSON.stringify(label)}).click()`); await sleep(300)
+  await js(`(() => { const item = [...document.querySelectorAll(${JSON.stringify(sel)})].find((e) => e.querySelector('b').textContent === ${JSON.stringify(label)}); (item.matches('.function-library-item') ? item.parentElement.querySelector('.add-call') : item).click() })()`); await sleep(300)
   const { graph } = await activeGraph()
   const id = Object.keys(graph).find((k) => !before.has(k))
   expect(id, `adding ${label} added nothing`)
@@ -181,7 +182,7 @@ async function fitConnectionIfClipped(...selectors) {
 const paramId = async (name) => Object.values((await activeGraph()).graph).find((n) => n.type === 'parameter' && n.label === name).id
 
 // ---- the run ----
-for (let i = 0; i < 60; i++) { try { const t = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json(); if (t.some((x) => x.type === 'page')) { ws = new WebSocket(t.find((x) => x.type === 'page').webSocketDebuggerUrl); break } } catch {} await sleep(250) }
+for (let i = 0; i < 60; i++) { try { const t = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`, { signal: AbortSignal.timeout(1500) })).json(); if (t.some((x) => x.type === 'page')) { ws = new WebSocket(t.find((x) => x.type === 'page').webSocketDebuggerUrl); break } } catch {} await sleep(250) }
 if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await new Promise((r) => ws.addEventListener('open', r))
   ws.addEventListener('message', (e) => {
@@ -191,10 +192,10 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   })
   await send('Runtime.enable'); await send('Page.enable')
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
-  for (let i = 0; i < 60; i++) { try { await fetch(`http://localhost:${PORT}/`); break } catch { await sleep(250) } }
-  await send('Page.navigate', { url: `http://localhost:${PORT}/` })
+  for (let i = 0; i < 60; i++) { try { await fetch(`http://127.0.0.1:${PORT}/`); break } catch { await sleep(250) } }
+  await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` })
   // A cold Vite start can take a while to serve the app: wait for it to render.
-  for (let i = 0; i < 120 && !(await js(`!!document.querySelector('.add-type')`).catch(() => false)); i++) await sleep(250)
+  for (let i = 0; i < 480 && !(await js(`!!document.querySelector('.exercise-item')`).catch(() => false)); i++) await sleep(250)
   await sleep(500)
   await check('a fresh project opens exactly one protected main with an empty Output', async () => {
     const p = await project()
@@ -208,9 +209,107 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await send('Page.reload'); await sleep(700)
     expect(Object.values((await project()).nodes).filter((n) => n.programEntry).length === 1, 'reload duplicated main')
   })
+  await back() // fresh main is checked above; subsequent editor tests start at top level
+  if (process.argv.includes('--match-only')) {
+    console.log('Types and pattern matching:')
+    await check('create a record and use its type directly as a constructor', async () => {
+      await declareRecordType('Box', [['item', 'Int']])
+      await js(`document.querySelector('.add-type-call[data-type-name="Box"]').click()`)
+      const p = await project()
+      const ctor = Object.values(p.nodes).find((n) => n.sourceFunctionId === 'type:Box:Box')
+      expect(ctor?.params.length === 1 && p.types.Box.constructors[0].record, 'type did not add its record constructor')
+      await fill(ctor.id, 0, '7')
+      expect(await js(`!document.querySelector('#type-library [data-function-id="type:Box:caseBox"]')`), 'caseBox is still in the library')
+    })
+    await check('match a parameter in its function and return the bound field', async () => {
+      await createFunction('unwrap', ['box']); await openBody('unwrap')
+      await js(`document.querySelector('.parameter-item').click(); document.querySelector('#pattern-match').click()`)
+      await sleep(250)
+      await js(`[...document.querySelectorAll('.type-picker [data-choice]')].find((e) => e.textContent === 'Box').click()`)
+      await sleep(400)
+      const n = Object.values((await activeGraph()).graph).find((n) => n.match)
+      expect(n?.match.branches.length === 1, 'no match branch')
+      await js(`document.querySelector('.match-arm-button').click()`); await sleep(400)
+      await js(`[...document.querySelectorAll('.parameter-item')].find((e) => e.querySelector('b').textContent === 'item').click()`)
+      const branch = (await activeGraph()).graph
+      const value = Object.values(branch).find((n) => n.type === 'ref' && branch[n.target]?.label === 'item')
+      await toOutput(value.id)
+      await back()
+      await toOutput(n.id)
+      writeFileSync(join(tmpdir(), 'hs-match-block.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+      await back()
+      const unwrap = await add('function', 'unwrap')
+      const p = await project()
+      const ctor = Object.values(p.nodes).find((n) => n.sourceFunctionId === 'type:Box:Box')
+      await plug(ctor.id, unwrap, 0)
+      await clickNode(unwrap)
+      expect(await js(`document.querySelector('#inspector-content').textContent.includes('case box of')`), 'definition does not print case syntax')
+      await js(`document.querySelector('#evaluate').click()`); await sleep(500)
+      const result = Object.values((await project()).nodes).filter((n) => n.type === 'value' || n.type === 'number').pop()
+      expect(result?.data === 7 || result?.value === '7', `expected 7, got ${JSON.stringify(result)}`)
+      const shot = join(tmpdir(), 'hs-pattern-matching.png')
+      writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+      return shot
+    })
+    await check('field identities survive editing, reload and undo', async () => {
+      await js(`document.querySelector('.type-item[data-type-name="Box"]').click()`); await sleep(200)
+      await rename('.te-ident-field[data-fi="0"]', 'payload')
+      await js(`document.querySelector('[data-te="close"]').click()`)
+      let p = await project()
+      const fn = Object.values(p.nodes).find((n) => n.custom && n.label === 'unwrap')
+      const matching = Object.values(p.functionBodies[fn.id]).find((n) => n.match)
+      expect(matching.match.branches[0].fields[0].name === 'payload', 'pattern did not follow field rename')
+      const key = p.types.Box.constructors[0].fields[0].key
+      await js(`document.querySelector('#undo').click()`)
+      expect((await project()).types.Box.constructors[0].fields[0].name === 'item', 'undo did not restore field name')
+      await js(`document.querySelector('#redo').click()`)
+      expect((await project()).types.Box.constructors[0].fields[0].name === 'payload', 'redo did not restore field name')
+      await send('Page.reload')
+      for (let i = 0; i < 100 && !(await js(`!!document.querySelector('.add-type-call[data-type-name="Box"]')`).catch(() => false)); i++) await sleep(100)
+      p = await project()
+      expect(p.types.Box.constructors[0].fields[0].key === key && Object.values(p.functionBodies[fn.id]).some((n) => n.match), 'reload lost the pattern or field identity')
+      await openBody('unwrap')
+      await js(`document.querySelector('.match-arm-button').click()`); await sleep(250)
+      expect(await js(`[...document.querySelectorAll('.parameter-item b')].some((e) => e.textContent === 'payload')`), 'renamed binding not available after reload')
+      await back(); await back()
+    })
+    await check('multiple constructors require a choice, and a type can be dragged onto the canvas', async () => {
+      await js(`document.querySelector('.add-type').click()`)
+      await rename('.te-ident-type', 'Signal')
+      await rename('.te-ident-ctor', 'Off')
+      await js(`document.querySelector('[data-te="add-ctor"]').click()`)
+      await rename('.te-ctor[data-ci="1"] .te-ident-ctor', 'On')
+      await js(`document.querySelector('[data-te="close"]').click()`)
+      await js(`document.querySelector('.add-type-call[data-type-name="Signal"]').click()`)
+      expect(await js(`!!document.querySelector('.constructor-picker[open]')`), 'constructor choice did not open')
+      expect(!Object.values((await project()).nodes).some((n) => n.sourceFunctionId?.startsWith('type:Signal:')), 'a constructor was silently selected')
+      await js(`document.querySelector('.constructor-picker [data-choice="1"]').click()`)
+      expect(Object.values((await project()).nodes).some((n) => n.sourceFunctionId === 'type:Signal:On'), 'chosen constructor was not added')
+      const before = Object.values((await project()).nodes).filter((n) => n.sourceFunctionId === 'type:Box:Box').length
+      await js(`(() => { const b = document.querySelector('.add-type-call[data-type-name="Box"]'); for (let p = b.parentElement; p; p = p.parentElement) if (p.tagName === 'DETAILS') p.open = true; b.scrollIntoView({ block: 'nearest' }) })()`)
+      await sleep(150)
+      const rects = await js(`(() => { const b = document.querySelector('.add-type-call[data-type-name="Box"]'); b.scrollIntoView({ block: 'nearest' }); const a = b.getBoundingClientRect(), c = document.querySelector('#graph-canvas').getBoundingClientRect(); return [{ x: a.x + a.width / 2, y: a.y + a.height / 2 }, { x: c.x + c.width / 2, y: c.y + c.height / 2 }] })()`)
+      await drag(rects[0], rects[1])
+      const after = Object.values((await project()).nodes).filter((n) => n.sourceFunctionId === 'type:Box:Box').length
+      expect(after === before + 1, `drag added ${after - before} constructors`)
+    })
+    await check('a newly loaded game template uses direct matches and still plays', async () => {
+      await setField('#template', 'blankGame'); await sleep(500)
+      const p = await project()
+      expect(Object.values(p.functionBodies).some((body) => Object.values(body).some((n) => n.match)), 'template has no native matches')
+      await js(`document.querySelector('#run').click()`); await sleep(500)
+      expect(await js(`!document.querySelector('#play-panel').hidden`), 'game did not start')
+      const button = await portCenter('.play-view button')
+      await mouse('mousePressed', button.x, button.y); await mouse('mouseReleased', button.x, button.y); await sleep(250)
+      expect(await js(`document.querySelector('.play-view').textContent.includes('Count: 1')`), 'template message match did not update the model')
+    })
+    console.log(errors.length ? `Page errors:\n${errors.join('\n')}` : 'No page errors.')
+    cleanup(failures || errors.length ? 1 : 0)
+    await new Promise(() => {})
+  }
   console.log('Learning panels:')
-  await check('independent panels preserve the graph, search and example selection in all four layouts', async () => {
-    await js(`document.querySelector('.example-list button').click()`)
+  await check('the learning panel: collapsing keeps the graph, search and exercise selection', async () => {
+    await js(`document.querySelector('.exercise-item').click()`)
     await setField('.search input', 'identity', 'input')
     const before = JSON.stringify(await project())
     const snapshot = () => js(`JSON.stringify({
@@ -218,27 +317,72 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       inspector: document.querySelector('#inspector-content').innerHTML,
       zoom: document.querySelector('#zoom-level').textContent,
       search: document.querySelector('.search input').value,
-      example: document.querySelector('.example-list [aria-pressed="true"]').textContent
+      example: document.querySelector('.exercise-detail h3').textContent
     })`)
     const initial = await snapshot()
     const widths = []
-    for (const toggle of [null, '.examples-panel', '.syntax-panel', '.examples-panel', '.syntax-panel']) {
-      if (toggle) { await js(`document.querySelector('${toggle} .learning-toggle').click()`); await sleep(150) }
+    for (const action of [null, '.examples-panel', '.syntax-panel', '.examples-panel', '.syntax-panel']) {
+      if (action) { await js(`document.querySelector('${action} .learning-toggle').click()`); await sleep(150) }
       const layout = await js(`[...document.querySelector('.workspace').children].map((e) => ({
         name: e.className, x: e.getBoundingClientRect().x, right: e.getBoundingClientRect().right, width: e.getBoundingClientRect().width
       }))`)
       expect(['examples-panel', 'syntax-panel', 'sidebar', 'canvas-panel', 'inspector'].every((name, i) => layout[i].name.includes(name)), 'panel order changed')
       expect(layout.slice(1).every((r, i) => Math.abs(r.x - layout[i].right) < 1), 'panels overlap or leave gaps')
-      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'panel toggle changed the graph or selection')
+      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'the toggle changed the graph or selection')
       widths.push(layout[3].width)
     }
-    expect(widths[1] > widths[0] && widths[2] > widths[1] && widths[3] === widths[1] && widths[4] === widths[0], `canvas widths: ${widths}`)
+    // Collapsing the panel widens the canvas; expanding restores it.
+    expect(widths[1] > widths[0] && widths[2] > widths[1] && widths[3] > widths[0] && widths[4] === widths[0], `canvas widths: ${widths}`)
     await setField('.search input', '', 'input')
-    // Use the compact learning rails for the large game below. Both expanded
-    // and collapsed layouts were checked above; no graph state is reset.
-    await js(`document.querySelectorAll('.learning-toggle').forEach((button) => button.click())`)
+    // Use the compact learning rail for the large game below.
+    await js(`document.querySelector('.examples-panel .learning-toggle').click()`)
+    await js(`document.querySelector('.syntax-panel .learning-toggle').click()`)
     await sleep(200)
     return `canvas widths ${widths.join(' → ')}`
+  })
+
+  await check('UI controls: explicit run target, inspector toggle, platform shortcuts, help and project menu', async () => {
+    expect(await js(`document.querySelector('#run').textContent.includes('실행 main')`), 'entry name missing')
+    expect(await js(`document.querySelector('.search kbd').textContent.includes(/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl')`), 'wrong shortcut modifier')
+    await js(`document.querySelector('.close-inspector').click()`)
+    expect(await js(`getComputedStyle(document.querySelector('.inspector')).display === 'none'`), 'inspector did not close')
+    await js(`document.querySelector('#toggle-inspector').click()`)
+    expect(await js(`getComputedStyle(document.querySelector('.inspector')).display !== 'none'`), 'inspector did not reopen')
+    await js(`document.querySelector('#help').click()`)
+    expect(await js(`!!document.querySelector('dialog[open]')`), 'help did not open')
+    await js(`document.querySelector('.help-dialog').close()`)
+    await js(`document.querySelector('.project-menu > summary').click()`)
+    expect(await js(`document.querySelector('#export').getBoundingClientRect().height > 0`), 'project commands hidden')
+    await js(`document.querySelector('.brand').click()`)
+    expect(await js(`!document.querySelector('.project-menu').open`), 'project menu did not close')
+    writeFileSync(join(tmpdir(), 'hs-ui-improved.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+  })
+  await check('all value shortcuts add nodes and undo restores the graph', async () => {
+    const nodeCount = () => js(`Number(document.querySelector('#node-count').textContent)`)
+    const before = await nodeCount()
+    for (const kind of ['number', 'text', 'list', 'lambda', 'boolean']) {
+      await js(`document.querySelector('#value-library [data-type="${kind}"]').click()`)
+      await sleep(450)
+      expect(await nodeCount() > before, `${kind} did not add a node`)
+      await js(`document.querySelector('#undo').click()`)
+      expect(await nodeCount() === before, `${kind} did not undo`)
+    }
+  })
+  await check('type editor supports click selection, field edits, variables and cancel', async () => {
+    await js(`document.querySelector('.add-type').click()`)
+    await rename('.te-ident-type', 'PickerCheck')
+    await js(`document.querySelector('[data-te="add-field"]').click()`)
+    expect(await js(`!!document.querySelector('.type-picker[open]')`), 'field picker did not open')
+    await js(`document.querySelector('[data-choice="Int"]').click(); document.querySelector('.type-picker form').requestSubmit()`)
+    expect((await editorStatus()).includes('applied'), await editorStatus())
+    await js(`document.querySelector('.te-ftype').click()`)
+    await js(`document.querySelector('[data-choice="Double"]').click(); document.querySelector('.type-picker form').requestSubmit()`)
+    expect(await js(`document.querySelector('.te-ftype').textContent.includes('Double')`), 'field type did not change')
+    await js(`document.querySelector('[data-te="add-param"]').click(); document.querySelector('[data-choice="a"]').click(); document.querySelector('.type-picker form').requestSubmit()`)
+    expect(await js(`document.querySelector('.te-param').textContent.includes('a')`), 'variable not added')
+    await js(`document.querySelector('[data-te="add-field"]').click(); document.querySelector('.type-picker [data-cancel]').click()`)
+    expect(await js(`document.querySelectorAll('.te-ftype').length === 1`), 'cancel added a field')
+    await js(`document.querySelector('[data-te="delete"]').click()`)
   })
   console.log('Building a game through the UI only (learning panels collapsed):')
   await back() // new projects open main; the following helpers start at top level
@@ -248,7 +392,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
     await rename('.te-ident-type', 'Msg'); await sleep(150)
     await rename('.te-ident-ctor', 'Increment'); await sleep(150)
-    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
+    const sig = await js(`document.querySelector('#type-library [data-function-id="type:Msg:Increment"] .type-chain').title`)
     await js(`document.querySelector('[data-te="close"]').click()`); await sleep(150)
     const p = await project()
     expect(sig === 'Msg', sig)
@@ -381,22 +525,22 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(p.nodes[stepId].label === 'tick' && callLabels.length && callLabels.every((l) => l === 'tick'), `${p.nodes[stepId].label} / ${callLabels}`)
     return `step → tick (${callLabels.length} call)`
   })
-  await check('the type editor reads as a data declaration with no text boxes; fields are dragged in', async () => {
+  await check('the compact type editor automatically names record fields and keeps details folded', async () => {
     await js(`document.querySelector('.add-type').click()`); await sleep(250)
     const boxes = await js(`document.querySelectorAll('#type-panel input, #type-panel select, #type-panel textarea').length`)
     await rename('.te-ident-type', 'Shape'); await sleep(150)
     await dragType('data-con="Maybe"', `document.querySelector('[data-te="add-field"]')`)
     const waiting = await editorStatus()
     await dragType('data-con="Int"', `document.querySelector('.te-ftype[data-fi="0"] .tn-hole')`)
-    await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(200)
-    const source = await js(`[...document.querySelectorAll('.hs-decl .hs-line')].map((l) => [...l.querySelectorAll('.te-keyword, .te-ident, .hs-op, .hs-punct, .te-ftype')].map((e) => e.textContent).join(' ')).join(' / ')`)
+    const source = await js(`document.querySelector('.te-ident-type').textContent + ' ' + document.querySelector('.te-ftype').textContent`)
+    const simple = await js(`!document.querySelector('[data-te="toggle-record"]') && !document.querySelector('.te-details').open`)
     const p = await project()
     const status = await editorStatus()
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
     expect(boxes === 0, `${boxes} text boxes in the type editor`)
     expect(status.includes('applied'), status)
     expect(/Fill each _/.test(waiting), waiting)
-    expect(/= Shape MaybeInt/.test(source) && /^data Shape/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && !p.types.Shape.constructors[0].fields[0].name, source)
+    expect(simple && /Shape MaybeInt/.test(source) && p.types.Shape?.constructors[0].fields.length === 1 && p.types.Shape.constructors[0].record && p.types.Shape.constructors[0].fields[0].name, source)
     return source.split(' / ').slice(0, 2).join(' ')
   })
   await check('a type with a parameter', async () => {
@@ -404,7 +548,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await rename('.te-ident-type', 'Box'); await sleep(150)
     await dragType('data-var="a"', `document.querySelector('[data-te="add-param"]')`)
     await dragType('data-var="a"', `document.querySelector('[data-te="add-field"]')`)
-    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
+    const sig = await js(`document.querySelector('#type-library [data-function-id="type:Box:Box"] .type-chain').title`)
     // a type variable used in a field becomes a parameter by itself
     await dragType('data-var="b"', `document.querySelector('[data-te="add-ctor"]')`)
     const params = await js(`[...document.querySelectorAll('.te-param')].map((e) => e.textContent.replace('−', '')).join(' ')`)
@@ -420,7 +564,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await dragType('data-varapp="f"', `document.querySelector('[data-te="add-field"]')`)
     await dragType('data-var="a"', `document.querySelector('.te-ftype .tn-hole')`)
     const params = await js(`[...document.querySelectorAll('.te-param')].map((e) => e.textContent.replace('−', '')).join(' ')`)
-    const sig = await js(`document.querySelector('.te-sig .type-chain').title`)
+    const sig = await js(`document.querySelector('#type-library [data-function-id="type:Wrap:Wrap"] .type-chain').title`)
     const status = await editorStatus()
     const kind = await js(`document.querySelector('#type-palette .type-chip[data-con="Wrap"]')?.title ?? ''`)
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(200)
@@ -430,13 +574,13 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   })
   await check('a user class: declare it, give Model an instance, and call its method — picked by type', async () => {
     await js(`document.querySelector('.add-class').click()`); await sleep(300)
-    await setField('.ce-name', 'Pretty'); await sleep(200)
-    await setField('.ce-mname', 'pretty'); await sleep(200)
+    await rename('[data-ce-ident="name"]', 'Pretty'); await sleep(200)
+    await rename('[data-ce-ident="method"]', 'pretty'); await sleep(200)
     await setField('.ce-add-instance', 'Model'); await sleep(400)
     const status = await editorStatus()
-    const implId = await js(`document.querySelector('.te-instance select[data-method]').value`)
+    const implId = await js(`document.querySelector('.decl-instance select[data-method]').value`)
     // prettyModel x = show x
-    await js(`document.querySelector('.te-instance [data-open]').click()`); await sleep(600)
+    await js(`document.querySelector('.decl-instance [data-open]').click()`); await sleep(600)
     const sh = await add('prelude', 'show'); await plug(await paramId('x'), sh, 0); await toOutput(sh); await back()
     // shown = pretty initial
     await createFunction('shown', []); await openBody('shown')
@@ -454,7 +598,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await check("an instance's context is built by dragging classes onto the head's type variables", async () => {
     await js(`document.querySelector('.class-item[data-class-name="Pretty"]').click()`); await sleep(300)
     await setField('.ce-add-instance', 'Maybe'); await sleep(400)
-    const row = `[...document.querySelectorAll('.te-instance')].find((r) => /Maybe/.test(r.querySelector('.ce-head')?.textContent))`
+    const row = `[...document.querySelectorAll('.decl-instance')].find((r) => /Maybe/.test(r.querySelector('.ce-head')?.textContent))`
     const context = async () => ((await project()).classes.Pretty.instances.find((i) => i.head === 'Maybe')?.context || []).map((q) => `${q.cls} ${q.var}`).join(', ')
     const shown = () => js(`${row}.querySelector('.ce-instance-head').textContent.replace(/×/g, '').replace(/\\s+/g, ' ').trim()`)
     const fresh = await context()
@@ -471,7 +615,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     // × removes one
     await js(`${row}.querySelector('.ce-ctx .cc[data-ci="0"] .cc-x').click()`); await sleep(300)
     const removed = await context()
-    const boxes = await js(`document.querySelectorAll('.te-instance input').length`)
+    const boxes = await js(`document.querySelectorAll('.decl-instance input').length`)
     await js(`${row}.querySelector('[data-ce="drop-instance"]').click()`); await sleep(300)
     await js(`document.querySelector('[data-ce="close"]').click()`); await sleep(200)
     expect(fresh === 'Pretty a' && added === 'Pretty a, Show a' && /^instance \(Pretty a, Show a\) ⇒ Pretty \(Maybe a\) where$/.test(line), `${fresh} / ${added} / ${line}`)
@@ -483,11 +627,11 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const r = JSON.parse(await js(`(() => { const el = document.querySelector('#class-palette .type-chip[data-cls="Semigroup"]'); el.scrollIntoView({ block: 'nearest', behavior: 'instant' }); return JSON.stringify(el.getBoundingClientRect()) })()`))
     await mouse('mousePressed', r.x + r.width / 2, r.y + r.height / 2)
     await mouse('mouseReleased', r.x + r.width / 2, r.y + r.height / 2); await sleep(400)
-    const head = await js(`document.querySelector('.ce-builtin-head')?.textContent.replace(/\\s+/g, ' ').trim()`)
+    const head = await js(`document.querySelector('.decl-class .decl-head')?.textContent.replace(/\\s+/g, ' ').trim()`)
     await setField('.ce-add-instance', 'Model'); await sleep(400)
     const inst = (await project()).instances?.Semigroup?.find((i) => i.head === 'Model')
     // mappendModel x y = x  (the left one wins)
-    await js(`document.querySelector('.te-instance [data-open]').click()`); await sleep(600)
+    await js(`document.querySelector('.decl-instance [data-open]').click()`); await sleep(600)
     await toOutput(await paramId('x')); await back()
     // joined = initial <> initial
     await createFunction('joined', []); await openBody('joined')
@@ -498,7 +642,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('#evaluate').click()`); await sleep(600)
     const result = Object.values((await project()).nodes).filter((n) => n.type === 'value').pop()
     await js(`document.querySelector('.class-item[data-class-name="Semigroup"]').click()`); await sleep(300)
-    const status = await js(`[...document.querySelectorAll('.te-instance .law')].map((e) => e.textContent).join(' ')`)
+    const status = await js(`[...document.querySelectorAll('.decl-instance .law')].map((e) => e.textContent).join(' ')`)
     await js(`document.querySelector('[data-ce="close"]').click()`); await sleep(200)
     expect(/^class Semigroup a where$/.test(head) && inst?.context.length === 0 && p.nodes[inst?.methods.mappend]?.label === 'mappendModel', `${head} / ${JSON.stringify(inst)}`)
     expect(result?.data?.type === 'Model' && status === '✓', `${JSON.stringify(result?.data)} / ${status}`)
@@ -704,7 +848,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('.prelude-take-type[data-type-name="Color"]').click()`); await sleep(500)
     const taken = (await project()).types.Color?.library
     // naming the fields derives projections; a constructor more is refused: the runtime reads Color's values
-    await js(`document.querySelector('[data-te="toggle-record"]').click()`); await sleep(400)
+    await rename('.te-ident-field[data-fi="0"]', 'redChannel'); await sleep(400)
     const projections = Object.keys((await project()).types.Color.constructors[0].fields.filter((f) => f.name)).length
     await js(`document.querySelector('[data-te="add-ctor"]').click()`); await sleep(300)
     const refused = await editorStatus()
@@ -712,7 +856,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('[data-te="delete"]').click()`); await sleep(500)
     const given = !(await project()).types.Color
     // instance Show Color, written in the builtin class Show's editor, replaces the Prelude's
-    const r = JSON.parse(await js(`(() => { const el = document.querySelector('#class-palette .type-chip[data-cls="Show"]'); el.scrollIntoView({ block: 'nearest', behavior: 'instant' }); return JSON.stringify(el.getBoundingClientRect()) })()`))
+    const r = JSON.parse(await js(`(() => { const el = document.querySelector('#class-palette .type-chip[data-cls="Show"]'); el.closest('details').open = true; el.scrollIntoView({ block: 'nearest', behavior: 'instant' }); return JSON.stringify(el.getBoundingClientRect()) })()`))
     await mouse('mousePressed', r.x + r.width / 2, r.y + r.height / 2)
     await mouse('mouseReleased', r.x + r.width / 2, r.y + r.height / 2); await sleep(400)
     await setField('.ce-add-instance', 'Color'); await sleep(400)
@@ -842,6 +986,86 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       return 'True → False after a literal edit; saved graph restored'
     })
   }
+  await check('function names open consistently; + inserts a call; inspector disconnect is undoable', async () => {
+    // The preceding helper cases Reset to a managed main. Give this UI
+    // test its own second definition rather than depending on an old game.
+    await createFunction('nameProbe', ['x'])
+    await openBody('nameProbe')
+    const first = await js(`document.querySelector('#graph-name').textContent`)
+    await openBody('main'); await openBody('nameProbe')
+    expect(await js(`document.querySelector('#graph-name').textContent === ${JSON.stringify(first)}`), 'opening depends on current body')
+    const before = Object.keys((await activeGraph()).graph).length
+    const call = await add('main', 'identity')
+    expect(Object.keys((await activeGraph()).graph).length === before + 1, '+ did not insert a call')
+    await fill(call, 0, '7')
+    await clickNode(call)
+    expect(await js(`!!document.querySelector('[data-disconnect-input="0"]')`), 'disconnect action missing')
+    await js(`document.querySelector('[data-disconnect-input="0"]').click()`)
+    expect(!(await activeGraph()).graph[call].mounted[0], 'input still connected')
+    await js(`document.querySelector('#undo').click()`); await sleep(200)
+    expect(!!(await activeGraph()).graph[call].mounted[0], 'undo did not restore input')
+    expect(await js(`document.querySelector('#run').textContent.includes('main')`), 'project entry changed with selection')
+    expect(await js(`[...document.querySelectorAll('#inspector-content details')].every(el => !el.open)`), 'advanced details should be collapsed by default')
+    writeFileSync(join(tmpdir(), 'hs-ui-body.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+  })
+  await check('practice: a type answer and a build exercise solved through the UI are graded', async () => {
+    await js(`(() => { const p = document.querySelector('.exercise-panel'); if (p.classList.contains('is-collapsed')) p.querySelector('.learning-toggle').click() })()`)
+    await js(`document.querySelector('.exercise-back')?.click()`)
+    const result = () => js(`document.querySelector('.exercise-result').innerText`)
+    const failing = () => js(`[...document.querySelectorAll('.exercise-checks li.bad code')].map((e) => e.textContent).join(' | ')`)
+    // A type answer, compared as a type: renamed variables are the same answer.
+    await js(`document.querySelector('.exercise-item[data-id="logic-eq-type"]').click()`)
+    await setField('.exercise-answer', 'Eq t => t -> t -> t', 'input')
+    await js(`document.querySelector('.exercise-grade').click()`)
+    expect(/모양/.test(await result()), `wrong answer: ${await result()}`)
+    await setField('.exercise-answer', 'Eq t => t -> t -> Bool', 'input')
+    await js(`document.querySelector('.exercise-grade').click()`)
+    expect(/정답/.test(await result()), `right answer: ${await result()}`)
+    // double :: Int -> Int, built on the canvas.
+    await js(`document.querySelector('.exercise-back').click()`)
+    await js(`document.querySelector('.exercise-item[data-id="arith-double"]').click()`)
+    await js(`document.querySelector('.exercise-open-fn').click()`); await sleep(600)
+    const fnId = Object.values((await project()).nodes).find((n) => n.custom && n.label === 'double').id
+    // Inside the exercise's body, Run grades it: an empty body stops at the
+    // body check, and its tests are skipped.
+    expect(await js(`document.querySelector('#run').textContent.includes('채점 double')`), 'Run should grade inside the exercise body')
+    await js(`document.querySelector('#run').click()`)
+    const unsolved = await failing()
+    expect(unsolved === '본체 연결' && await js(`!!document.querySelector('.exercise-checks li.skipped')`), `an empty body should fail the body check and skip the tests: ${unsolved}`)
+    const seg = (i) => `document.querySelectorAll('#signature-bar .type-chain > .tc-seg.editable')[${i}]`
+    await dragType('data-con="Int"', seg(0)); await sleep(200)
+    await dragType('data-con="Int"', seg(1)); await sleep(200)
+    const times = await add('main', '(*)')
+    await plug(`input-${fnId}-0`, times, 0)
+    await fill(times, 1, '2')
+    await toOutput(times)
+    await js(`document.querySelector('.exercise-grade').click()`)
+    expect(!(await failing()) && /모든 검사를 통과/.test(await result()), `double: ${await failing()} / ${await result()}`)
+    expect(await js(`JSON.parse(localStorage.getItem('hs-simulate:exercises'))['arith-double'] === true`), 'progress not saved')
+    await back()
+    return 'logic-eq-type, arith-double'
+  })
+  await check('narrow layouts keep project and run controls accessible; inspector remains reopenable', async () => {
+    for (const width of [900, 560]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false })
+      await sleep(200)
+      await js(`document.querySelector('.close-inspector').click()`)
+      await js(`document.querySelector('#run').scrollIntoView({ block: 'nearest', inline: 'nearest' })`)
+      expect(await js(`document.querySelector('#run').getBoundingClientRect().right <= innerWidth`), 'run button overflows')
+      await js(`document.querySelector('#toggle-inspector').click()`)
+      expect(await js(`getComputedStyle(document.querySelector('.inspector')).display !== 'none'`), 'inspector cannot reopen')
+      if (width <= 680) {
+        // A phone width shows one column at a time, picked from the bottom tabs.
+        for (const [view, panel] of [['examples', '.examples-panel'], ['sidebar', '.sidebar'], ['canvas', '.canvas-panel']]) {
+          await js(`document.querySelector('.mobile-tabs [data-view="${view}"]').click()`); await sleep(100)
+          expect(await js(`(() => { const r = document.querySelector('${panel}').getBoundingClientRect(); return r.x === 0 && Math.round(r.width) === innerWidth })()`), `${view} should fill the screen`)
+        }
+      }
+      const shot = join(tmpdir(), `hs-ui-${width}.png`)
+      writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+    }
+    await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
+  })
 
   console.log(errors.length ? `Page errors:\n  ${errors.join('\n  ')}` : 'No page errors.')
   if (errors.length) failures++

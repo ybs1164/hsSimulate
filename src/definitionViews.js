@@ -37,6 +37,8 @@ import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { METHOD_CLASS } from './classMethods.js'
 import { PRIM_PREFIX, defaultOverrideBody, primLabel } from './typeEdits.js'
 import { typeText } from './typeExpr.js'
+import { classShown } from './typeSystem.js'
+import { CLASS_NOTES } from './classGroups.js'
 
 /** Library definitions that can be taken over as graphs: the Prelude's (derived ones are customized through typeEdits.js). */
 export const isEditableLibraryId = (id) => /^prelude:/.test(id)
@@ -48,7 +50,7 @@ const builtinOf = (id) => (isEditableLibraryId(id) ? id.slice('prelude:'.length)
 export function primitiveTakeOverProblem(id) {
   const builtin = builtinOf(id)
   if (!builtin || builtin === 'listOf') return 'not a Prelude primitive'
-  if (METHOD_CLASS[builtin]) return `a method of the class ${METHOD_CLASS[builtin]} — customize it for a type by writing that type's instance in the type editor`
+  if (METHOD_CLASS[builtin]) return `a method of the class ${classShown(METHOD_CLASS[builtin])} — customize it for a type by writing that type's instance in the type editor`
   if (FIXED_PRIMITIVES.has(builtin)) return "the unique ring map out of ℤ (or ℚ) — fixed by the target type's own Ring, so there is nothing to choose"
   return ''
 }
@@ -59,8 +61,11 @@ export const viewIdOf = (defId, slots = null) => `view:${defId}${slots === null 
 
 // Notes for primitives, by builtin name. Anything not listed (and not
 // written as a graph below) is a runtime primitive.
+// A note naming a class is written when it's shown (a function), so the
+// class reads as the app shows it (`Fractional`, not `Field` — classGroups.js).
 const CONSTRUCTOR = (of) => `primitive · a constructor of ${of} (an injection into it)`
-const METHOD = (cls) => `primitive · a method of the class ${cls} — a type gets its own by an instance (written in the type editor)`
+const named = (cls) => `${classShown(cls)}${CLASS_NOTES[cls] && cls !== 'Ring' ? ` (${CLASS_NOTES[cls]})` : ''}`
+const METHOD = (cls, what = '') => () => `primitive · a method of the class ${named(cls)}${what} — a type gets its own by an instance (written in the type editor)`
 const PRIMITIVE_NOTES = {
   succ: 'primitive · the Church successor λn f x. f (n f x)',
   zero: 'primitive · the Church numeral λf x. x',
@@ -68,20 +73,21 @@ const PRIMITIVE_NOTES = {
   ifThenElse: 'primitive · the eliminator of Bool (Int-only, by design)',
   select: 'primitive · the eliminator of Bool: select c a b = if c then a else b',
   showsPrec: 'primitive · a method of the class Show: rendering a value as text at a precedence',
-  plus: METHOD('AddSemigroup'), negate: METHOD('AddGroup'), minus: METHOD('AddGroup'), times: METHOD('MulSemigroup'),
-  addZero: METHOD('AddMonoid'), mulOne: METHOD('MulMonoid'), divide: METHOD('Field'), sqrt: METHOD('Transcendental'),
-  toRational: METHOD('OrderedRing'),
-  fromInteger: 'primitive · the unique ring map ℤ → a (ℤ is the initial ring), fixed by the Ring dictionary of a',
-  toInteger: 'primitive · a method of the class EuclideanRing: the embedding of an integral type in ℤ',
-  fromRational: 'primitive · the unique field map ℚ → a, fixed by the Field dictionary of a', properFraction: 'primitive · a method of the class OrderedField: x = n + r with n integral and r between -1 and 1, of the sign of x',
-  div: 'primitive · a method of the class EuclideanRing: the quotient, rounded down', mod: 'primitive · a method of the class EuclideanRing: the remainder of div, of the sign of the divisor',
+  plus: METHOD('AddSemigroup'), negate: METHOD('AddGroup'), times: METHOD('MulSemigroup'),
+  addZero: METHOD('AddMonoid', ': the 0 of (+), which Haskell writes as the literal 0'), mulOne: METHOD('MulMonoid', ': the 1 of (*), which Haskell writes as the literal 1'),
+  divide: METHOD('Field'), sqrt: METHOD('Transcendental'), toRational: METHOD('OrderedRing'),
+  fromInteger: () => `primitive · the unique ring map ℤ → a (ℤ is the initial ring), fixed by the ${classShown('Ring')} dictionary of a`,
+  toInteger: () => `primitive · a method of the class ${classShown('EuclideanRing')}: the embedding of an integral type in ℤ`,
+  fromRational: () => `primitive · the unique field map ℚ → a, fixed by the ${classShown('Field')} dictionary of a`,
+  properFraction: () => `primitive · a method of the class ${classShown('OrderedField')}: x = n + r with n integral and r between -1 and 1, of the sign of x`,
+  div: () => `primitive · a method of the class ${classShown('EuclideanRing')}: the quotient, rounded down`,
+  mod: () => `primitive · a method of the class ${classShown('EuclideanRing')}: the remainder of div, of the sign of the divisor`,
   geq: METHOD('Ord'), eq: METHOD('Eq'), neq: METHOD('Eq'), compare: METHOD('Ord'), le: METHOD('Ord'), lt: METHOD('Ord'), gt: METHOD('Ord'), max: METHOD('Ord'), min: METHOD('Ord'),
   traverse: METHOD('Traversable'), pure: METHOD('Applicative'), ap: METHOD('Applicative'), bind: METHOD('Monad'),
-  nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'),
+  nil: CONSTRUCTOR('[a]'), cons: CONSTRUCTOR('[a]'), unit: CONSTRUCTOR('()'),
   foldr: 'primitive · the recursor of the inductive type [a] (its catamorphism)',
   repeatN: 'app helper · bounded pure iteration, not Haskell Prelude; n <= 0 returns x without applying f; maximum 100 applications',
-  take: 'primitive · lazy list prefix; take n xs = [] when n <= 0; n must be a safe Int',
-  drop: 'primitive · skip a list prefix without forcing its elements; n must be a safe Int',
+  uncons: 'primitive · the eliminator of [a]: the inverse of [] and (:), since [a] ≅ 1 + a × [a] (Lambek\'s lemma)',
   mappend: METHOD('Semigroup'), mempty: METHOD('Monoid'), fmap: METHOD('Functor'), foldMap: METHOD('Foldable'),
   leq: METHOD('PartialOrd'), join: METHOD('Lattice'), meet: METHOD('Lattice'), scale: METHOD('VectorSpace'),
   show: METHOD('Show'), showFFloat: 'primitive · decimal rendering of a floating-point number', showCompact: 'primitive · compact rendering of a number (1.2K, 3.4M)',
@@ -104,6 +110,10 @@ const fraction = (g) => {
   const p = g.named(g.call('prelude:properFraction', [g.param(0)]), 'p')
   return [g.named(g.call('prelude:fst', [p]), 'n'), g.named(g.call('prelude:snd', [g.ref(p)]), 'r')]
 }
+// apply (apply f x) y — a two-argument application, made explicit.
+const app2 = (g, f, x, y) => g.call('apply', [g.call('apply', [f, x]), y])
+// getW (foldMap f xs): a fold through Data.Monoid's wrapper `w` (Sum, Any, …).
+const viaWrapper = (g, w, f, xs) => g.call(`type:${w}:get${w}`, [g.call('prelude:foldMap', [f, xs])])
 const COLOURS = { red: ['1', '0', '0'], green: ['0', '0.7', '0'], blue: ['0', '0', '1'], yellow: ['1', '0.85', '0'], black: ['0', '0', '0'], white: ['1', '1', '1'] }
 // The functions written as graphs, by builtin name. Each gets a builder
 // (see `graph` below) and returns the node feeding Output.
@@ -114,29 +124,18 @@ const GRAPHS = {
   // compose f g x = f (g x) — application made explicit
   compose: (g) => g.call('apply', [g.param(0), g.call('apply', [g.param(1), g.param(2)])]),
   isZero: (g) => g.call('eq', [g.param(0), { lit: '0' }]),
+  // x - y = x + negate y — Num's own default for (-)
+  minus: (g) => g.call('plus', [g.param(0), g.call('negate', [g.param(1)])]),
   map: (g) => g.call('prelude:foldr', [
     g.lambda(['f', 'x', 'acc'], (l) => l.call('prelude:cons', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
     g.call('prelude:nil', []),
     g.param(1),
   ]),
-  filter: (g) => g.call('prelude:foldr', [
-    g.lambda(['p', 'x', 'acc'], (l) => l.call('select', [
-      l.call('apply', [l.param(0), l.param(1)]),
-      l.call('prelude:cons', [l.param(1), l.param(2)]),
-      l.param(2),
-    ]), [g.param(0)]),
-    g.call('prelude:nil', []),
-    g.param(1),
-  ]),
-  any: (g) => g.call('prelude:foldr', [
-    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:or', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
-    { lit: 'False' }, g.param(1),
-  ]),
-  all: (g) => g.call('prelude:foldr', [
-    g.lambda(['p', 'x', 'acc'], (l) => l.call('prelude:and', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
-    { lit: 'True' }, g.param(1),
-  ]),
-  length: (g) => g.call('prelude:foldr', [g.lambda(['x', 'n'], (l) => l.call('plus', [l.param(1), { lit: '1' }])), { lit: '0' }, g.param(0)]),
+  // The Foldable functions fold the container into a monoid (Data.Monoid's
+  // wrappers pick which): length xs = getSum (foldMap (\x -> Sum 1) xs)
+  length: (g) => viaWrapper(g, 'Sum', g.lambda(['x'], (l) => l.call('type:Sum:Sum', [{ lit: '1' }])), g.param(0)),
+  // toList xs = foldMap (\x -> [x]) xs — into the free monoid
+  toList: (g) => g.call('prelude:foldMap', [g.lambda(['x'], (l) => l.call('prelude:cons', [l.param(0), l.call('prelude:nil', [])])), g.param(0)]),
   append: (g) => g.call('prelude:foldr', [g.call('prelude:cons', [null, null]), g.param(1), g.param(0)]),
   // xs !? i = foldr (\x r k -> select (k == 0) (Just x) (apply r (k - 1))) (\k -> Nothing) xs `apply` i
   index: (g) => g.call('apply', [
@@ -151,6 +150,170 @@ const GRAPHS = {
     ]),
     g.param(1),
   ]),
+  // null xs = getAll (foldMap (\x -> All False) xs)
+  null: (g) => viaWrapper(g, 'All', g.lambda(['x'], (l) => l.call('type:All:All', [{ lit: 'False' }])), g.param(0)),
+  // foldl f z xs = foldr (\f x k acc -> apply k (apply (apply f acc) x)) identity xs `apply` z
+  foldl: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['f', 'x', 'k', 'acc'], (l) => l.call('apply', [l.param(2), app2(l, l.param(0), l.param(3), l.param(1))]), [g.param(0)]),
+      g.call('identity', [null]),
+      g.param(2),
+    ]),
+    g.param(1),
+  ]),
+  // filter p xs = foldr (\p x acc -> select (apply p x) (x : acc) acc) [] xs
+  filter: (g) => g.call('prelude:foldr', [
+    g.lambda(['p', 'x', 'acc'], (l) => l.call('select', [l.call('apply', [l.param(0), l.param(1)]), l.call('prelude:cons', [l.param(1), l.param(2)]), l.param(2)]), [g.param(0)]),
+    g.call('prelude:nil', []),
+    g.param(1),
+  ]),
+  // reverse xs = foldr (\x k acc -> apply k (x : acc)) identity xs `apply` []
+  reverse: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['x', 'k', 'acc'], (l) => l.call('apply', [l.param(1), l.call('prelude:cons', [l.param(0), l.param(2)])])),
+      g.call('identity', [null]),
+      g.param(0),
+    ]),
+    g.call('prelude:nil', []),
+  ]),
+  // concat xss = foldMap identity xss;  concatMap f xs = foldMap f xs — lists are a monoid under (++)
+  concat: (g) => g.call('prelude:foldMap', [g.call('identity', [null]), g.param(0)]),
+  concatMap: (g) => g.call('prelude:foldMap', [g.param(0), g.param(1)]),
+  // elem x xs = any (\x y -> x == y) xs
+  elem: (g) => g.call('prelude:any', [g.lambda(['x', 'y'], (l) => l.call('eq', [l.param(0), l.param(1)]), [g.param(0)]), g.param(1)]),
+  // any p xs = getAny (foldMap (\p x -> Any (apply p x)) xs);  all with All
+  any: (g) => viaWrapper(g, 'Any', g.lambda(['p', 'x'], (l) => l.call('type:Any:Any', [l.call('apply', [l.param(0), l.param(1)])]), [g.param(0)]), g.param(1)),
+  all: (g) => viaWrapper(g, 'All', g.lambda(['p', 'x'], (l) => l.call('type:All:All', [l.call('apply', [l.param(0), l.param(1)])]), [g.param(0)]), g.param(1)),
+  // sum xs = getSum (foldMap Sum xs);  product xs = getProduct (foldMap Product xs)
+  sum: (g) => viaWrapper(g, 'Sum', g.call('type:Sum:Sum', [null]), g.param(0)),
+  product: (g) => viaWrapper(g, 'Product', g.call('type:Product:Product', [null]), g.param(0)),
+  // mconcat xs = foldr (<>) mempty xs
+  mconcat: (g) => g.call('prelude:foldr', [g.call('prelude:mappend', [null, null]), g.call('prelude:mempty', []), g.param(0)]),
+
+  // Data.Functor, Control.Applicative, Control.Monad, Data.Traversable —
+  // each written with the class methods.
+  // f <$> x = fmap f x;  x <$ ys = fmap (\x y -> x) ys
+  fmapOp: (g) => g.call('prelude:fmap', [g.param(0), g.param(1)]),
+  constMap: (g) => g.call('prelude:fmap', [g.lambda(['x', 'y'], (l) => l.param(0), [g.param(0)]), g.param(1)]),
+  // liftA2 h x y = fmap h x <*> y;  x *> y = fmap (\a b -> b) x <*> y
+  liftA2: (g) => g.call('prelude:ap', [g.call('prelude:fmap', [g.param(0), g.param(1)]), g.param(2)]),
+  thenA: (g) => g.call('prelude:ap', [g.call('prelude:fmap', [g.lambda(['a', 'b'], (l) => l.param(1)), g.param(0)]), g.param(1)]),
+  // when c act = select c act (pure ())
+  when: (g) => g.call('select', [g.param(0), g.param(1), g.call('prelude:pure', [g.call('prelude:unit', [])])]),
+  // replicateM n act = sequenceA (replicate n act)
+  replicateM: (g) => g.call('prelude:sequenceA', [g.call('prelude:replicate', [g.param(0), g.param(1)])]),
+  // return x = pure x;  m >> k = m >>= (\k x -> k);  join mm = mm >>= identity
+  returnM: (g) => g.call('prelude:pure', [g.param(0)]),
+  thenM: (g) => g.call('prelude:bind', [g.param(0), g.lambda(['k', 'x'], (l) => l.param(0), [g.param(1)])]),
+  joinM: (g) => g.call('prelude:bind', [g.param(0), g.call('identity', [null])]),
+  // (f >=> h) x = apply f x >>= h — Kleisli composition
+  kleisli: (g) => g.call('prelude:bind', [g.call('apply', [g.param(0), g.param(2)]), g.param(1)]),
+  // mapM_ f xs = foldr (\f x k -> apply f x >> k) (return ()) (toList xs)
+  mapM_: (g) => g.call('prelude:foldr', [
+    g.lambda(['f', 'x', 'k'], (l) => l.call('prelude:thenM', [l.call('apply', [l.param(0), l.param(1)]), l.param(2)]), [g.param(0)]),
+    g.call('prelude:returnM', [g.call('prelude:unit', [])]),
+    g.call('prelude:toList', [g.param(1)]),
+  ]),
+  // Control.Monad.State, each a State around its s → (a, s):
+  // state f = State f;  get = State (\s -> (s, s));  put x = State (\x s -> ((), x))
+  state: viaConstructor('State', 'State'),
+  stateGet: (g) => g.call('type:State:State', [g.lambda(['s'], (l) => l.call('prelude:pair', [l.param(0), l.param(0)]))]),
+  statePut: (g) => g.call('type:State:State', [g.lambda(['x', 's'], (l) => l.call('prelude:pair', [l.call('prelude:unit', []), l.param(0)]), [g.param(0)])]),
+  // modify f = State (\f s -> ((), apply f s));  gets f = State (\f s -> (apply f s, s))
+  stateModify: (g) => g.call('type:State:State', [g.lambda(['f', 's'], (l) => l.call('prelude:pair', [l.call('prelude:unit', []), l.call('apply', [l.param(0), l.param(1)])]), [g.param(0)])]),
+  stateGets: (g) => g.call('type:State:State', [g.lambda(['f', 's'], (l) => l.call('prelude:pair', [l.call('apply', [l.param(0), l.param(1)]), l.param(1)]), [g.param(0)])]),
+  // evalState m s = fst (apply (runState m) s);  execState with snd
+  evalState: (g) => g.call('prelude:fst', [g.call('apply', [g.call('type:State:runState', [g.param(0)]), g.param(1)])]),
+  execState: (g) => g.call('prelude:snd', [g.call('apply', [g.call('type:State:runState', [g.param(0)]), g.param(1)])]),
+  // lerp t a b = a + t *^ (b - a)
+  lerp: (g) => g.call('plus', [g.param(1), g.call('prelude:scale', [g.param(0), g.call('minus', [g.param(2), g.param(1)])])]),
+  // sequenceA xs = traverse identity xs;  for xs f = traverse f xs;  mapM f xs = traverse f xs
+  sequenceA: (g) => g.call('prelude:traverse', [g.call('identity', [null]), g.param(0)]),
+  forT: (g) => g.call('prelude:traverse', [g.param(1), g.param(0)]),
+  mapM: (g) => g.call('prelude:traverse', [g.param(0), g.param(1)]),
+  // take n xs = foldr (\x r k -> select (0 >= k) [] (x : apply r (k - 1))) (\k -> []) xs `apply` n
+  take: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['x', 'r', 'k'], (l) => l.call('select', [
+        l.call('geq', [{ lit: '0' }, l.param(2)]),
+        l.call('prelude:nil', []),
+        l.call('prelude:cons', [l.param(0), l.call('apply', [l.param(1), l.call('minus', [l.param(2), { lit: '1' }])])]),
+      ])),
+      g.lambda(['k'], (l) => l.call('prelude:nil', [])),
+      g.param(1),
+    ]),
+    g.param(0),
+  ]),
+  // drop n xs = foldr (\x r k -> select (0 >= k) (x : apply r 0) (apply r (k - 1))) (\k -> []) xs `apply` n
+  drop: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['x', 'r', 'k'], (l) => l.call('select', [
+        l.call('geq', [{ lit: '0' }, l.param(2)]),
+        l.call('prelude:cons', [l.param(0), l.call('apply', [l.param(1), { lit: '0' }])]),
+        l.call('apply', [l.param(1), l.call('minus', [l.param(2), { lit: '1' }])]),
+      ])),
+      g.lambda(['k'], (l) => l.call('prelude:nil', [])),
+      g.param(1),
+    ]),
+    g.param(0),
+  ]),
+  // splitAt n xs = (take n xs, drop n xs)
+  splitAt: (g) => g.call('prelude:pair', [g.call('prelude:take', [g.param(0), g.param(1)]), g.call('prelude:drop', [g.param(0), g.param(1)])]),
+  // replicate n x = select (0 >= n) [] (x : replicate (n - 1) x)
+  replicate: (g) => g.call('select', [
+    g.call('geq', [{ lit: '0' }, g.param(0)]),
+    g.call('prelude:nil', []),
+    g.call('prelude:cons', [g.param(1), g.call('prelude:replicate', [g.call('minus', [g.param(0), { lit: '1' }]), g.param(1)])]),
+  ]),
+  // enumFromTo m n = select (m > n) [] (m : enumFromTo (m + 1) n)
+  enumFromTo: (g) => g.call('select', [
+    g.call('prelude:gt', [g.param(0), g.param(1)]),
+    g.call('prelude:nil', []),
+    g.call('prelude:cons', [g.param(0), g.call('prelude:enumFromTo', [g.call('plus', [g.param(0), { lit: '1' }]), g.param(1)])]),
+  ]),
+  // zipWith f xs ys = foldr (\f x r ys -> maybe [] (\f x r p -> apply (apply f x) (fst p) : apply r (snd p)) (uncons ys)) (\ys -> []) xs `apply` ys
+  zipWith: (g) => g.call('apply', [
+    g.call('prelude:foldr', [
+      g.lambda(['f', 'x', 'r', 'ys'], (l) => l.call('prelude:maybe', [
+        l.call('prelude:nil', []),
+        l.lambda(['f', 'x', 'r', 'p'], (m) => m.call('prelude:cons', [
+          app2(m, m.param(0), m.param(1), m.call('prelude:fst', [m.param(3)])),
+          m.call('apply', [m.param(2), m.call('prelude:snd', [m.param(3)])]),
+        ]), [l.param(0), l.param(1), l.param(2)]),
+        l.call('prelude:uncons', [l.param(3)]),
+      ]), [g.param(0)]),
+      g.lambda(['ys'], (l) => l.call('prelude:nil', [])),
+      g.param(1),
+    ]),
+    g.param(2),
+  ]),
+  // zip xs ys = zipWith (,) xs ys
+  zip: (g) => g.call('prelude:zipWith', [g.call('prelude:pair', [null, null]), g.param(0), g.param(1)]),
+  // lookup key pairs = foldr (\key p acc -> select (key == fst p) (Just (snd p)) acc) Nothing pairs
+  lookup: (g) => g.call('prelude:foldr', [
+    g.lambda(['key', 'p', 'acc'], (l) => l.call('select', [
+      l.call('eq', [l.param(0), l.call('prelude:fst', [l.param(1)])]),
+      l.call('prelude:just', [l.call('prelude:snd', [l.param(1)])]),
+      l.param(2),
+    ]), [g.param(0)]),
+    g.call('prelude:nothing', []),
+    g.param(1),
+  ]),
+  // insertBy cmp x ys = maybe [x] (\cmp x ys p -> caseOrdering (x : ys) (x : ys) (fst p : insertBy cmp x (snd p)) (cmp x (fst p))) (uncons ys)
+  insertBy: (g) => g.call('prelude:maybe', [
+    g.call('prelude:listOf', [g.param(1)]),
+    g.lambda(['cmp', 'x', 'ys', 'p'], (l) => l.call('type:Ordering:caseOrdering', [
+      l.call('prelude:cons', [l.param(1), l.param(2)]),
+      l.call('prelude:cons', [l.param(1), l.param(2)]),
+      l.call('prelude:cons', [l.call('prelude:fst', [l.param(3)]), l.call('prelude:insertBy', [l.param(0), l.param(1), l.call('prelude:snd', [l.param(3)])])]),
+      app2(l, l.param(0), l.param(1), l.call('prelude:fst', [l.param(3)])),
+    ]), [g.param(0), g.param(1), g.param(2)]),
+    g.call('prelude:uncons', [g.param(2)]),
+  ]),
+  // sortBy cmp xs = foldr (insertBy cmp) [] xs
+  sortBy: (g) => g.call('prelude:foldr', [g.call('prelude:insertBy', [g.param(0), null, null]), g.call('prelude:nil', []), g.param(1)]),
+  // sort xs = sortBy compare xs
+  sort: (g) => g.call('prelude:sortBy', [g.call('prelude:compare', [null, null]), g.param(0)]),
   // The numeric conversions, as the Haskell Report defines them.
   // fromIntegral x = fromInteger (toInteger x)
   fromIntegral: (g) => g.call('prelude:fromInteger', [g.call('prelude:toInteger', [g.param(0)])]),
@@ -232,7 +395,8 @@ export function buildDefinitionView(def, resolve, { slots = 0 } = {}) {
   else {
     // A primitive: its parameters applied to it.
     root = g.call(def.id, params.map((_, i) => g.param(i)))
-    view.note = def.derived ? derivedNote(def) : PRIMITIVE_NOTES[def.builtin] || 'primitive · built into the runtime'
+    const note = PRIMITIVE_NOTES[def.builtin]
+    view.note = def.derived ? derivedNote(def) : (typeof note === 'function' ? note() : note) || 'primitive · built into the runtime'
   }
   if (variadic) view.note = 'syntax · a list literal is sugar for the constructors (:) and []'
   g.output(root)

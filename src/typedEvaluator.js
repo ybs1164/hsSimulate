@@ -4,7 +4,7 @@
 // script) gets it from here: each run is typed first (inferGraph.js), with
 // the declared types', classes' and hand-written instances in scope, and the
 // instance table built (instanceTable.js).
-import { createEvaluator, elaborationIndex } from './evaluator.js'
+import { createEvaluator, elaborationIndex, EvalError } from './evaluator.js'
 import { inferGraph } from './inferGraph.js'
 import { derivedInstances } from './typeDecls.js'
 import { classEnvironment, declareClasses, instanceEvidence } from './classDecls.js'
@@ -28,6 +28,21 @@ export function elaborate(registry, graph = null) {
     const probes = Object.fromEntries(Object.keys(functionBodies).filter((id) => nodes[id]).map((id) => [`probe:${id}`, { id: `probe:${id}`, type: 'function', sourceFunctionId: id, params: [], mounted: [] }]))
     const main = graph || {}
     const pass = inferGraph(nodes, functionBodies, { ...main, ...probes })
+    if (graph && Object.values(graph).some((n) => n.match) && pass.brokenEdges.length) throw new EvalError('패턴 매칭 분기의 타입이나 연결을 확인하세요')
+    if (graph) {
+      const reachable = new Set(), visit = (body) => {
+        for (const n of Object.values(body)) {
+          const id = n.sourceFunctionId || n.id
+          if (n.type !== 'function' || reachable.has(id) || !functionBodies[id]) continue
+          reachable.add(id); visit(functionBodies[id])
+        }
+      }
+      visit(graph)
+      for (const id of reachable) if (nodes[id]?.matchBranch || Object.values(functionBodies[id]).some((n) => n.match)) {
+        const broken = pass.brokenFunctions[id]?.[0]
+        if (broken) throw new EvalError(broken.message || `${nodes[id]?.label || id}: 패턴 매칭 분기의 타입이 맞지 않습니다`)
+      }
+    }
     const instances = instanceEvidence(resolved, (fnId) => pass.schemes.get(fnId))
     return elaborationIndex({ ...pass.elaboration, instances }, main, functionBodies)
   })

@@ -14,11 +14,11 @@ export const lessonSource = {
 }
 export const lessonGuide = [
   '아래 코드는 Haskell 식·정의의 표기입니다. 이 앱은 코드 편집기나 GHCi가 아니므로 식 전체나 :t 같은 GHCi 명령을 입력하지 않습니다.',
-  '설명 창을 닫고 Workspace의 Search nodes에 표시 이름을 검색하세요. 기본 제공 함수와 PRELUDE는 결과 클릭이나 Enter로 호출 노드를 추가합니다. main에서 사용자 함수를 클릭하면 본체가 열립니다. 같은 이름이 여럿이면 안내의 그룹을 확인하세요.',
+  '설명 창을 닫고 Workspace의 블록 검색(Search nodes)에 표시 이름을 검색하세요. Enter는 호출 노드를 추가합니다. 함수 이름은 어느 화면에서나 정의를 열고 이름 오른쪽 +는 현재 본체에 호출을 추가합니다. 아래 NODES는 함수 목록, PARAMETERS는 매개변수, TYPES는 타입에 대응합니다.',
   '빈 입력 점을 클릭해 값 하나를 넣고 Enter를 누릅니다. 이미 넣은 값은 값 노드를 더블클릭해 수정합니다. 식은 노드 오른쪽 출력 점에서 대상 입력 점까지 드래그해 연결합니다. 연결한 식이 접혀 보이는 것은 정상입니다.',
-  '계산할 함수의 제목을 클릭하고 Inspector의 Play function을 누르세요. 새 result 노드가 실제 결과입니다. 아래 예상 결과는 설명용입니다. 값을 바꾼 뒤 함수를 다시 선택해 실행하세요. 예전 result는 자동 갱신되지 않습니다.',
+  '계산할 함수의 제목을 클릭하고 Inspector의 Run this node(기존 Play function)를 누르세요. 새 result 노드가 실제 결과입니다. 전체 Run graph는 상단 실행 main(저장된 시작 함수 이름)입니다. 연습 과정의 만들기 문제 본체를 열면 이 버튼은 해당 문제 채점으로 바뀝니다. 아래 예상 결과는 설명용이고 예전 result는 자동 갱신되지 않습니다.',
   '노드가 안 보이면 ⌗(전체 보기)을 누르거나 빈 캔버스를 드래그하세요. 작업은 자동 저장됩니다. 실습 전에 Export로 프로젝트를 보관하고 실습 변경은 ↶로 취소할 수 있습니다.',
-  'Templates…에는 Click counter, Blank game, Dice 게임이 있습니다. 선택 즉시 프로젝트가 교체되고 ↶로 복원할 수 있으므로 먼저 Export하세요. 이 문법 창은 예제를 자동으로 불러오거나 그래프·저장 데이터를 바꾸지 않습니다.',
+  '프로젝트 메뉴에서 프로젝트 저장(.json)(기존 Export)과 템플릿(클릭 카운터·빈 게임·주사위 등)을 찾습니다. 템플릿 선택 즉시 프로젝트가 교체되고 ↶로 복원할 수 있으므로 먼저 저장하세요. 이 문법 창은 그래프·저장 데이터를 바꾸지 않습니다. Prelude 그룹의 take/drop은 Sublists · Zips, length/any/all은 Folding · Foldable에 있습니다.',
 ]
 export const syntaxLessons = [
   {

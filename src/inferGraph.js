@@ -51,10 +51,11 @@
 //   must satisfy it) even where the body doesn't need it. Constraints the
 //   body needs beyond those are still inferred (an extra-constraints
 //   wildcard, `(Ord a, _) =>`).
-import { applySubst, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, tvar, unify, scheme } from './typeSystem.js'
+import { applySubst, classShown, createNamer, freshVar, ftv, generalize, instantiate, pred, showType, tcon, tfun, tlist, tvar, unify, scheme } from './typeSystem.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { classArity, evidence, isClass, isUserClass, literalClass, pickDefault, reduce } from './prelude.js'
 import { parseLiteral } from './literals.js'
+import { matchProblem } from './matchGraph.js'
 import { annotationType, typeFromText, typeText } from './typeExpr.js'
 
 const Bool = tcon('Bool')
@@ -154,7 +155,7 @@ function annotate(ctx, graph, memo, predsStart) {
     const own = ctx.preds.slice(predsStart)
     const missing = own.find((p) => satisfiable([p], ctx.subst) && !satisfiable([p], next))
     if (missing) {
-      problems[n.id] = `${n.annotation} can't be ${what(n)}: the body needs ${missing.cls} of it, which ${show(applySubst(next, missing.type))} doesn't have`
+      problems[n.id] = `${n.annotation} can't be ${what(n)}: the body needs ${classShown(missing.cls)} of it, which ${show(applySubst(next, missing.type))} doesn't have`
       continue
     }
     ctx.subst = next
@@ -169,7 +170,7 @@ function annotate(ctx, graph, memo, predsStart) {
   for (const q of output?.context || []) {
     const v = names.get(q.var)
     if (!isClass(q.cls)) problems.context ??= `There is no class ${q.cls}`
-    else if (!v) problems.context ??= `${q.cls} ${q.var}: ${q.var} isn't a variable of the signature`
+    else if (!v) problems.context ??= `${classShown(q.cls)} ${q.var}: ${q.var} isn't a variable of the signature`
     else if (!usedAtKind(graph, q.var, classArity(q.cls))) problems.context ??= `${q.cls} ${q.var}: ${q.cls} is a class of ${classArity(q.cls) ? 'type constructors (like Maybe)' : 'types'}, but the signature uses ${q.var} as ${classArity(q.cls) ? 'a type' : 'a type constructor'}`
     else if (satisfiable([...ctx.preds.slice(predsStart), pred(q.cls, v)], ctx.subst)) ctx.preds.push(pred(q.cls, v))
     else problems.context ??= `${q.cls} ${q.var} can't hold: the body makes ${q.var} ${show(applySubst(ctx.subst, v))}`
@@ -224,6 +225,7 @@ function schemeFor(node, ctx) {
 /** The scheme of a custom (or builtin, or missing) top-level function, memoized per pass with a cycle guard. */
 function customSchemeOf(id, ctx) {
   if (ctx.customCache.has(id)) return ctx.customCache.get(id)
+  if (ctx.recursiveTypes.has(id)) return scheme([], [], ctx.recursiveTypes.get(id).type)
   const def = ctx.nodesRegistry[id]
   if (!def) return scheme([], [], freshVar())
   if (def.scheme) {
@@ -240,6 +242,11 @@ function customSchemeOf(id, ctx) {
     return def.scheme
   }
   if (def.builtin) return builtinSchemes[def.builtin]
+  const group = ctx.recursiveGroups.get(id)
+  if (group) {
+    inferRecursiveGroup(group, ctx)
+    return ctx.customCache.get(id)
+  }
   if (ctx.visiting.has(id)) return scheme([], [], freshVar()) // recursive custom function: monomorphic fallback, not cached
   ctx.visiting.add(id)
   const body = ctx.functionBodiesRegistry[id]
@@ -255,12 +262,12 @@ function customSchemeOf(id, ctx) {
  * is checked against it instead and elaborated with its constraints as the
  * dictionary parameters; the declared scheme is the result.
  */
-function inferCustomFunctionScheme(body, ctx, fnId, declared = null) {
+function inferCustomFunctionScheme(body, ctx, fnId, declared = null, deferred = false) {
   const callsStart = ctx.calls.length
   const originsStart = ctx.origins.length
   const memo = new Map()
   const paramNodes = Object.values(body).filter((n) => n.type === 'parameter')
-  const paramVars = paramNodes.map(() => freshVar())
+  const paramVars = ctx.recursiveTypes.get(fnId)?.params || paramNodes.map(() => freshVar())
   paramNodes.forEach((n, i) => memo.set(n.id, { kind: 'value', valueType: paramVars[i] }))
   const predsStart = ctx.preds.length
   const literalsStart = ctx.pendingLiterals.length
@@ -269,6 +276,11 @@ function inferCustomFunctionScheme(body, ctx, fnId, declared = null) {
   const problems = annotate(ctx, body, memo, predsStart)
   if (Object.keys(problems).length) ctx.annotationProblems[fnId] = problems
   const resultType = valueTypeOfEntry(outputEntry)
+  const recursiveType = ctx.recursiveTypes.get(fnId)
+  if (recursiveType) {
+    try { ctx.subst = unify(recursiveType.result, resultType, ctx.subst) }
+    catch { ctx.broken.push({ graph: body, nodeId: 'output', index: -1 }) }
+  }
   // Resolve against everything unified so far *before* generalizing — a
   // param that got pinned to Int by usage (e.g. wired into isZero) must show
   // up concrete here, not still-free, or it would be wrongly quantified.
@@ -301,6 +313,7 @@ function inferCustomFunctionScheme(body, ctx, fnId, declared = null) {
   // A constraint on a variable the function's type doesn't mention is ambiguous (or defaulted): it leaves the type.
   const visible = ftv(curried)
   const origins = ctx.origins.splice(originsStart).map((o) => ({ ...o, preds: o.preds.map((p) => pred(p.cls, applySubst(ctx.subst, p.type))) }))
+  if (deferred) return { fnId, curried, retained, origins, calls: ctx.calls.splice(callsStart) }
   const ambiguous = ambiguitiesIn(retained, visible, origins)
   if (ambiguous.length) ctx.ambiguities[fnId] = ambiguous
   // The variables only its body sees default (Integer, Double) — for its calls' dictionaries only.
@@ -310,6 +323,57 @@ function inferCustomFunctionScheme(body, ctx, fnId, declared = null) {
   const given = (wanted ? wanted.preds.map((p) => pred(p.cls, applySubst(ctx.subst, p.type))) : retained).map((p, i) => ({ pred: p, expr: { param: i } }))
   ctx.elab.set(fnId, { params: given.length, nodes: elaborateCalls(ctx.calls.splice(callsStart), given, ctx, fnId, defaulted) })
   return generalize(retained, curried)
+}
+
+// A match branch can call the enclosing function: after lambda lifting these
+// are mutually recursive functions. Infer an entire recursive component with
+// shared monotypes, then generalize and pass dictionaries between its members.
+function recursiveGroups(nodes, bodies) {
+  const eligible = (id) => bodies[id] && nodes[id] && !nodes[id].scheme && !nodes[id].builtin
+  const deps = new Map(Object.keys(bodies).filter(eligible).map((id) => [id, [...new Set(Object.values(bodies[id]).filter((n) => n.type === 'function').map((n) => n.sourceFunctionId).filter(eligible))]]))
+  const index = new Map(), low = new Map(), stack = [], active = new Set(), groups = new Map()
+  let next = 0
+  const visit = (id) => {
+    index.set(id, next); low.set(id, next++); stack.push(id); active.add(id)
+    for (const dep of deps.get(id) || []) {
+      if (!index.has(dep)) { visit(dep); low.set(id, Math.min(low.get(id), low.get(dep))) }
+      else if (active.has(dep)) low.set(id, Math.min(low.get(id), index.get(dep)))
+    }
+    if (low.get(id) !== index.get(id)) return
+    const group = []
+    let member
+    do { member = stack.pop(); active.delete(member); group.push(member) } while (member !== id)
+    if (group.length > 1 || deps.get(id)?.includes(id)) for (const fn of group) groups.set(fn, group)
+  }
+  for (const id of deps.keys()) if (!index.has(id)) visit(id)
+  return groups
+}
+
+function inferRecursiveGroup(group, ctx) {
+  for (const id of group) {
+    const params = Object.values(ctx.functionBodiesRegistry[id]).filter((n) => n.type === 'parameter').map(() => freshVar())
+    const result = freshVar()
+    ctx.recursiveTypes.set(id, { params, result, type: params.reduceRight((rest, p) => tfun(p, rest), result) })
+    ctx.visiting.add(id)
+  }
+  const members = group.map((id) => inferCustomFunctionScheme(ctx.functionBodiesRegistry[id], ctx, id, null, true))
+  let required = members.flatMap((m) => m.retained).map((p) => pred(p.cls, applySubst(ctx.subst, p.type)))
+  try { required = reduce(required) } catch { /* retain unsatisfied constraints for diagnostics */ }
+  for (const member of members) {
+    const type = applySubst(ctx.subst, ctx.recursiveTypes.get(member.fnId).type)
+    const visible = ftv(type)
+    const retained = required.filter((p) => [...ftv(p.type)].every((v) => visible.has(v)))
+    const ambiguous = ambiguitiesIn(required, visible, member.origins)
+    if (ambiguous.length) ctx.ambiguities[member.fnId] = ambiguous
+    ctx.customCache.set(member.fnId, generalize(retained, type))
+  }
+  for (const member of members) {
+    const sch = ctx.customCache.get(member.fnId)
+    const given = sch.preds.map((p, i) => ({ pred: p, expr: { param: i } }))
+    const defaulted = withDefaults(required, ftv(sch.type), ctx.subst)
+    ctx.elab.set(member.fnId, { params: given.length, nodes: elaborateCalls(member.calls, given, ctx, member.fnId, defaulted) })
+  }
+  for (const id of group) { ctx.recursiveTypes.delete(id); ctx.visiting.delete(id) }
 }
 
 /**
@@ -356,7 +420,7 @@ function ambiguitiesIn(preds, visible, origins) {
   for (const v of new Set(bad.flatMap(hidden))) {
     const constraints = reduced.filter((p) => ftv(p.type).has(v))
     const namer = createNamer()
-    const shown = constraints.map((p) => `${p.cls} ${showType(p.type, namer)}`).join(', ')
+    const shown = constraints.map((p) => `${classShown(p.cls)} ${showType(p.type, namer)}`).join(', ')
     const userClass = constraints.some((p) => isUserClass(p.cls))
     const culprits = origins.filter((o) => o.preds.some((p) => ftv(p.type).has(v)))
     const names = [...new Set(culprits.map((o) => o.label))].map((l) => `‘${l}’`).join(', ')
@@ -404,13 +468,18 @@ function elaborateCalls(calls, given, ctx, selfId = null, subst = ctx.subst) {
   const out = {}
   for (const call of calls) {
     if (call.recursive) {
-      if (call.recursive === selfId) out[call.id] = given.map((g) => g.expr)
+      const callee = ctx.customCache.get(call.recursive)
+      if (callee) out[call.id] = callee.preds.map((q) => {
+        const p = pred(q.cls, applySubst(subst, q.type))
+        return evidence(given, p) || { error: `No instance for ${classShown(p.cls)} ${showType(p.type)}` }
+      })
+      else if (call.recursive === selfId) out[call.id] = given.map((g) => g.expr)
       continue
     }
     if (!call.preds.length) continue
     out[call.id] = call.preds.map((q) => {
       const p = pred(q.cls, applySubst(subst, q.type))
-      return evidence(given, p) || { error: `No instance for ${p.cls} ${showType(p.type)}${p.type.kind === 'var' ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` }
+      return evidence(given, p) || { error: `No instance for ${classShown(p.cls)} ${showType(p.type)}${p.type.kind === 'var' ? ' — the type is ambiguous here (fix it by connecting the value to something of a known type)' : ''}` }
     })
   }
   return out
@@ -512,6 +581,8 @@ function resolveNodeType(id, graph, ctx, memo) {
     return entry
   }
   if (node.type === 'function') {
+    const problem = matchProblem(node, graph, ctx.nodesRegistry, ctx.functionBodiesRegistry)
+    if (problem) ctx.broken.push({ graph, nodeId: id, index: -1, message: problem })
     const calleeId = node.sourceFunctionId || node.id
     const recursive = !node.builtin && !ctx.nodesRegistry[calleeId]?.scheme && !ctx.nodesRegistry[calleeId]?.builtin && ctx.visiting.has(calleeId) && !ctx.customCache.has(calleeId) ? calleeId : null
     const sch = schemeFor(node, ctx)
@@ -582,11 +653,34 @@ function resolveNodeType(id, graph, ctx, memo) {
  * `functionBodiesRegistry` (main.js's `functionBodies`) for custom-function
  * schemes reachable from it.
  */
-export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
-  const ctx = { subst: new Map(), customCache: new Map(), visiting: new Set(), nodesRegistry, functionBodiesRegistry, preds: [], invalid: new Map(), pendingLiterals: [], calls: [], elab: new Map(), origins: [], ambiguities: {}, annotationProblems: {}, broken: [] }
+export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph, contextPath = new Set()) {
+  const ctx = { subst: new Map(), customCache: new Map(), visiting: new Set(), recursiveTypes: new Map(), recursiveGroups: recursiveGroups(nodesRegistry, functionBodiesRegistry), nodesRegistry, functionBodiesRegistry, preds: [], invalid: new Map(), pendingLiterals: [], calls: [], elab: new Map(), origins: [], ambiguities: {}, annotationProblems: {}, broken: [] }
   const memo = new Map()
+  let branchResult = null
+  // Branch fields get their types from the match site, including applied type
+  // parameters and outer captures. Looking at a branch must not forget that
+  // context merely because its private body is edited on a nested canvas.
+  const branchId = Object.keys(functionBodiesRegistry).find((id) => functionBodiesRegistry[id] === activeGraph && nodesRegistry[id]?.matchBranch)
+  if (branchId && !contextPath.has(branchId)) {
+    const owner = nodesRegistry[branchId].matchBranch
+    const parent = functionBodiesRegistry[owner.ownerId]
+    const match = parent?.[owner.matchId]
+    const branch = [...(match?.match.branches || []), match?.match.defaultBranch].find((b) => b?.fnId === branchId)
+    if (parent && branch) {
+      const parentPass = inferGraph(nodesRegistry, functionBodiesRegistry, parent, new Set([...contextPath, branchId]))
+      const expected = parentPass.perNode.get(branch.callId)?.paramTypes
+      branchResult = parentPass.perNode.get(match.id)?.resultType
+      Object.values(activeGraph).filter((n) => n.type === 'parameter').forEach((n, i) => {
+        if (expected?.[i]) memo.set(n.id, { kind: 'value', valueType: expected[i] })
+      })
+    }
+  }
   const perNode = new Map()
   const entries = Object.keys(activeGraph).map((id) => [id, resolveNodeType(id, activeGraph, ctx, memo)])
+  if (branchResult && memo.has('output')) {
+    try { ctx.subst = unify(valueTypeOfEntry(memo.get('output')), branchResult, ctx.subst) }
+    catch { ctx.broken.push({ graph: activeGraph, nodeId: 'output', index: -1 }) }
+  }
   settleLiterals(ctx, 0)
   // A function body being looked at directly: its own signature annotations.
   const annotationsHere = annotate(ctx, activeGraph, memo, 0)
@@ -667,5 +761,9 @@ export function inferGraph(nodesRegistry, functionBodiesRegistry, activeGraph) {
     // constructor class), so "mentions one of this node's variables" is the test.
     entry.preds = reducedPreds.filter((p) => [...ftv(p.type)].some((v) => ownVars.has(v)))
   })
-  return { perNode, subst: ctx.subst, preds: resolvedPreds, elaboration, rootParams, schemes: ctx.customCache, ambiguities: { main: topAmbiguities, functions: ctx.ambiguities }, annotations: { here: annotationsHere, functions: ctx.annotationProblems }, brokenEdges: ctx.broken.filter((b) => b.graph === activeGraph).map(({ nodeId, index }) => ({ nodeId, index })) }
+  const brokenFunctions = Object.fromEntries(Object.entries(functionBodiesRegistry).flatMap(([fnId, body]) => {
+    const broken = ctx.broken.filter((b) => b.graph === body).map(({ nodeId, index, message }) => ({ nodeId, index, message }))
+    return broken.length ? [[fnId, broken]] : []
+  }))
+  return { perNode, subst: ctx.subst, preds: resolvedPreds, elaboration, rootParams, schemes: ctx.customCache, ambiguities: { main: topAmbiguities, functions: ctx.ambiguities }, annotations: { here: annotationsHere, functions: ctx.annotationProblems }, brokenFunctions, brokenEdges: ctx.broken.filter((b) => b.graph === activeGraph).map(({ nodeId, index }) => ({ nodeId, index })) }
 }

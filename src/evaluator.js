@@ -25,6 +25,7 @@
 //   plain data once forced (`run` returns them that way), so they can be
 //   stored on a node and survive save/load.
 import { parseLiteral } from './literals.js'
+import { matchProblem } from './matchGraph.js'
 import { cons, just, left, nil, nothing, ordering, pair, right, stdGen, unit } from './dataTypes.js'
 import { METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 
@@ -322,25 +323,18 @@ export function createEvaluator(registry) {
       return go(xs)
     }],
     map: [2, (f, xs) => mapList(f, xs)],
-    filter: [2, (p, xs) => filterList(p, xs)],
-    any: [2, (p, xs) => testList(p, xs, true)],
-    all: [2, (p, xs) => testList(p, xs, false)],
-    take: [2, (n, xs) => takeList(listCount(n, 'take'), xs)],
-    drop: [2, (n, xs) => {
-      let remaining = listCount(n, 'drop')
-      let rest = xs
-      while (remaining-- > 0) {
-        const l = listStep(rest)
-        if (l.ctorIndex === 0) return nil
-        rest = l.args[1]
-      }
-      return force(rest)
-    }],
-    length: [1, (xs) => {
+    // The Foldable functions (length, null, elem, any, all, sum, product,
+    // concat, concatMap, toList) run on the container's elements in order —
+    // a list as itself (lazily), any other container through its foldMap
+    // into the free monoid (listVia).
+    length: [1, (t, [d]) => {
       let n = 0
-      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) n++
+      for (let l = list(listVia(d, t)); l.ctorIndex === 1; l = list(l.args[1])) n++
       return n
     }],
+    toList: [1, (t, [d]) => force(listVia(d, t))],
+    singleton: [1, (x) => cons(x, now(nil))],
+    constFn: [2, (x) => force(x)],
     append: [2, (xs, ys) => appendList(xs, ys)],
     index: [2, (xs, i) => {
       let n = num(i)
@@ -348,6 +342,123 @@ export function createEvaluator(registry) {
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1]), n--) if (n === 0) return just(l.args[0])
       return nothing
     }],
+    uncons: [1, (xs) => {
+      const l = list(xs)
+      return l.ctorIndex === 0 ? nothing : just(now(pair(l.args[0], l.args[1])))
+    }],
+    null: [1, (t, [d]) => list(listVia(d, t)).ctorIndex === 0],
+    // foldl, strict in the accumulator (Data.List's foldl'): same result on total functions, no thunk chain.
+    foldl: [3, (f, z, xs) => {
+      let acc = z
+      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) acc = now(applyValue(f, [acc, l.args[0]]))
+      return force(acc)
+    }],
+    filter: [2, (p, xs) => filterList(p, xs)],
+    reverse: [1, (xs) => {
+      let acc = nil
+      for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) acc = cons(l.args[0], now(acc))
+      return acc
+    }],
+    concat: [1, (t, [d]) => concatMapList(null, listVia(d, t))],
+    concatMap: [2, (f, t, [d]) => concatMapList(f, listVia(d, t))],
+    elem: [2, (x, t, [d, eq]) => anyOf(listVia(d, t), (y) => bool(delay(() => invoke(eq, 'eq', [x, y]))))],
+    any: [2, (p, t, [d]) => testList(p, listVia(d, t), true)],
+    all: [2, (p, t, [d]) => testList(p, listVia(d, t), false)],
+    // getSum . foldMap Sum, as written (definitionViews.js): right-nested, for a monoid that isn't commutative.
+    sum: [1, (t, [f, d]) => listItems(listVia(f, t)).reduceRight((acc, x) => invoke(toClass(d, 'AddSemigroup'), 'plus', [x, now(acc)]), invoke(toClass(d, 'AddMonoid'), 'addZero', []))],
+    product: [1, (t, [f, d]) => listItems(listVia(f, t)).reduceRight((acc, x) => invoke(toClass(d, 'MulSemigroup'), 'times', [x, now(acc)]), invoke(toClass(d, 'MulMonoid'), 'mulOne', []))],
+    // mconcat = foldr (<>) mempty
+    mconcat: [1, (xs, [d]) => foldList(xs, () => memptyAt(d), (x, rest) => mappendAt(d, x, rest))],
+
+    // Functor, Applicative, Monad, Traversable: the functions written with
+    // their methods (Data.Functor, Control.Applicative, Control.Monad).
+    fmapOp: [2, (f, x, [d]) => invoke(d, 'fmap', [f, x])],
+    constMap: [2, (x, t, [d]) => invoke(d, 'fmap', [now(fn('constFn', x)), t])],
+    liftA2: [3, (h, x, y, [d]) => invoke(d, 'ap', [delay(() => fmapAt(d, h, x)), y])],
+    thenA: [2, (x, y, [d]) => invoke(d, 'ap', [delay(() => fmapAt(d, now(fn('constFn', now(fn('identity')))), x)), y])],
+    returnM: [1, (x, [d]) => invoke(toClass(d, 'Applicative'), 'pure', [x])],
+    thenM: [2, (x, y, [d]) => invoke(d, 'bind', [x, now(fn('constFn', y))])],
+    kleisli: [3, (f, g, x, [d]) => invoke(d, 'bind', [delay(() => applyValue(f, [x])), g])],
+    joinM: [1, (mm, [d]) => invoke(d, 'bind', [mm, now(fn('identity'))])],
+    when: [2, (c, act, [d]) => (bool(c) ? force(act) : invoke(d, 'pure', [now(unit)]))],
+    mapM_: [2, (k, t, [f, d]) => {
+      const go = (u) => {
+        const l = list(u)
+        return l.ctorIndex === 0 ? invoke(toClass(d, 'Applicative'), 'pure', [now(unit)]) : invoke(d, 'bind', [delay(() => applyValue(k, [l.args[0]])), now(fn('constFn', delay(() => go(l.args[1]))))])
+      }
+      return go(listVia(f, t))
+    }],
+    sequenceA: [1, (t, [d, a]) => invoke(d, 'traverse', [now(fn('identity')), t], [a])],
+    forT: [2, (t, h, [d, a]) => invoke(d, 'traverse', [h, t], [a])],
+    mapM: [2, (h, t, [d, m]) => invoke(d, 'traverse', [h, t], [toClass(m, 'Applicative')])],
+    replicateM: [2, (n, act, [d]) => {
+      const go = (k) => (k <= 0 ? invoke(d, 'pure', [now(nil)]) : invoke(d, 'ap', [delay(() => fmapAt(d, now(fn('cons')), act)), delay(() => go(k - 1))]))
+      return go(num(n))
+    }],
+    unit: [0, () => unit],
+    lerp: [3, (t, x, y, [d]) => {
+      const plus = (p, q) => invoke(toClass(d, 'AddSemigroup'), 'plus', [p, q])
+      return plus(x, delay(() => invoke(d, 'scale', [t, delay(() => plus(y, delay(() => invoke(toClass(d, 'AddGroup'), 'negate', [x]))))])))
+    }],
+    widgetMap: [2, (f, t) => widgetMap(f, t)],
+    // Control.Monad.State. A State value wraps its s → (a, s) function; the
+    // st* builtins are those functions, for closures built here.
+    state: [1, (f) => wrapped('State', f)],
+    stateGet: [0, () => wrapped('State', now(fn('stGet')))],
+    statePut: [1, (v) => wrapped('State', now(fn('stPut', v)))],
+    stateModify: [1, (f) => wrapped('State', now(fn('stModify', f)))],
+    stateGets: [1, (f) => wrapped('State', now(fn('stGets', f)))],
+    evalState: [2, (m, st) => force(force(runStateOf(m, st)).args[0])],
+    execState: [2, (m, st) => force(force(runStateOf(m, st)).args[1])],
+    stGet: [1, (st) => pair(st, st)],
+    stPut: [2, (v) => pair(now(unit), v)],
+    stModify: [2, (f, st) => pair(now(unit), delay(() => applyValue(f, [st])))],
+    stGets: [2, (f, st) => pair(delay(() => applyValue(f, [st])), st)],
+    stPure: [2, (x, st) => pair(x, st)],
+    stMap: [3, (g, m, st) => {
+      const r = runStateOf(m, st)
+      return pair(delay(() => applyValue(g, [delay(() => force(force(r).args[0]))])), delay(() => force(force(r).args[1])))
+    }],
+    stAp: [3, (mf, mx, st) => {
+      const r1 = runStateOf(mf, st)
+      const r2 = runStateOf(mx, delay(() => force(force(r1).args[1])))
+      return pair(delay(() => applyValue(force(r1).args[0], [delay(() => force(force(r2).args[0]))])), delay(() => force(force(r2).args[1])))
+    }],
+    stBind: [3, (m, k, st) => {
+      const r = runStateOf(m, st)
+      return force(runStateOf(delay(() => applyValue(k, [delay(() => force(force(r).args[0]))])), delay(() => force(force(r).args[1]))))
+    }],
+    take: [2, (n, xs) => takeList(listCount(n, 'take'), xs)],
+    drop: [2, (n, xs) => dropList(listCount(n, 'drop'), xs)],
+    splitAt: [2, (n, xs) => pair(delay(() => takeList(listCount(n, 'splitAt'), xs)), delay(() => dropList(listCount(n, 'splitAt'), xs)))],
+    replicate: [2, (n, x) => {
+      const go = (k) => (k <= 0 ? nil : cons(x, delay(() => go(k - 1))))
+      return go(num(n))
+    }],
+    enumFromTo: [2, (m, n, [d]) => {
+      const go = (t) => (bool(delay(() => invoke(toClass(d, 'Ord'), 'gt', [t, n]))) ? nil : cons(t, delay(() => go(delay(() => invoke(toClass(d, 'AddSemigroup'), 'plus', [t, now(fromIntegerVia(d, 1))]))))))
+      return go(m)
+    }],
+    zip: [2, (xs, ys) => zipWithList((a, b) => pair(a, b), xs, ys)],
+    zipWith: [3, (f, xs, ys) => zipWithList((a, b) => applyValue(f, [a, b]), xs, ys)],
+    lookup: [2, (key, pairs, [d]) => {
+      for (let l = list(pairs); l.ctorIndex === 1; l = list(l.args[1])) {
+        const p = force(l.args[0])
+        if (bool(delay(() => invoke(d, 'eq', [key, p.args[0]])))) return just(p.args[1])
+      }
+      return nothing
+    }],
+    insertBy: [3, (cmp, x, ys) => {
+      const go = (t) => {
+        const l = list(t)
+        if (l.ctorIndex === 0) return cons(x, now(nil))
+        return ordered(cmp, x, l.args[0]) > 0 ? cons(l.args[0], delay(() => go(l.args[1]))) : cons(x, now(l))
+      }
+      return go(ys)
+    }],
+    // Stable, as insertion by foldr (insertBy cmp) [] is.
+    sortBy: [2, (cmp, xs) => fromItems(listItems(xs).sort((x, y) => ordered(cmp, x, y)))],
+    sort: [1, (xs, [d]) => fromItems(listItems(xs).sort((x, y) => cmpAt(d, x, y)))],
     pair: [2, (a, b) => pair(a, b)],
     fst: [1, (p) => force(force(p).args[0])],
     snd: [1, (p) => force(force(p).args[1])],
@@ -420,6 +531,23 @@ export function createEvaluator(registry) {
 
   const NO_SUBSCRIPTIONS = { kind: 'closure', callee: '#noSubscriptions', args: [null] }
 
+  // A Foldable's elements as a list (a thunk): a list is itself, anything
+  // else is folded into the free monoid — toList = foldMap singleton.
+  const LIST_MONOID = { kind: 'dict', key: 'Monoid@List', sub: [] }
+  // fmap on a widget tree: every Button's message goes through f, the rest keeps its shape.
+  function widgetMap(f, t) {
+    const w = force(t)
+    if (w.ctor === 'Button') return { ...w, args: [w.args[0], delay(() => applyValue(f, [w.args[1]]))] }
+    if (w.ctor === 'Column' || w.ctor === 'Row') return { ...w, args: [delay(() => mapList(now(fn('widgetMap', f)), w.args[0]))] }
+    if (w.ctor === 'Tinted') return { ...w, args: [w.args[0], delay(() => widgetMap(f, w.args[1]))] }
+    return w
+  }
+  // runState m s, as a thunk of the (a, s) pair.
+  const runStateOf = (m, st) => delay(() => applyValue(force(m).args[0], [st]))
+  // Previously saved list-only closures have no Foldable dictionary. Keep
+  // their structural List path; non-list containers still use their instance.
+  const listVia = (d, t) => (!d || d.key === 'Foldable@List' ? t : delay(() => invoke(d, 'foldMap', [now(fn('singleton')), t], [LIST_MONOID])))
+
   function mapList(f, xs) {
     const go = (t) => {
       const l = list(t)
@@ -433,6 +561,53 @@ export function createEvaluator(registry) {
       return l.ctorIndex === 0 ? force(ys) : cons(l.args[0], delay(() => go(l.args[1])))
     }
     return go(xs)
+  }
+  /** concatMap f xs, lazily (`f` null: concat). */
+  function concatMapList(f, xs) {
+    const go = (t) => {
+      for (let l = list(t); l.ctorIndex === 1; l = list(l.args[1])) {
+        const inner = f ? delay(() => applyValue(f, [l.args[0]])) : l.args[0]
+        if (list(inner).ctorIndex === 1) return appendList(inner, delay(() => go(l.args[1])))
+      }
+      return nil
+    }
+    return go(xs)
+  }
+  function dropList(n, xs) {
+    let rest = xs
+    for (; n > 0; n--) {
+      const l = listStep(rest)
+      if (l.ctorIndex === 0) return nil
+      rest = l.args[1]
+    }
+    return force(rest)
+  }
+  function zipWithList(f, xs, ys) {
+    const go = (s, t) => {
+      const a = list(s)
+      if (a.ctorIndex === 0) return nil
+      const b = list(t)
+      return b.ctorIndex === 0 ? nil : cons(delay(() => f(a.args[0], b.args[0])), delay(() => go(a.args[1], b.args[1])))
+    }
+    return go(xs, ys)
+  }
+  /** Whether `test` holds for some element of `xs` — stops at the first (so works on an infinite list that has one). */
+  function anyOf(xs, test) {
+    for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) if (test(l.args[0])) return true
+    return false
+  }
+  /** The element thunks of a finite list. */
+  function listItems(xs) {
+    const items = []
+    for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) items.push(l.args[0])
+    return items
+  }
+  const fromItems = (items) => items.reduceRight((tail, x) => cons(x, now(tail)), nil)
+  /** `cmp x y` as -1, 0 or 1 (LT, EQ, GT). */
+  function ordered(cmp, x, y) {
+    const o = force(applyValue(cmp, [x, y]))
+    if (!isData(o) || o.type !== 'Ordering') throw new EvalError(`Expected an Ordering, got ${show(o)}`)
+    return o.ctorIndex - 1
   }
 
   // Reuse the runtime's closures and lazy list cells, never JS coercions or
@@ -817,7 +992,25 @@ export function createEvaluator(registry) {
   }
   const lazyMaybe = (t) => { const v = force(t); if (!isData(v) || v.type !== 'Maybe') throw new EvalError(`Expected a Maybe, got ${show(v)}`); return v }
   const foldList = (t, nilCase, consCase) => { const go = (u) => { const l = list(u); return l.ctorIndex === 0 ? nilCase() : consCase(l.args[0], delay(() => go(l.args[1]))) }; return go(t) }
+  // Data.Monoid's wrappers: combine what they wrap, and wrap it again.
+  const wrapped = (type, v) => ({ kind: 'data', type, ctor: type, ctorIndex: 0, args: [v] })
+  const inside = (t) => delay(() => force(force(t).args[0]))
   const PRIM = {
+    Sum: { mappend: ([x, y], d) => wrapped('Sum', delay(() => invoke(d.sub[0], 'plus', [inside(x), inside(y)]))), mempty: (_, d) => wrapped('Sum', delay(() => invoke(d.sub[0], 'addZero', []))) },
+    Product: { mappend: ([x, y], d) => wrapped('Product', delay(() => invoke(d.sub[0], 'times', [inside(x), inside(y)]))), mempty: (_, d) => wrapped('Product', delay(() => invoke(d.sub[0], 'mulOne', []))) },
+    Min: { mappend: ([x, y], d) => (leAt(d.sub[0], inside(x), inside(y)) ? force(x) : force(y)) },
+    Max: { mappend: ([x, y], d) => (leAt(d.sub[0], inside(x), inside(y)) ? force(y) : force(x)) },
+    First: { mappend: ([x]) => force(x) },
+    Last: { mappend: ([, y]) => force(y) },
+    Any: { mappend: ([x, y]) => wrapped('Any', delay(() => bool(inside(x)) || bool(inside(y)))), mempty: () => wrapped('Any', now(false)) },
+    All: { mappend: ([x, y]) => wrapped('All', delay(() => bool(inside(x)) && bool(inside(y)))), mempty: () => wrapped('All', now(true)) },
+    Endo: { mappend: ([x, y]) => wrapped('Endo', now(fn('compose', inside(x), inside(y)))), mempty: () => wrapped('Endo', now(fn('identity'))) },
+    State: {
+      fmap: ([g, m]) => wrapped('State', now(fn('stMap', g, m))),
+      pure: ([x]) => wrapped('State', now(fn('stPure', x))),
+      ap: ([mf, mx]) => wrapped('State', now(fn('stAp', mf, mx))),
+      bind: ([m, k]) => wrapped('State', now(fn('stBind', m, k))),
+    },
     Char: { eq: NUM.eq, compare: NUM.compare, showsPrec: STOCK.showsPrec },
     StdGen: { showsPrec: STOCK.showsPrec },
     List: {
@@ -866,6 +1059,7 @@ export function createEvaluator(registry) {
     Picture: { mappend: ([x, y]) => picture('Pictures', 6, [x, y]), mempty: () => picture('Blank', 0, []) }, // gloss: drawn one over the other
     // Subscriptions: listening to both; fmap relabels messages with a hidden Map.
     Sub: { mappend: ([x, y]) => sub('Batch', 3, [x, y]), mempty: () => sub('None', 0, []), fmap: ([f, t]) => sub('Map', 4, [f, t]) },
+    Widget: { fmap: ([f, t]) => widgetMap(f, t) },
   }
   /** The primitive implementing method `m` of builtin instance `key`, or undefined. */
   function prim(key, m) {
@@ -1025,6 +1219,8 @@ export function createEvaluator(registry) {
   }
 
   function functionNodeValue(graph, node, env) {
+    const problem = matchProblem(node, graph, registry.nodes, registry.functionBodies || {})
+    if (problem) throw new EvalError(problem)
     const callee = node.sourceFunctionId || node.id
     const arity = definition(callee).builtin === 'listOf' ? (node.params || []).length : arityOf(callee)
     const args = Array(arity).fill(null)

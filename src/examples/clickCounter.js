@@ -34,7 +34,7 @@ export const CLICK_COUNTER_TYPES = `data Wallet = Wallet { clicks :: Int } deriv
 data Model = Model { wallet :: Wallet, perClick :: Int, rate :: Int, elapsed :: Int } deriving stock (Show)
 data Msg = Click | Buy | BuyAuto deriving stock (Eq, Show)`
 
-const FUNCTIONS = {
+export const CLICK_COUNTER_FUNCTIONS = {
   onClick: [['m'], [
     ref('m2', 'm'), call('pc', T('Model', 'perClick'), 'perClick', [n('m2')]), call('w', T('Wallet', 'Wallet'), 'Wallet', [n('pc')]),
     call('add', 'plus', '(+)', [n('w'), '']), call('out', T('Model', 'over wallet'), 'over wallet', [n('add'), n('m')]),
@@ -100,5 +100,5 @@ const FUNCTIONS = {
  * builtins when the project is loaded).
  */
 export function buildClickCounter() {
-  return buildProject(CLICK_COUNTER_TYPES, FUNCTIONS)
+  return buildProject(CLICK_COUNTER_TYPES, CLICK_COUNTER_FUNCTIONS)
 }

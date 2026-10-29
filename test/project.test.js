@@ -14,7 +14,7 @@ test('snapshots round-trip', () => {
   const text = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, types, classes, entry: 'add', outputId: 3 })
   const instances = { Show: [{ head: 'Score', context: [], methods: { show: 'showScore' } }] }
   const text2 = serializeProject({ nodes: builtinNodes, functionBodies: builtinBodies, types, classes, instances, entry: 'add', outputId: 3 })
-  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, types, classes, instances: {}, entry: 'add', outputId: 3 })
+  assert.deepEqual(parseProject(text), { nodes: builtinNodes, functionBodies: builtinBodies, types, classes, instances: {}, layouts: {}, entry: 'add', outputId: 3 })
   assert.deepEqual(parseProject(text2).instances, instances)
 })
 
@@ -116,4 +116,10 @@ test('fromIntegral and round moved from the main canvas to the Prelude: older sa
   assert.equal(project.functionBodies.round.d.sourceFunctionId, 'prelude:fromIntegral')
   assert.ok(project.nodes.round, 'a function of your own named round stays')
   assert.equal(project.functionBodies.round.e.sourceFunctionId, 'round', '…and calls to it too')
+})
+
+test('declaration graph layouts are saved with the project', () => {
+  const layouts = { 'type:Shape': { type: { x: 640, y: 0 }, 'ctor:Circle': { x: 320, y: -60 } } }
+  assert.deepEqual(parseProject(serializeProject({ nodes: {}, functionBodies: {}, layouts })).layouts, layouts)
+  assert.deepEqual(parseProject('{"version": 1, "nodes": {}, "functionBodies": {}, "layouts": 3}').layouts, {})
 })

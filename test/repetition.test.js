@@ -190,3 +190,20 @@ test('learning keeps fifteen original lessons and runnable additional helper exa
     assert.ok(example.steps.length>=3 && example.caution && example.experiment && example.explanation)
   }
 })
+
+test('merged Foldable predicates retain list behavior and also run on Maybe', () => {
+  for (const [fn,ctor,value,expected] of [['any','just','2','True'],['all','just','3','False'],['any','nothing',null,'False'],['all','nothing',null,'True']]) {
+    const graph=g(c('p','eq',['2','']),c('container',`prelude:${ctor}`,value===null?[]:[value]),c('result',`prelude:${fn}`,[n('p'),n('container')]))
+    assert.equal(run(graph),expected)
+  }
+})
+
+test('saved list-only predicate closures without Foldable dictionaries remain usable', () => {
+  const ev=createEvaluator(reg())
+  const values=ev.run(g(xs([0,1])),'xs')
+  for (const [fn,expected] of [['any',true],['all',false]]) {
+    const closure=ev.run(g(c('p','isZero',['']),c('partial',`prelude:${fn}`,[n('p'),''])),'partial')
+    const restored=parseProject(serializeProject({nodes:{saved:{id:'saved',type:'curried',closure}},functionBodies:{}}))
+    assert.equal(ev.apply(restored.nodes.saved.closure,[values]),expected)
+  }
+})

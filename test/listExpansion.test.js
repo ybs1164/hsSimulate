@@ -12,7 +12,7 @@ import { createExecutionTrace, createExecutionPlayback } from '../src/executionT
 import { serializeProject, parseProject } from '../src/project.js'
 import { call, n, body } from '../src/examples/build.js'
 
-const basics = Object.fromEntries(['eq', 'plus', 'times', 'apply', 'select', 'identity'].map(id => [id, { id, type: 'function', builtin: id, label: id }]))
+const basics = Object.fromEntries(['eq', 'geq', 'minus', 'plus', 'times', 'apply', 'select', 'identity'].map(id => [id, { id, type: 'function', builtin: id, label: id }]))
 const registry = () => ({ nodes: { ...libraryDefs, ...basics }, functionBodies: {} })
 const graph = (...nodes) => Object.fromEntries(nodes.map(node => [node.id, node]))
 const c = (id, fn, slots = []) => call(id, fn, fn, slots)
@@ -178,7 +178,7 @@ test('runtime list errors identify the new node; fixing and rerunning clears err
   assert.ok(second.events.every(e => e.phase !== 'error'))
 })
 
-test('filter definition graph and take/drop primitive views preserve runtime behavior', () => {
+test('filter/take/drop definition graphs preserve runtime behavior after merging the full Prelude', () => {
   for (const fn of ['filter', 'take', 'drop']) {
     const reg = registry(), view = buildDefinitionView(preludeDefs[`prelude:${fn}`], id => reg.nodes[id])
     Object.assign(reg.nodes, view.defs); Object.assign(reg.functionBodies, view.bodies)

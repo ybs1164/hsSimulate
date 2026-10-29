@@ -35,6 +35,10 @@ const base = {
   'prelude:append': fn('prelude:append', 'append', '(++)', ['xs', 'ys']),
   'prelude:index': fn('prelude:index', 'index', '(!?)', ['xs', 'i']),
   'prelude:red': fn('prelude:red', 'red', 'red', []),
+  // length is a fold into Sum (Data.Monoid's wrapper).
+  'prelude:foldMap': fn('prelude:foldMap', 'foldMap', 'foldMap', ['f', 'xs']),
+  'type:Sum:Sum': preludeTypeDefs['type:Sum:Sum'],
+  'type:Sum:getSum': preludeTypeDefs['type:Sum:getSum'],
   'prelude:maybe': fn('prelude:maybe', 'maybe', 'maybe', ['default', 'f', 'm']),
 }
 
@@ -71,7 +75,7 @@ test('a view prints as the Haskell definition it is, with the real type', () => 
     const view = buildDefinitionView(base[defId], (id) => base[id])
     return printDefinition(view.viewId, { ...base, ...view.defs }, view.bodies)
   }
-  assert.equal(print('prelude:length'), 'length xs = foldr (\\x n -> n + 1) 0 xs')
+  assert.equal(print('prelude:length'), 'length xs = getSum (foldMap (\\x -> Sum 1) xs)')
   assert.equal(print('prelude:append'), '(++) xs ys = foldr (:) ys xs')
   assert.equal(print('prelude:map'), 'map f xs = foldr ((\\f x acc -> apply f x : acc) f) [] xs')
   assert.equal(print('prelude:red'), 'red = rgb 1 0 0')

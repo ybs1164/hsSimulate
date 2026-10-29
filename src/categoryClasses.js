@@ -11,6 +11,7 @@
 //   Traversable,
 //   Applicative, Monad
 import { declareClass, declareInstance } from './classEnv.js'
+import { BUILTIN_SHAPES } from './dataTypes.js'
 import { pred, tapp, tcon, tlist, ttuple, tvar } from './typeSystem.js'
 
 declareClass('Semigroup', [])
@@ -50,11 +51,25 @@ for (const t of ['Bool', 'Int', 'Integer', 'Word', 'Natural', 'Float', 'Double',
   declareInstance('Lattice', tcon(t))
 }
 for (const t of ['Float', 'Double']) declareInstance('VectorSpace', tcon(t))
+// A pair of vectors is a vector, componentwise — the product (a biproduct)
+// of abelian groups, and so of vector spaces: a 2D position or velocity is
+// `(Double, Double)`, added with (+) and scaled with (*^).
+{
+  const $x = tvar('$a')
+  const $y = tvar('$b')
+  const pointwise = { how: 'pointwise', type: '(,)', shape: BUILTIN_SHAPES['(,)'] }
+  for (const cls of ['AddSemigroup', 'AddMonoid', 'AddCommutativeMonoid', 'AddGroup', 'AddAbelianGroup', 'VectorSpace']) {
+    declareInstance(cls, ttuple($x, $y), [pred(cls, $x), pred(cls, $y)], pointwise)
+  }
+}
 
 // Subscriptions: listening to two things is their monoid product; fmap relabels messages.
 declareInstance('Semigroup', app('Sub', $a))
 declareInstance('Monoid', app('Sub', $a))
 declareInstance('Functor', tcon('Sub'))
+// Widgets: fmap relabels every button's message (Elm's Html.map), so a
+// view written for one message type is embedded in another's.
+declareInstance('Functor', tcon('Widget'))
 
 // The containers: lists, Maybe, `Either e` and `(,) w` (the writer, an
 // applicative and a monad when w is a monoid), as in base.
@@ -67,6 +82,23 @@ for (const [f, monoidal] of containers) {
 declareInstance('Semigroup', tcon('Ordering'))
 declareInstance('Monoid', tcon('Ordering'))
 declareInstance('Semigroup', tapp(app('Either', $a), $b))
+
+// Data.Monoid's wrappers (library.js): the ways one carrier combines,
+// told apart by type. Sum and Product take the additive and multiplicative
+// monoids of the numeric tower; Min and Max the order (a semigroup only:
+// an unbounded type has no identity — `Maybe (Max a)` adjoins one);
+// First and Last keep an end; Any and All are Bool's (||) and (&&);
+// Endo a is the monoid of a → a under composition (End(a) in the category).
+declareInstance('Semigroup', app('Sum', $a), [pred('AddSemigroup', $a)])
+declareInstance('Monoid', app('Sum', $a), [pred('AddMonoid', $a)])
+declareInstance('Semigroup', app('Product', $a), [pred('MulSemigroup', $a)])
+declareInstance('Monoid', app('Product', $a), [pred('MulMonoid', $a)])
+for (const w of ['Min', 'Max']) declareInstance('Semigroup', app(w, $a), [pred('Ord', $a)])
+for (const w of ['First', 'Last']) declareInstance('Semigroup', app(w, $a))
+for (const w of ['Any', 'All']) for (const cls of ['Semigroup', 'Monoid']) declareInstance(cls, tcon(w))
+for (const cls of ['Semigroup', 'Monoid']) declareInstance(cls, app('Endo', $a))
+// State s: the state monad, s → (a, s) — the monad of the adjunction (− × s) ⊣ (s → −).
+for (const cls of ['Functor', 'Applicative', 'Monad']) declareInstance(cls, app('State', $a))
 
 /**
  * Classes a product (single-constructor record) may derive pointwise, by

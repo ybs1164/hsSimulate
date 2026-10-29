@@ -51,7 +51,7 @@ export function tlist(elem) {
 }
 
 /** How many type arguments each constructor takes (its kind is `*` with that many `* ->` in front). */
-export const constructorArity = { List: 1, Maybe: 1, Either: 2, Widget: 1, Program: 2, Sub: 1, '(,)': 2 }
+export const constructorArity = { List: 1, Maybe: 1, Either: 2, Widget: 1, Program: 2, Sub: 1, '(,)': 2, Sum: 1, Product: 1, Min: 1, Max: 1, First: 1, Last: 1, Endo: 1, State: 2 }
 
 // Arities of user-declared type constructors (`data Pair a = …` takes one),
 // and their kinds, replaced wholesale whenever the declarations change (see
@@ -285,6 +285,15 @@ export function showType(type, namer = createNamer()) {
   return go(type, false, false)
 }
 
+// The name a class is printed under. Identity unless the app installs its
+// display aliases (classGroups.js: `Ring` shown as Haskell's `Num`), so the
+// engine and its tests keep the structural names.
+let classLabeler = (cls) => cls
+/** Print classes through `fn` (the app's display aliases). */
+export function setClassLabels(fn) { classLabeler = fn }
+/** The name class `cls` is printed under. */
+export const classShown = (cls) => classLabeler(cls)
+
 /**
  * Prints a qualified type Haskell-style: `AddGroup a => a -> a -> a`,
  * `(EuclideanRing a, Ring b) => a -> b`. Pass the same `namer` used for the body
@@ -294,7 +303,7 @@ export function showType(type, namer = createNamer()) {
 export function showQual(preds, type, namer = createNamer()) {
   const body = showType(type, namer)
   if (!preds.length) return body
-  const parts = preds.map((p) => `${p.cls} ${showType(p.type, namer)}`)
+  const parts = preds.map((p) => `${classShown(p.cls)} ${showType(p.type, namer)}`)
   const context = parts.length > 1 ? `(${parts.join(', ')})` : parts[0]
   return `${context} ⇒ ${body}`
 }

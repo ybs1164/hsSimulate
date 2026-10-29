@@ -25,6 +25,9 @@ export const BUILTIN_SHAPES = {
   Color: [{ name: 'RGB', fields: field(Double, Double, Double) }],
   Ordering: [{ name: 'LT', fields: [] }, { name: 'EQ', fields: [] }, { name: 'GT', fields: [] }],
   Either: [{ name: 'Left', fields: field($a) }, { name: 'Right', fields: field($b) }],
+  // Data.Monoid's wrappers (library.js): one record field each.
+  ...Object.fromEntries(['Sum', 'Product', 'Min', 'Max', 'First', 'Last'].map((w) => [w, [{ name: w, record: true, fieldNames: [`get${w}`], fields: field($a) }]])),
+  ...Object.fromEntries(['Any', 'All'].map((w) => [w, [{ name: w, record: true, fieldNames: [`get${w}`], fields: field(tcon('Bool')) }]])),
 }
 const stock = (type) => ({ how: 'stock', type, shape: BUILTIN_SHAPES[type] })
 
@@ -39,6 +42,9 @@ for (const cls of ['Eq', 'Ord', 'Show']) {
   declareInstance(cls, tapp(tcon('Maybe'), $a), [pred(cls, $a)], stock('Maybe'))
   declareInstance(cls, tcon('Ordering'), [], stock('Ordering'))
   declareInstance(cls, tapp(tapp(tcon('Either'), $a), $b), [pred(cls, $a), pred(cls, $b)], stock('Either'))
+  // The wrappers compare and show as the records they are (`Sum {getSum = 3}`), as GHC derives them.
+  for (const w of ['Sum', 'Product', 'Min', 'Max', 'First', 'Last']) declareInstance(cls, tapp(tcon(w), $a), [pred(cls, $a)], stock(w))
+  for (const w of ['Any', 'All']) declareInstance(cls, tcon(w), [], stock(w))
 }
 
 export const nil = { kind: 'data', type: 'List', ctor: '[]', ctorIndex: 0, args: [] }

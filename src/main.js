@@ -3,19 +3,24 @@ import { initLearningPanel } from './learningPanel.js'
 import { initWorkspaceResize } from './workspaceResize.js'
 import { createExecutionTrace, createExecutionPlayback } from './executionTrace.js'
 import { createBlankProject, isManagedMain, managedMain, MAIN_GUIDANCE, MAIN_PROTECTION, programRunTarget, returnsProgram } from './programEntry.js'
-import { applySubst, constructorArity, ftv, generalize, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
+import { initExercisePanel } from './exercisePanel.js'
+import { findExerciseFunction } from './grader.js'
+import { applySubst, classShown, constructorArity, constructorKind, showKind, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
+import { branchPattern, captureMatchValue, convertCaseToMatch, copyOwnedFunctions, createMatch, deleteMatch, ensureTypeKeys, matchCaseId, matchProblem, nameRecordFields, pasteOwnedFunctions, remapMatchNode, renameMatchBinder, setMatchDefault } from './matchGraph.js'
 import { builtinSchemes, listOfScheme } from './builtinSchemes.js'
 import { classArity, reduce, predsOnVar, pickDefault, entails, findInstance, headName, listInstances, literalClass, numericTypes, setDynamicClasses, setDynamicInstances, superclassesOf } from './prelude.js'
 import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, renameTypeInInstances, showHead, writtenEnvironment, writtenMethodProblem, writtenMinimalProblem } from './classDecls.js'
-import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, renameTypeReferences, typeArities, typeKinds } from './typeDecls.js'
+import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, paramKind, renameTypeReferences, typeArities, typeKinds } from './typeDecls.js'
+import { classGraph, layoutGraph, layoutKey, renameLayout, typeGraph, universeGraph } from './declGraph.js'
+import { drawDeclGraph } from './declCanvas.js'
 import { TAKEABLE_TYPES, customizeDerived, isPristineOverride, libraryTypeProblem, migrateTypeEdit, primLabel, primitiveDefinitions, resetDerived, takeOverType } from './typeEdits.js'
 import { BUILTIN_CLASSES, METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
-import { asciiType, printDefinitionTokens } from './haskellPrint.js'
+import { asciiType, printDefinitionTokens, printNodeText } from './haskellPrint.js'
 import { buildDefinitionView, isEditableView, restoreDefinition, takeOverDefinition, viewIdOf } from './definitionViews.js'
 import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
 import { ParseError, parseValue } from './valueParser.js'
@@ -23,13 +28,23 @@ import { parseLiteral } from './literals.js'
 import { buildClickCounter } from './examples/clickCounter.js'
 import { buildBlankGame } from './examples/blankGame.js'
 import { buildDice } from './examples/dice.js'
+import { buildBlackjack } from './examples/blackjack.js'
+import { buildVending } from './examples/vending.js'
+import { buildNim } from './examples/nim.js'
+import { buildDamage } from './examples/damage.js'
+import { buildRps } from './examples/rps.js'
+import { buildSimon } from './examples/simon.js'
+import { buildHighLow } from './examples/highLow.js'
 import { renderWidget } from './player.js'
 import { PRELUDE, libraryDefs, preludeDefs, preludeTypeDefs, preludeTypes } from './library.js'
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
-const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
+const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './matchGraph.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
+import { BUILTIN_GROUPS, CLASS_NOTES, classLabel } from './classGroups.js'
+// Classes print under their Haskell names (Ring as Num, …) everywhere the app shows a type.
+setClassLabels(classLabel)
 
 const app = document.querySelector('#app')
 
@@ -37,42 +52,91 @@ app.innerHTML = `
   <main class="shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark">λ</span><span>hs / simulate</span><span class="beta">BETA</span></div>
-      <div class="top-actions"><span class="status-dot"></span><span>LOCAL RUNTIME</span><button class="icon-button" aria-label="Settings">⚙</button><button class="avatar">YS</button></div>
+      <div class="top-actions"><button class="tool-button" id="help">도움말</button><button class="tool-button" id="toggle-inspector" aria-controls="inspector-panel" aria-expanded="true">속성 패널</button></div>
     </header>
     <section class="workspace">
       <aside class="sidebar">
-        <div class="side-heading"><div><span class="eyebrow">WORKSPACE</span><h1>Untitled graph</h1></div><button class="more">•••</button></div>
-        <div class="search"><span>⌕</span><input aria-label="Search nodes" placeholder="Search nodes" /><kbd>⌘ K</kbd></div>
+        <div class="side-heading"><div><span class="eyebrow">작업 공간</span><h1>이름 없는 그래프</h1></div></div>
+        <div class="search"><span>⌕</span><input aria-label="블록 검색" placeholder="블록 검색" /><kbd data-shortcut="K"></kbd></div>
         <nav class="node-library">
-          <div class="library-title" id="parameter-title" hidden><span>PARAMETERS</span></div>
+          <div class="library-title"><span>값 추가</span></div>
+          <div id="value-library">
+          <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>수</b><small>Int · Double · Rational …</small></span></button>
+          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>문자열</b><small>String = [Char]</small></span></button>
+          <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>리스트</b><small>[a, b, c]</small></span></button>
+          <button class="library-item" data-type="lambda"><span class="lib-icon function-icon">λ</span><span><b>람다</b><small>\\x -> … (이름 없는 함수)</small></span></button>
+          <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Bool</b><small>True · False</small></span></button></div>
+          <div class="library-title" id="parameter-title" hidden><span>매개변수</span></div>
           <div id="parameter-library"></div>
-          <div class="library-title"><span>NODES</span><button class="add-node" aria-label="Add node">+</button></div>
+          <div class="library-title"><span>함수 · 열기 / 추가</span><button class="add-node" aria-label="함수 만들기" title="함수 만들기">+</button></div>
           <div id="function-library"></div>
-          <div class="library-title types-title"><span>TYPES</span><button class="add-type" aria-label="Declare a type" title="Declare a type — defined by its constructor functions">+</button></div>
+          <details class="library-section" id="types-section"><summary>타입</summary><div class="library-title types-title"><span>타입 선언</span><button class="open-universe" aria-label="타입 우주" title="타입 우주 — 모든 타입과 클래스를 한 그래프로">◎</button><button class="add-type" aria-label="타입 선언" title="타입 선언 — 생성자 함수로 정의해요">+</button></div>
           <div id="type-palette"></div>
-          <div id="type-library"></div>
-          <div class="library-title types-title"><span>CLASSES</span><button class="add-class" aria-label="Declare a class" title="Declare a class — methods each instance implements">+</button></div>
+          <div id="type-library"></div></details>
+          <details class="library-section" id="classes-section"><summary>클래스</summary><div class="library-title types-title"><span>클래스 선언</span><button class="open-universe" aria-label="타입 우주" title="타입 우주 — 모든 타입과 클래스를 한 그래프로">◎</button><button class="add-class" aria-label="클래스 선언" title="클래스 선언 — 인스턴스마다 구현할 메서드">+</button></div>
           <div id="class-palette"></div>
-          <div id="class-library"></div>
-          <div class="library-title types-title"><span>PRELUDE</span></div>
-          <div id="prelude-library"></div>
-          <button class="library-item" data-type="number"><span class="lib-icon number-icon">#</span><span><b>Numbers</b><small>Int · Double · Rational …</small></span></button>
-          <button class="library-item" data-type="text"><span class="lib-icon text-icon">Aa</span><span><b>Text</b><small>String = [Char]</small></span></button>
-          <button class="library-item" data-type="list"><span class="lib-icon list-icon">[ ]</span><span><b>Lists</b><small>[a, b, c]</small></span></button>
-          <button class="library-item" data-type="lambda"><span class="lib-icon function-icon">λ</span><span><b>Lambda</b><small>\\x -> … (anonymous function)</small></span></button>
-          <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Booleans</b><small>True · False</small></span></button>
+          <div id="class-library"></div></details>
+          <details class="library-section" id="prelude-section"><summary>Prelude 함수</summary>
+          <div id="prelude-library"></div></details>
+
         </nav>
         <div class="side-footer"><div class="tip"><span class="tip-icon">i</span><div><b>Try it out</b><p>Drag nodes and use the<br/>play button on a function.</p></div></div><div class="runtime-row"><span>Runtime</span><strong title="JavaScript 그래프 실행기 · GHC를 호출하지 않습니다">Graph JS <i>●</i></strong></div></div>
       </aside>
       <section class="canvas-panel">
-        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>GRAPH</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>Saved just now</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="Undo (Ctrl+Z)" disabled>↶</button><button class="tool-button icon-only" id="redo" title="Redo (Ctrl+Shift+Z)" disabled>↷</button><button class="tool-button" id="export" title="Download the project as JSON">⤓ <span>Export</span></button><button class="tool-button" id="import" title="Load a project JSON file">⤒ <span>Import</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="Start from a template (undoable)"><option value="">✦ Templates…</option><option value="clickCounter">Click counter</option><option value="blankGame">Blank game</option><option value="dice">Dice (random · pictures)</option></select><button class="tool-button" id="export-game" title="Download the game as one standalone HTML file">⬇ <span>Game</span></button><button class="tool-button" id="reset">↺ <span>Reset</span></button><button class="tool-button primary" id="run">▶ <span>Run graph</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div id="port-editor"></div><div class="canvas-hint"><span class="mouse-icon">⌖</span><span>Drag to pan · Drag a node's right-end port onto a slot to connect</span></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="Open every function: show what is plugged into its slots on the canvas">⤢</button><button id="fold-all" title="Fold every function: keep what is plugged in inside its slots">⤡</button></div></div>
-        <footer class="canvas-footer"><span><b id="node-count">2</b> nodes</span><span><b id="connection-count">0</b> connections</span><span class="footer-spacer"></span><span class="shortcut"><kbd>⌘</kbd><kbd>↵</kbd> Run graph</span></footer>
+        <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>그래프</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>방금 저장됨</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="실행 취소" disabled>↶</button><button class="tool-button icon-only" id="redo" title="다시 실행" disabled>↷</button><details class="project-menu"><summary class="tool-button">프로젝트</summary><div class="project-menu-items"><button class="tool-button" id="export" title="프로젝트를 JSON으로 내려받기">⤓ <span>프로젝트 저장 (.json)</span></button><button class="tool-button" id="import" title="프로젝트 JSON 파일 불러오기">⤒ <span>프로젝트 열기</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="템플릿에서 시작 (실행 취소 가능)"><option value="">✦ 템플릿…</option><option value="clickCounter">클릭 카운터</option><option value="blankGame">빈 게임</option><option value="vending">자판기 (함수와 타입)</option><option value="nim">님 (조건)</option><option value="dice">주사위 (난수 · 그림)</option><option value="damage">데미지 (커링과 합성)</option><option value="rps">가위바위보 (데이터 타입)</option><option value="simon">사이먼 (리스트와 재귀)</option><option value="highLow">하이로우 (타입 클래스)</option><option value="blackjack">블랙잭 (리스트)</option></select><button class="tool-button" id="export-game" title="게임을 독립 HTML 파일 하나로 내려받기">⬇ <span>게임 내보내기 (.html)</span></button><button class="tool-button" id="reset">↺ <span>프로젝트 초기화</span></button></div></details><button class="tool-button primary" id="run">▶ <span>실행 add</span></button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div class="canvas-empty" hidden><b>빈 그래프예요</b><span>왼쪽 <i>연습 문제</i>에서 문제를 고르거나, 사이드바에서 값·함수를 끌어다 놓으세요.</span><span><kbd data-shortcut="K"></kbd> 블록 검색 · <i>프로젝트 › 템플릿</i>으로 예제 열기</span></div><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="모든 함수 펼치기: 슬롯에 꽂힌 것을 캔버스에 보여요">⤢</button><button id="fold-all" title="모든 함수 접기: 꽂힌 것을 슬롯 안에 넣어요">⤡</button></div></div>
+        <footer class="canvas-footer"><span>블록 <b id="node-count">2</b>개</span><span>연결 <b id="connection-count">0</b>개</span><span class="footer-spacer"></span><span class="shortcut"><kbd data-shortcut="Enter"></kbd><span id="run-shortcut-label">실행 add</span></span></footer>
       </section>
-      <aside class="inspector"><div class="inspector-title"><span>INSPECTOR</span><button class="close-inspector">×</button></div><div id="inspector-content"></div></aside>
+      <aside class="inspector" id="inspector-panel"><div class="inspector-title"><span>속성</span><button class="close-inspector" aria-label="속성 패널 닫기">×</button></div><div id="inspector-content"></div></aside>
     </section>
   </main>
 `
+
+const disclosureState = new Map()
+function restoreDisclosureState(root) {
+  root.querySelectorAll('details').forEach((el) => {
+    const key = el.dataset.disclosure || `${root.id}:${el.querySelector('summary')?.textContent}`
+    el.open = disclosureState.get(key) ?? el.open
+    el.addEventListener('toggle', () => { if (el.isConnected && !document.querySelector('.search input')?.value) disclosureState.set(key, el.open) })
+  })
+}
+const shortcutModifier = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'
+// Shortcut hints name this platform's modifier key.
+function setupShortcutHints() {
+  document.querySelector('#undo').title = `Undo (${shortcutModifier} Z)`
+  document.querySelector('#redo').title = `Redo (${shortcutModifier} Shift Z)`
+  document.querySelectorAll('[data-shortcut]').forEach((el) => { el.textContent = `${shortcutModifier} ${el.dataset.shortcut}` })
+}
+function toggleInspector(open) {
+  document.querySelector('.inspector').hidden = !open
+  document.querySelector('.workspace').classList.toggle('inspector-hidden', !open)
+  document.querySelector('#toggle-inspector').setAttribute('aria-expanded', String(open))
+  window.dispatchEvent(new Event('resize'))
+}
+// The top bar: the inspector toggle (collapsed on narrow screens), help, and
+// the Project menu, which closes after use.
+function setupTopBar() {
+  document.querySelector('#toggle-inspector').onclick = () => toggleInspector(document.querySelector('.workspace').classList.contains('inspector-hidden'))
+  if (matchMedia('(max-width:1050px)').matches) {
+    toggleInspector(false)
+  }
+  document.querySelector('#help').onclick = () => {
+    const dialog = document.createElement('dialog')
+    dialog.className = 'help-dialog'
+    dialog.innerHTML = `<h2>그래프 다루기</h2><ul><li>함수 이름을 눌러 본체를 열고, + 버튼으로 호출을 추가해요.</li><li>사이드바에서 값을 추가해요. 블록 오른쪽 출력 포트를 입력 슬롯이나 Output으로 끌어 이어요.</li><li>빈 입력 슬롯을 누르면 값을 적을 수 있어요.</li><li>빈 캔버스를 끌면 이동, 스크롤하면 확대·축소해요.</li><li>위쪽 실행 버튼에는 프로젝트의 시작 함수 이름이 나와요. 연습 문제의 본체 안에서는 채점 버튼이 돼요.</li><li>타입 편집기에서는 +를 눌러 타입을 고르거나 타입 목록에서 끌어 와요. 이름을 누르면 바꿀 수 있어요.</li></ul><p>${shortcutModifier} K: 검색해서 추가 · ${shortcutModifier} Enter: 실행 · ${shortcutModifier} Z: 실행 취소</p><p>프로젝트는 이 브라우저에 자동으로 저장돼요. 실행기는 이 컴퓨터에서 돌아가요.</p><form method="dialog"><button class="tool-button">닫기</button></form>`
+
+    document.body.append(dialog)
+    dialog.addEventListener('close', () => dialog.remove())
+    dialog.showModal()
+  }
+  // File actions close their menu after use; the import picker keeps its input alive.
+  document.addEventListener('click', (event) => { if (!event.target.closest('.project-menu')) document.querySelector('.project-menu').open = false })
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') document.querySelector('.project-menu').open = false })
+  document.querySelector('.project-menu').addEventListener('click', (event) => {
+    if (event.target.closest('button')) document.querySelector('.project-menu').open = false
+  })
+  document.querySelector('#template').addEventListener('change', () => { document.querySelector('.project-menu').open = false })
+}
 
 const canvas = document.querySelector('#graph-canvas')
 const ctx = canvas.getContext('2d')
@@ -117,7 +181,7 @@ const nodes = {
 function activeNodes() { return state.activeFunction ? allBodies[state.activeFunction] : nodes }
 // A read-only definition view (or a λ inside one) is on screen: look, don't touch.
 function viewingReadonly() { return Boolean(state.activeFunction && !functionBodies[state.activeFunction] && viewBodies[state.activeFunction]) }
-function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : nodes[state.activeFunction]?.library ? ' · taken over' : '') : '⌂ top level' }
+function activeName() { return state.activeFunction ? [...state.functionStack, state.activeFunction].map((id) => `ƒ ${definitions[id]?.label || '?'}`).join(' / ') + (viewingReadonly() ? ' · read-only' : nodes[state.activeFunction]?.library ? ' · taken over' : '') : '⌂ 최상위' }
 const functionBodies = {
   add: {
     inputX: { id: 'add-input-x', type: 'parameter', typeName: 'Int', x: 110, y: 180, label: 'x', value: 'x', color: '#4f8ef7' },
@@ -176,6 +240,8 @@ let resolvedClasses = []
 // (classDecls.js' resolveWritten). Resolved with the classes (`resolvedClasses.written`).
 let instances = {}
 const classDefs = {}
+// Where each declaration graph's nodes sit (declGraph.js), saved with the project: `{ 'type:Shape': { [node id]: { x, y } } }`.
+let layouts = {}
 // Read-only definition views (definitionViews.js): a builtin, Prelude or
 // derived function shown as a graph. `viewDefs`/`viewBodies` hold each
 // view's own definition (id `view:<function id>`) and body, plus the λs it
@@ -183,8 +249,16 @@ const classDefs = {}
 const viewDefs = {}
 const viewBodies = {}
 const laidOutViews = new Set()
-const definitions = new Proxy({}, { get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? libraryDefs[id] ?? viewDefs[id] })
-const allBodies = new Proxy({}, { get: (_, id) => functionBodies[id] ?? viewBodies[id] })
+const definitions = new Proxy({}, {
+  get: (_, id) => nodes[id] ?? derivedDefs[id] ?? classDefs[id] ?? libraryDefs[id] ?? viewDefs[id],
+  ownKeys: () => [...new Set([nodes, derivedDefs, classDefs, libraryDefs, viewDefs].flatMap(Object.keys))],
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+})
+const allBodies = new Proxy({}, {
+  get: (_, id) => functionBodies[id] ?? viewBodies[id],
+  ownKeys: () => [...new Set([...Object.keys(functionBodies), ...Object.keys(viewBodies)])],
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+})
 function clearViews() {
   for (const id of Object.keys(viewDefs)) delete viewDefs[id]
   for (const id of Object.keys(viewBodies)) delete viewBodies[id]
@@ -326,11 +400,24 @@ function reachableFunctions(graph, ids) {
 /** Why running node `nodeId` of `graph` must be refused (an ambiguity it depends on), or null. */
 function runBlocker(graph, nodeId) {
   const inside = subtreeOf(graph, nodeId)
-  const local = typePass(graph).ambiguities.main.find((a) => inside.has(a.nodeId))
+  for (const id of inside) {
+    const problem = graph[id]?.match && matchProblem(graph[id], graph, definitions, functionBodies)
+    if (problem) return problem
+  }
+  const localTypes = typePass(graph)
+  if ([...inside].some((id) => graph[id]?.match) && localTypes.brokenEdges.some((e) => inside.has(e.nodeId))) return '패턴 매칭 분기의 타입이나 연결을 확인하세요'
+  const local = localTypes.ambiguities.main.find((a) => inside.has(a.nodeId))
   if (local) return local.message
   projectPassCache = null
-  const inner = projectPass().ambiguities.functions
+  const projectTypes = projectPass()
+  const inner = projectTypes.ambiguities.functions
   for (const fn of reachableFunctions(graph, inside)) {
+    const broken = projectTypes.brokenFunctions[fn]?.[0]
+    if (broken && (nodes[fn]?.matchBranch || Object.values(functionBodies[fn]).some((n) => n.match))) return broken.message || `${nodes[fn]?.label || fn}: 분기의 타입이 맞지 않습니다`
+    for (const node of Object.values(functionBodies[fn])) {
+      const problem = node.match && matchProblem(node, functionBodies[fn], definitions, functionBodies)
+      if (problem) return problem
+    }
     if (inner[fn]?.length) return `${nodes[fn]?.lambda ? 'a λ' : nodes[fn]?.label ?? fn}: ${inner[fn][0].message}`
   }
   return null
@@ -339,6 +426,8 @@ function runBlocker(graph, nodeId) {
 // functions: a λ's lifted function (its call node is the λ) and a
 // customized derived function (listed under its type).
 const isHiddenDefinition = (n) => !!(n?.lambda || n?.override || n?.library)
+// A builtin's own definition: listed under Built-in functions (open it, or + a call), not drawn on the top level, where only the project's own functions sit.
+const isBuiltinDefinition = (n) => !!(n && n.readonly && !n.custom && !n.sourceFunctionId && nodes[n.id] === n)
 // Every name a function definition already has, but `exceptId`'s: custom
 // functions, builtins, Prelude, and everything derived from types.
 function functionLabelsExcept(exceptId = null) {
@@ -355,15 +444,26 @@ const history = createHistory()
 const functionLibrary = document.querySelector('#function-library')
 
 function renderFunctionLibrary() {
-  functionLibrary.innerHTML = Object.values(nodes).filter((n) => isFunction(n) && !isHiddenDefinition(n)).map((node) => `
-    <button class="library-item function-library-item ${state.activeFunction === node.id ? 'active' : ''}" data-function-id="${node.id}">
+  const items = Object.values(nodes).filter((n) => isFunction(n) && !n.sourceFunctionId && !isHiddenDefinition(n))
+  const row = (node) => `
+    <div class="function-library-row"><button class="library-item function-library-item ${state.activeFunction === node.id ? 'active' : ''}" data-function-id="${node.id}" title="Open ${escapeAttr(node.label)} definition">
       <span class="lib-icon function-icon">ƒ</span>
-      <span><b>${node.label}</b><small>${isManagedMain(node) ? 'START · ' : ''}${functionChainHtml(node, nodes)}</small></span>
-    </button>
-  `).join('')
+      <span><b>${escapeAttr(node.label)}</b><small>${isManagedMain(node) ? 'START · ' : ''}${functionChainHtml(node, nodes)}</small></span>
+    </button><button class="add-call" data-add-function="${node.id}" aria-label="Add call to ${escapeAttr(node.label)}" title="Add call to ${escapeAttr(node.label)}">+</button></div>
+  `
+  // The builtins, grouped as the Prelude is (classGroups.js); one this version doesn't group goes last.
+  const builtins = items.filter((n) => !n.custom)
+  const grouped = new Set(BUILTIN_GROUPS.flatMap((g) => g.ids))
+  const groups = [...BUILTIN_GROUPS.map((g) => [g.group, g.ids.map((id) => builtins.find((n) => n.id === id)).filter(Boolean), g.advanced]), ['Other', builtins.filter((n) => !grouped.has(n.id))]].filter(([, ns]) => ns.length)
+  const groupHtml = ([group, ns]) => `<div class="builtin-group">${escapeAttr(group)}</div>${ns.map(row).join('')}`
+  // The advanced ones (unused, or Int-only duplicates) fold away, as the class palette's do.
+  const advanced = groups.filter(([, , adv]) => adv)
+  functionLibrary.innerHTML = items.filter((n) => n.custom).map(row).join('') + `<details class="library-group" data-disclosure="builtin-functions"><summary>기본 함수</summary>${groups.filter(([, , adv]) => !adv).map(groupHtml).join('')}${advanced.length ? `<details class="builtin-advanced" data-disclosure="builtin-advanced"><summary><small>고급</small></summary>${advanced.map(groupHtml).join('')}</details>` : ''}</details>`
+  restoreDisclosureState(functionLibrary)
   functionLibrary.querySelectorAll('.function-library-item').forEach((item) => {
     item.addEventListener('click', () => onLibraryFunction(item.dataset.functionId))
   })
+  functionLibrary.querySelectorAll('[data-add-function]').forEach((button) => { button.onclick = () => addFunctionCall(button.dataset.addFunction) })
   renderParameterLibrary()
   renderTypeLibrary()
   renderClassLibrary()
@@ -374,14 +474,20 @@ function renderFunctionLibrary() {
 // reference to the body's parameter, shown just as the parameter itself).
 function renderParameterLibrary() {
   const graph = activeNodes()
-  const params = state.activeFunction ? Object.values(graph).filter((n) => n.type === 'parameter') : []
+  const params = state.activeFunction ? Object.values(graph).filter((n) => n.type === 'parameter' && n.label !== '_') : []
   document.querySelector('#parameter-title').hidden = !params.length
   const library = document.querySelector('#parameter-library')
-  library.innerHTML = params.map((p) => {
+  const item = (p) => {
     const q = resolvedValueQual(p)
     return `<button class="library-item parameter-item" data-parameter-id="${escapeAttr(p.id)}" title="Add a use of this parameter to the canvas"><span class="lib-icon number-icon">#</span><span><b>${escapeAttr(p.label)}</b><small>${qualChainHtml(q.preds, q.type)}</small></span></button>`
-  }).join('')
+  }
+  library.innerHTML = params.filter((p) => !p.matchCapture).map(item).join('') + (params.some((p) => p.matchCapture) ? `<details class="match-outer-values" data-disclosure="outer-values:${state.activeFunction}"><summary>바깥 값</summary>${params.filter((p) => p.matchCapture).map(item).join('')}</details>` : '')
   library.querySelectorAll('.parameter-item').forEach((item) => { item.onclick = () => addParameterUse(item.dataset.parameterId) })
+  if (nodes[state.activeFunction]?.matchBranch) {
+    library.insertAdjacentHTML('beforeend', '<button class="library-item" id="match-capture">+ 바깥 값 가져오기</button>')
+    library.querySelector('#match-capture').onclick = chooseMatchCapture
+  }
+  restoreDisclosureState(library)
 }
 function addParameterUse(parameterId) {
   if (readonlyBlocked()) return
@@ -407,13 +513,53 @@ function createLambda() {
   functionBodies[id] = createFunctionBody(id, ['x'])
   addFunctionCall(id)
   renderFunctionLibrary()
-  showToast('λ added — double-click it (or Open body) to define it; plug outer values into its slots to capture them')
+  showToast('λ를 추가했어요 — 더블클릭(또는 본체 열기)해서 정의하고, 바깥 값을 슬롯에 꽂으면 캡처해요')
 }
-// Clicking a function in the library: a custom function opens its body when
-// you're on `main`; anything else (or inside a body) drops a call to it.
+
+function beginPatternMatch(target) {
+  if (!state.activeFunction || readonlyBlocked()) return
+  let type = resolvedValueQual(target).type
+  while (type?.kind === 'app') type = type.fn
+  const choices = Object.values({ ...preludeTypes, ...types }).filter((d) => definitions[matchCaseId(d.name)])
+  const add = (decl) => {
+    const node = createMatch({ nodes, functionBodies }, activeNodes(), decl, target.id, { ownerId: state.activeFunction, ...freePosition(activeNodes(), 180 + decl.constructors.length * SLOT_STRIDE) })
+    state.selected = node.id
+    renderFunctionLibrary(); updateInspector(); draw(); fitToView()
+  }
+  const known = choices.find((d) => d.name === type?.name)
+  if (known) return add(known)
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker'
+  dialog.innerHTML = `<h3>매칭할 타입</h3><div class="constructor-options">${choices.map((d, i) => `<button class="library-item" data-choice="${i}">${escapeAttr([d.name, ...d.params].join(' '))}</button>`).join('') || '<p>먼저 타입을 추가하세요.</p>'}</div><form method="dialog"><button class="tool-button">취소</button></form>`
+  dialog.querySelectorAll('[data-choice]').forEach((b) => { b.onclick = () => { add(choices[Number(b.dataset.choice)]); dialog.close() } })
+  dialog.addEventListener('close', () => dialog.remove())
+  document.body.append(dialog); dialog.showModal()
+}
+
+function chooseMatchCapture() {
+  const info = nodes[state.activeFunction]?.matchBranch
+  if (!info) return
+  const graph = info.ownerId ? functionBodies[info.ownerId] : nodes
+  const node = graph?.[info.matchId]
+  const branch = [...(node?.match.branches || []), node?.match.defaultBranch].find((b) => b?.fnId === state.activeFunction)
+  if (!branch) return
+  // Do not capture the match itself or any expression depending on its result.
+  const choices = Object.values(graph).filter((n) => n.id !== node.id && !n.matchInternal && !isHiddenDefinition(n) && n.type !== 'output' && !subtreeOf(graph, n.id).has(node.id) && !branch.captures.includes(n.id))
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker'
+  dialog.innerHTML = `<h3>바깥 값 가져오기</h3><div class="constructor-options">${choices.map((n, i) => `<button class="library-item" data-choice="${i}">${escapeAttr(nodeDisplayText(n, graph))}</button>`).join('') || '<p>가져올 값이 없습니다. 바깥 함수에서 값을 추가하세요.</p>'}</div><form method="dialog"><button class="tool-button">닫기</button></form>`
+  dialog.querySelectorAll('[data-choice]').forEach((b) => { b.onclick = () => {
+    captureMatchValue({ nodes, functionBodies }, graph, branch, choices[Number(b.dataset.choice)].id)
+    if (branch === node.match.defaultBranch) node.match.branches.forEach((arm, i) => { if (arm.useDefault) setMatchDefault({ nodes, functionBodies }, graph, node, i) })
+    dialog.close(); renderFunctionLibrary(); updateInspector(); draw()
+  } })
+  dialog.addEventListener('close', () => dialog.remove())
+  document.body.append(dialog); dialog.showModal()
+}
+// The name always opens the definition; the separate + always inserts a call.
 function onLibraryFunction(id) {
-  if (!state.activeFunction && nodes[id]?.custom) enterFunction(id)
-  else addFunctionCall(id)
+  if (nodes[id]?.custom) enterFunction(id)
+  else openDefinitionView(id)
 }
 function renderPreludeLibrary() {
   document.querySelector('#prelude-library').innerHTML = PRELUDE.map(([group, fns]) => `<div class="prelude-group">${group}</div>${fns.map(([builtin]) => {
@@ -424,12 +570,28 @@ function renderPreludeLibrary() {
   }).join('')}`).join('')
   // The Prelude's own data types (library.js): their constructors and eliminators.
   const byType = {}
-  for (const def of Object.values(preludeTypeDefs)) (byType[def.derived.type] ||= []).push(def)
+  for (const def of Object.values(preludeTypeDefs)) if (def.derived.op !== 'case') (byType[def.derived.type] ||= []).push(def)
   // Each constructor and eliminator can be customized like a declared type's (✎).
   // A type taken over is listed in TYPES instead; one that can be taken over has its own ✎.
   const head = (d) => (d.name === '(,)' ? '(a, b)' : [d.name, ...d.params].join(' '))
   const takeOver = (d) => (TAKEABLE_TYPES.includes(d.name) ? `<button class="derived-edit prelude-take-type" data-type-name="${escapeAttr(d.name)}" title="Take the declaration over: edit it in the type editor">✎</button>` : '')
   document.querySelector('#prelude-library').insertAdjacentHTML('beforeend', Object.values(preludeTypes).map((d) => types[d.name] ? `<div class="prelude-group" title="Your declaration is in TYPES">${d.keyword} ${escapeAttr(head(d))} <i class="customized">✎ yours</i></div>` : `<div class="derived-row"><div class="prelude-group" title="${escapeAttr(d.source)}">${d.keyword} ${escapeAttr(head(d))}</div>${takeOver(d)}</div>${(byType[d.name] || []).map((def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎ custom</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="${nodes[def.id]?.override ? 'Open its custom body' : 'Customize: redefine it with a body of your own'}">✎</button></div>`).join('')}`).join(''))
+  const preludeLibrary = document.querySelector('#prelude-library')
+  let group = null
+  for (const child of [...preludeLibrary.children]) {
+    const heading = child.matches('.prelude-group') ? child : child.querySelector('.prelude-group')
+    if (heading) {
+      group = document.createElement('details')
+      group.className = 'library-group'
+      const summary = document.createElement('summary')
+      summary.textContent = heading.textContent
+      group.append(summary)
+      preludeLibrary.insertBefore(group, child)
+      heading.remove()
+      if (child !== heading && child.childElementCount) group.append(child)
+    } else if (group) group.append(child)
+  }
+  restoreDisclosureState(preludeLibrary)
   document.querySelectorAll('#prelude-library .derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
   document.querySelectorAll('#prelude-library .derived-edit[data-edit-id]').forEach((item) => { item.onclick = () => editDerived(item.dataset.editId) })
   document.querySelectorAll('#prelude-library .prelude-take-type').forEach((item) => { item.onclick = () => takeOverPreludeType(item.dataset.typeName) })
@@ -441,12 +603,17 @@ function renderPreludeLibrary() {
 // you're looking at (a custom function on `main` opens its body instead).
 const searchInput = document.querySelector('.search input')
 function searchHits() {
-  return [...document.querySelectorAll('.function-library-item, #type-library .derived-item, #class-library .derived-item, #prelude-library .derived-item')].filter((item) => !item.hidden)
+  return [...document.querySelectorAll('#value-library .library-item, .function-library-item, #type-library .derived-item, #class-library .derived-item, #prelude-library .derived-item')].filter((item) => !item.hidden && !item.closest('[hidden]'))
 }
+const searchExpansion = new Map()
 function applySearch() {
   const q = searchInput.value.trim().toLowerCase()
-  const matches = (el) => !q || el.textContent.toLowerCase().includes(q)
-  document.querySelectorAll('.function-library-item, #prelude-library .derived-item').forEach((item) => { item.hidden = !matches(item) })
+  const matches = (el) => !q || (el?.textContent || '').toLowerCase().includes(q)
+  document.querySelectorAll('#value-library .library-item, .function-library-item, #prelude-library .derived-item').forEach((item) => {
+    item.hidden = !matches(item)
+    const row = item.closest('.function-library-row, .derived-row')
+    if (row) row.hidden = item.hidden
+  })
   document.querySelectorAll('#type-library .type-entry, #class-library .type-entry').forEach((entry) => {
     const typeHit = matches(entry.querySelector('.type-item'))
     const items = [...entry.querySelectorAll('.derived-item')]
@@ -457,44 +624,107 @@ function applySearch() {
     })
     entry.hidden = !typeHit && items.every((item) => item.hidden)
   })
-  // A Prelude group heading shows only while one of its entries does.
-  document.querySelectorAll('#prelude-library .prelude-group').forEach((heading) => {
-    let el = heading.nextElementSibling
-    let any = false
-    while (el && !el.classList.contains('prelude-group')) { if (!el.hidden) any = true; el = el.nextElementSibling }
-    heading.hidden = !any
+  document.querySelectorAll('.node-library details').forEach((group) => {
+    const items = [...group.querySelectorAll('.function-library-item, .derived-item, .type-item')]
+    const any = items.some((item) => !item.hidden && !item.closest('.type-entry[hidden]'))
+    group.hidden = !!q && !any
+    if (q) {
+      if (!searchExpansion.has(group)) searchExpansion.set(group, group.open)
+      if (any) group.open = true
+    } else if (searchExpansion.has(group)) {
+      group.open = searchExpansion.get(group)
+      searchExpansion.delete(group)
+    }
+  })
+  if (!q) searchExpansion.clear()
+  // A group heading shows only while some row under it does.
+  document.querySelectorAll('.node-library .builtin-group').forEach((heading) => {
+    let rows = 0, shown = 0
+    for (let el = heading.nextElementSibling; el && !el.matches('.builtin-group'); el = el.nextElementSibling) {
+      if (!el.matches('.function-library-row')) continue
+      rows++
+      if (!el.hidden) shown++
+    }
+    heading.hidden = rows > 0 && shown === 0
+  })
+  const valueTitle = document.querySelector('#value-library').previousElementSibling
+  valueTitle.hidden = [...document.querySelectorAll('#value-library .library-item')].every((item) => item.hidden)
+}
+function setupSearch() {
+  searchInput.addEventListener('input', applySearch)
+  searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      const hit = searchHits()[0]
+      if (!hit) return showToast(`"${searchInput.value}"와 맞는 블록이 없어요`)
+      if (hit.matches('.function-library-item')) addFunctionCall(hit.dataset.functionId)
+      else hit.click()
+      searchInput.value = ''
+      applySearch()
+      searchInput.blur()
+    } else if (event.key === 'Escape') {
+      searchInput.value = ''
+      applySearch()
+      searchInput.blur()
+    }
   })
 }
-searchInput.addEventListener('input', applySearch)
-searchInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    const hit = searchHits()[0]
-    if (!hit) return showToast(`Nothing matches "${searchInput.value}"`)
-    hit.click()
-    searchInput.value = ''
-    applySearch()
-    searchInput.blur()
-  } else if (event.key === 'Escape') {
-    searchInput.value = ''
-    applySearch()
-    searchInput.blur()
-  }
-})
 const typeLibrary = document.querySelector('#type-library')
 function renderTypeLibrary() {
   document.querySelector('#type-palette').innerHTML = typePaletteHtml()
   const byType = Object.groupBy(Object.values(derivedDefs).filter((def) => !def.primitive), (def) => def.derived.type)
+  const row = (def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="정의 편집">✎</button></div>`
   typeLibrary.innerHTML = Object.values(types).map((d) => `
     <div class="type-entry">
+      <div class="type-library-head">
       <button class="library-item type-item" data-type-name="${d.name}" title="Edit declaration">
         <span class="lib-icon type-icon">T</span>
-        <span><b>${[d.name, ...(d.params || [])].join(' ')}${d.library ? ' <i class="customized">Prelude · yours</i>' : ''}</b><small>${d.constructors.map((c) => c.name).join(' | ')}</small></span>
+        <span><b>${[d.name, ...(d.params || [])].join(' ')}${d.library ? ' <i class="customized">✎</i>' : ''}</b>${d.constructors.length > 1 ? `<small>${d.constructors.map((c) => c.name).join(' | ')}</small>` : ''}</span>
       </button>
-      ${(byType[d.name] || []).map((def) => `<div class="derived-row"><button class="derived-item" data-function-id="${def.id}" title="Add to the canvas"><b>${escapeAttr(def.label)}${nodes[def.id]?.override ? ' <i class="customized">✎ custom</i>' : ''}</b><small>${qualChainHtml(def.scheme.preds, def.scheme.type)}</small></button><button class="derived-edit" data-edit-id="${def.id}" title="${nodes[def.id]?.override ? 'Open its custom body' : 'Customize: redefine it with a body of your own'}">✎</button></div>`).join('')}
+      <button class="add-call add-type-call" data-type-name="${d.name}" title="생성자 호출 추가 · 캔버스로 드래그">+</button></div>
+      ${d.constructors.length > 1 ? (byType[d.name] || []).filter((def) => def.derived.op === 'construct').map(row).join('') : ''}
+      <details class="type-functions" data-disclosure="type-functions:${escapeAttr(d.name)}"><summary>필드 · 함수</summary>${(byType[d.name] || []).filter((def) => !['case', 'construct'].includes(def.derived.op)).map(row).join('')}${d.constructors.length === 1 ? (byType[d.name] || []).filter((def) => def.derived.op === 'construct').map(row).join('') : ''}</details>
     </div>`).join('')
   typeLibrary.querySelectorAll('.type-item').forEach((item) => { item.onclick = () => openTypeEditor(item.dataset.typeName) })
+  typeLibrary.querySelectorAll('.add-type-call').forEach((item) => {
+    item.onclick = () => addTypeCall(item.dataset.typeName)
+    item.onpointerdown = (event) => {
+      if (event.button !== 0) return
+      const start = { x: event.clientX, y: event.clientY }
+      const move = (e) => { if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 6) item.dataset.dragging = 'true' }
+      const up = (e) => {
+        document.removeEventListener('pointermove', move)
+        const dragged = item.dataset.dragging
+        delete item.dataset.dragging
+        if (!dragged) return
+        const rect = canvas.getBoundingClientRect()
+        if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) addTypeCall(item.dataset.typeName, { x: (e.clientX - rect.left - state.offset.x) / state.zoom, y: (e.clientY - rect.top - state.offset.y) / state.zoom })
+        item.onclick = null
+        setTimeout(() => { item.onclick = () => addTypeCall(item.dataset.typeName) }, 0)
+      }
+      document.addEventListener('pointermove', move)
+      document.addEventListener('pointerup', up, { once: true })
+    }
+  })
   typeLibrary.querySelectorAll('.derived-item').forEach((item) => { item.onclick = () => addFunctionCall(item.dataset.functionId) })
   typeLibrary.querySelectorAll('.derived-edit').forEach((item) => { item.onclick = () => editDerived(item.dataset.editId) })
+  restoreDisclosureState(typeLibrary)
+}
+
+function addTypeCall(name, position) {
+  const d = types[name]
+  if (!d) return
+  const add = (ctor) => {
+    addFunctionCall(`type:${name}:${ctor.name}`)
+    if (position && activeNodes()[state.selected]) Object.assign(activeNodes()[state.selected], position)
+    updateInspector(); draw()
+  }
+  if (d.constructors.length === 1) return add(d.constructors[0])
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker constructor-picker'
+  dialog.innerHTML = `<h3>${escapeAttr(name)} 생성자</h3><div class="constructor-options">${d.constructors.map((c, i) => `<button class="library-item" data-choice="${i}">${escapeAttr(c.name)}</button>`).join('')}</div><form method="dialog"><button class="tool-button">취소</button></form>`
+  dialog.querySelectorAll('[data-choice]').forEach((button) => { button.onclick = () => { add(d.constructors[Number(button.dataset.choice)]); dialog.close() } })
+  dialog.addEventListener('close', () => dialog.remove())
+  document.body.append(dialog); dialog.showModal()
 }
 // Whether `id` (or the primitive `prim:<id>`) is something a Prelude type derives.
 const definitionsOfPrelude = (id) => !!preludeTypeDefs[id.replace(/^prim:/, '')]
@@ -541,13 +771,8 @@ function resetDerivedFunction(id) {
 // constructor gives every case call a new branch (typeEdits.js).
 const typePanel = document.querySelector('#type-panel')
 let typeEditor = null // { original: name of the declaration being edited (null until first applied), draft, appliedDraft: the draft as last applied }
-let draftKeys = 0
 function keyed(draft) {
-  for (const c of draft.constructors) {
-    c.key ??= ++draftKeys
-    for (const fl of c.fields) fl.key ??= ++draftKeys
-  }
-  return draft
+  return ensureTypeKeys(draft)
 }
 function editorFor(name) {
   const draft = keyed(declToDraft(types[name]))
@@ -565,6 +790,7 @@ function draftKeyMap(before, after) {
 function openTypeEditor(name = null) {
   stopGame()
   classEditor = null
+  universeOpen = false
   if (!name) {
     // A new type: one constructor without fields, under a free name — valid at once.
     let n = 1
@@ -578,9 +804,63 @@ function openTypeEditor(name = null) {
   renderTypeEditor()
 }
 
+// --- Type universe ------------------------------------------------------------
+// Every type and class of the project as one graph (declGraph.js'
+// universeGraph): a type points at the types whose fields use it, a
+// superclass at its subclasses, a type at the classes it has an instance
+// of. A click on a card opens that declaration's own graph; ◎ in its bar
+// comes back here.
+let universeOpen = false
+function universeButtonHtml() { return '<button class="tool-button" data-universe title="All types and classes as one graph">◎ 타입 우주</button>' }
+function openUniverse() {
+  stopGame()
+  typeEditor = null
+  classEditor = null
+  universeOpen = true
+  typePanel.hidden = false
+  renderUniverse()
+}
+function renderUniverse() {
+  if (!universeOpen) return
+  const graph = universeGraph(types, classes, instances)
+  typePanel.innerHTML = `
+    <div class="play-bar type-bar"><b>타입 우주</b>
+      <span class="te-status ok">${Object.keys(types).length} types · ${Object.keys(classes).length} classes</span>
+      <button class="tool-button" data-u="add-type">+ type</button>
+      <button class="tool-button" data-u="add-class">+ class</button>
+      <button class="tool-button icon-only" data-u="close" title="Back to the canvas">×</button>
+    </div>
+    <p class="te-hint decl-hint">A type points at the types that use it in a field and at the classes it has an instance of; a superclass points at its subclasses. Click a card to open its declaration.</p>
+    <div class="decl-host"></div>`
+  typePanel.querySelector('[data-u="add-type"]').onclick = () => openTypeEditor()
+  typePanel.querySelector('[data-u="add-class"]').onclick = () => openClassEditor()
+  typePanel.querySelector('[data-u="close"]').onclick = closeTypeEditor
+  const host = typePanel.querySelector('.decl-host')
+  if (!graph.nodes.length) { host.innerHTML = '<p class="decl-empty">No types or classes yet — + type or + class to start.</p>'; return }
+  const card = (n) => n.kind === 'type'
+    ? `<div class="decl-kind">${n.library ? 'type · Prelude, yours' : 'type'}</div><div class="decl-head"><span class="lib-icon type-icon">T</span><b>${escapeAttr([n.name, ...n.params].join(' '))}</b></div><small class="decl-sub">${escapeAttr(n.constructors.join(' | '))}</small>`
+    : `<div class="decl-kind">${n.builtin ? 'class · builtin' : 'class'}</div><div class="decl-head"><span class="lib-icon class-icon">C</span><b>${escapeAttr(n.builtin ? n.name : `${n.name} ${n.param}`)}</b></div>`
+  drawDeclGraph(host, {
+    graph, at: layoutGraph(graph, layouts.universe, { universe: true }), fixed: new Set(Object.keys(layouts.universe || {})), viewKey: 'universe', card,
+    className: () => 'decl-openable',
+    onMoved: (_, positions) => { layouts.universe = { ...positions }; draw() },
+    onOpen: (id) => {
+      const [kind, name] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)]
+      if (kind === 'type') openTypeEditor(name)
+      else openClassEditor(name)
+    },
+  })
+}
+// A renamed declaration's layout goes with it.
+function moveLayout(from, to) {
+  if (from === to || !layouts[from]) return
+  layouts[to] = layouts[from]
+  delete layouts[from]
+}
 function closeTypeEditor() {
   typeEditor = null
   classEditor = null
+  universeOpen = false
   typePanel.hidden = true
   typePanel.innerHTML = ''
 }
@@ -612,8 +892,13 @@ function applyTypeDraft() {
     if (noticed.length) showToast(`${d.name} no longer has ${noticed.join(', ')} (it isn't possible after this edit)`)
   }
   const { before, next, nextClasses, nextInstances } = checked
+  next[d.name].constructors.forEach((c, i) => {
+    c.key = d.constructors[i].key
+    c.fields.forEach((f, j) => { f.key = d.constructors[i].fields[j].key })
+  })
   const changed = before && typeEditor.appliedDraft ? migrateTypeEdit({ nodes, functionBodies }, before, next[d.name], draftKeyMap(typeEditor.appliedDraft, d)) : 0
   if (before && d.name !== before.name) renameTypeInAnnotations(before.name, d.name)
+  if (before && d.name !== before.name) moveLayout(layoutKey('type', before.name), layoutKey('type', d.name))
   applyTypes(next, nextClasses, nextInstances)
   typeEditor.original = d.name
   typeEditor.appliedDraft = structuredClone(d)
@@ -690,6 +975,31 @@ function createMethodFunction(method, typeName, params = METHOD_PARAMS[method]) 
   return id
 }
 
+function chooseType(title, commit, { variable = false, initial = '' } = {}) {
+  const dialog = document.createElement('dialog')
+  dialog.className = 'type-picker'
+  const choices = variable ? ['a', 'b', 'c', 'd', 'e', 'f'] : [...new Set(typePalette().flatMap((g) => g.items.map((it) => typeText(constructorWithHoles(it.name))))), 'a', 'b', '_']
+  dialog.innerHTML = `<form><h2>${escapeAttr(title)}</h2><label for="pick-type">${variable ? 'Type variable' : 'Type'}</label><input id="pick-type" name="type" value="${escapeAttr(initial)}" placeholder="${variable ? 'a' : 'Int, Maybe Int, [a]…'}" autocomplete="off" required /><div class="type-choices">${choices.map((type) => `<button type="button" data-choice="${escapeAttr(type)}">${escapeAttr(type)}</button>`).join('')}</div><p class="type-error" role="alert"></p><div class="dialog-actions"><button type="button" data-cancel>Cancel</button><button type="submit">Apply</button></div></form>`
+  document.body.append(dialog)
+  const form = dialog.querySelector('form')
+  const input = form.elements.type
+  dialog.querySelectorAll('[data-choice]').forEach((button) => { button.onclick = () => { input.value = button.dataset.choice; input.focus() } })
+  const close = () => { dialog.close(); dialog.remove() }
+  dialog.querySelector('[data-cancel]').onclick = close
+  dialog.addEventListener('close', () => dialog.remove())
+  form.onsubmit = (event) => {
+    event.preventDefault()
+    try {
+      const type = typeFromText(input.value.trim())
+      if (variable && type.kind !== 'var') throw new Error('Use a type variable such as a or b.')
+      commit(type)
+      close()
+    } catch (error) { dialog.querySelector('.type-error').textContent = error.message }
+  }
+  dialog.showModal()
+  input.focus()
+}
+
 function renderTypeEditor(error = '') {
   if (!typeEditor) return
   const d = typeEditor.draft
@@ -703,48 +1013,86 @@ function renderTypeEditor(error = '') {
   // A field's type, as type nodes (a slot of the same type drag as signatures); text that doesn't parse yet is shown as is.
   const fieldType = (f) => { try { return typeFromText(f.type || '_') } catch { return null } }
   const derivingText = applied ? applied.deriving.filter((c) => c.classes.length).map((c) => `deriving${c.strategy === 'stock' ? '' : ` ${c.strategy}`} (${c.classes.join(', ')})`).join(' ') : ''
-  // A name is a token of the declaration, renamed by double-clicking it — names are the only thing typed here.
-  const ident = (kind, name, title, data = '') => `<span class="te-ident te-ident-${kind}" data-ident="${kind}"${data} title="${escapeAttr(title)} — double-click to rename">${escapeAttr(name)}</span>`
+  // A name is a token of the declaration, renamed by clicking it — names are the only thing typed here.
+  const ident = (kind, name, title, data = '') => `<button class="te-ident te-ident-${kind}" data-ident="${kind}"${data} title="${escapeAttr(title)} — click to rename">${escapeAttr(name)}</button>`
   const field = (ci, f, fi, record) => {
     const t = fieldType(f)
-    return `<span class="te-field">${record ? `${ident('field', f.name, 'Field name', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i>` : ''}<span class="te-ftype" data-fi="${fi}" title="Drag a type from TYPES in the workspace here (or onto a part of it)">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span><button class="te-x" data-te="drop-field" data-fi="${fi}" title="Remove field">−</button></span>`
+    const getId = `type:${typeEditor.original}:${f.name}`
+    const actions = d.constructors.length === 1 && derivedDefs[getId] ? `<details class="te-field-actions"><summary title="필드 사용">⋯</summary>${[['읽기', f.name], ['바꾸기', `set ${f.name}`], ['고치기', `over ${f.name}`]].map(([label, name]) => `<button data-use-derived="type:${typeEditor.original}:${name}">${label}</button>`).join('')}</details>` : ''
+    return `<div class="te-field" data-field-row="${fi}">${ident('field', f.name || `field${fi + 1}`, '필드 이름', ` data-ci="${ci}" data-fi="${fi}"`)}<i>::</i><span class="te-ftype" data-fi="${fi}" title="필드 타입 선택">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(f.type)}</span>`}</span>${actions}<button class="te-x" data-te="drop-field" data-fi="${fi}" title="필드 삭제">−</button></div>`
+  }
+  // The kinds the declaration gives the type and its parameters (once applied).
+  const kindOf = (i) => { try { return applied ? showKind(i === undefined ? constructorKind(applied.name) : paramKind(applied, i), '▸') : '' } catch { return '' } }
+  const sub = (n) => String(n).replace(/\d/g, (x) => '₀₁₂₃₄₅₆₇₈₉'[x])
+  const cards = {
+    type: () => `
+      <div class="decl-head">
+        ${ident('type', d.name, 'Type name')}
+        ${(d.params || []).map((v, i) => `<span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span><button class="te-x" data-te="drop-param" data-pi="${i}" title="타입 매개변수 삭제">−</button></span>`).join(' ')}
+        <button class="te-drop te-add-param" data-te="add-param" title="타입 매개변수 추가" aria-label="Add type parameter">+</button>
+      </div>
+      `,
+    param: (n) => `
+      <div class="decl-kind">parameter${kindOf(n.index) ? ` :: ${escapeAttr(kindOf(n.index))}` : ''}</div>
+      <span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(n.name), namer)}">${escapeAttr(n.name)}</span><button class="te-x" data-te="drop-param" data-pi="${n.index}" title="Remove this type parameter">−</button></span>`,
+    ctor: (n) => {
+      const ci = n.index, c = d.constructors[ci]
+      const record = c.fields.some((f) => f.name)
+      return `
+      <div class="decl-head">
+        ${d.constructors.length === 1 && c.name === d.name ? `<details class="te-ctor-options"><summary>생성자 설정</summary>${ident('ctor', c.name, '생성자 이름', ` data-ci="${ci}"`)}</details>` : ident('ctor', c.name, '생성자 이름', ` data-ci="${ci}"`)}
+        <button class="te-use" data-te="use-ctor" title="이 생성자를 함수처럼 추가">+ 사용</button>
+        ${ci ? '<button class="te-x" data-te="move-ctor" title="생성자 위로 이동">↑</button>' : ''}
+        ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
+      </div>
+      <div class="decl-fields">${c.fields.map((f, fi) => field(ci, f, fi, record)).join('')}<button class="te-drop te-add" data-te="add-field" title="Add field — click to choose or drop a type" aria-label="Add field">+</button></div>
+      `
+    },
+    derived: (n) => `
+      <div class="decl-kind">${{ get: 'projections π', update: 'updates (set / over)', case: 'copairing [f₁, …, fₙ]', fold: 'recursor (fold)' }[n.op] ?? 'derived'}</div>
+      ${n.fns.map(({ fnId }) => {
+        const def = derivedDefs[fnId]
+        const custom = nodes[def.id]?.override
+        const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
+        return `<div class="te-derived"><b>${escapeAttr(def.label)}</b> <small>${chainOfDef(def.id)}</small> ${custom ? `<i class="customized">✎ custom${changed ? '' : ' (unchanged)'}</i> <button class="law-check" data-edit="${def.id}">Edit body →</button> <button class="law-check" data-reset="${def.id}" title="Back to the derived definition">Reset</button>` : `<button class="law-check icon-only" data-edit="${def.id}" title="Customize: redefine it with a body of your own (starting from ${escapeAttr(primLabel(def.label))})">✎</button>`}</div>`
+      }).join('')}`,
   }
   typePanel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
-      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
+      <span class="te-status ${error ? 'bad' : 'ok'}" role="status">${error ? escapeAttr(error) : ''}</span>
+      ${universeButtonHtml()}
       ${applied?.library ? `<button class="tool-button" data-te="delete" title="Drop your declaration: ${escapeAttr(d.name)} is the Prelude's again">↺ Prelude's ${escapeAttr(d.name)}</button>` : '<button class="tool-button" data-te="delete">Delete type</button>'}
       <button class="tool-button icon-only" data-te="close" title="Back to the canvas">×</button>
     </div>
-    <div class="type-body">
-      <div class="hs-decl">
-        <div class="hs-line hs-head">
-          <button class="te-keyword" data-te="keyword" title="${d.keyword === 'data' ? 'data: any constructors — click for newtype (exactly one constructor with one field)' : 'newtype: exactly one constructor with one field — click for data'}">${d.keyword}</button>
-          ${ident('type', d.name, 'Type name')}
-          ${(d.params || []).map((v, pi) => `<span class="te-param"><span class="tn tn-var" style="--tc:${colorForType(tvar(v), namer)}">${escapeAttr(v)}</span><button class="te-x" data-te="drop-param" data-pi="${pi}" title="Remove this type parameter">−</button></span>`).join('')}
-          <span class="te-drop te-add-param" data-te="add-param" title="Drag a type variable (a, b, …) from TYPES here to add a parameter: data Pair a = Pair a a">+</span>
-        </div>
-        ${d.constructors.map((c, ci) => {
-          const record = c.fields.some((f) => f.name)
-          return `
-        <div class="hs-line te-ctor" data-ci="${ci}">
-          <span class="hs-op">${ci ? '|' : '='}</span>
-          ${ident('ctor', c.name, `Constructor — a value of ${d.name} is made by exactly one of its constructors`, ` data-ci="${ci}"`)}
-          ${record ? '<span class="hs-punct">{</span>' : ''}${c.fields.map((f, fi) => field(ci, f, fi, record)).join(record ? '<span class="hs-punct">,</span>' : '')}<span class="te-drop te-add" data-te="add-field" title="Drag a type from TYPES here to add a field of that type">+</span>${record ? '<span class="hs-punct">}</span>' : ''}
-          ${c.fields.length ? `<button class="te-mode${record ? ' on' : ''}" data-te="toggle-record" title="${record ? 'Record syntax: Con { name :: A } — click for unnamed fields, Con A' : 'Unnamed fields: Con A — click for record syntax, Con { name :: A }'}">{ record }</button>` : ''}
-          ${d.constructors.length > 1 ? '<button class="te-x" data-te="drop-ctor" title="Remove constructor">×</button>' : ''}
-          <span class="hs-comment te-sig">-- ${escapeAttr(c.name)} ::&nbsp;${chainOfDef(`type:${typeEditor.original}:${c.name}`)}</span>
-        </div>`
-        }).join('')}
-        <div class="hs-line"><span class="hs-op">|</span><button class="te-drop te-add-ctor" data-te="add-ctor" title="Another constructor (a value is one of them): drag a type here for one holding a field of it, or click for one without fields">+ constructor</button></div>
-        ${derivingText ? `<div class="hs-line hs-deriving" title="Derived by itself whenever the fields allow">${escapeAttr(derivingText)}</div>` : ''}
-      </div>
-      <p class="te-hint">Like a Haskell <code>data</code> declaration: a value of ${escapeAttr(d.name)} is made by one of its constructors (<code>|</code> — a sum), each holding its fields (a product). A constructor is also the function that builds the value, shown in its comment. Everything is dragged from TYPES in the workspace: a type onto a <b>+</b> adds a field, onto a field changes it, onto <b>+ constructor</b> adds a constructor holding it; a type variable onto the <b>+</b> after the name adds a parameter. Double-click a name to rename it.</p>
-      ${derived.length ? `<div class="property"><label>MADE FROM IT</label>${derived.map((def) => {
-        const custom = nodes[def.id]?.override
-        const changed = custom && !isPristineOverride({ nodes, functionBodies }, def)
-        return `<div class="te-derived"><b>${escapeAttr(def.label)}</b> ${chainOfDef(def.id)} ${custom ? `<i class="customized">✎ custom${changed ? '' : ' (unchanged)'}</i> <button class="law-check" data-edit="${def.id}">Edit body →</button> <button class="law-check" data-reset="${def.id}" title="Back to the derived definition">Reset</button>` : `<button class="law-check" data-edit="${def.id}" title="Redefine it with a body of your own (starting from ${escapeAttr(primLabel(def.label))})">Customize ✎</button>`}</div>`
-      }).join('')}</div>` : ''}
+    <div class="te-simple">
+      ${cards.type()}
+      <div class="te-constructors ${d.constructors.every((c) => !c.fields.length) ? 'te-choices' : ''}">${d.constructors.map((c, index) => `<section class="te-ctor" data-ci="${index}">${cards.ctor({ index })}</section>`).join('')}</div>
+      <button class="te-drop te-add-ctor" data-te="add-ctor" title="생성자 추가 또는 타입 드롭">+ 생성자</button>
+      <details class="te-details" data-disclosure="type-details:${escapeAttr(d.name)}"><summary>상세 설정</summary>
+        <div class="te-settings"><button class="te-keyword" data-te="keyword" title="data / newtype">${d.keyword}</button><small>${escapeAttr(kindOf())}</small><span>${escapeAttr(derivingText)}</span></div>
+        ${graphDetailsHtml()}
+        <details><summary>구조 그래프</summary><div class="decl-host te-structure"></div></details>
+      </details>
     </div>`
+  function graphDetailsHtml() {
+    const groups = typeGraph(d, { derived: derived.filter((def) => def.derived.op !== 'case').map((def) => ({ id: def.id, label: def.label, op: def.derived.op })) }).nodes.filter((n) => n.kind === 'derived')
+    return groups.map((n) => `<details class="te-function-group"><summary>${{ get: '필드 읽기', update: '필드 갱신', fold: '재귀 함수' }[n.op] || n.op}</summary>${cards.derived(n)}</details>`).join('')
+  }
+  // The declaration as a graph (declGraph.js): the type, its parameters, its constructors injecting into it, what it derives.
+  const graph = typeGraph(d, { derived: derived.map((def) => ({ id: def.id, label: def.label, op: def.derived.op })) })
+  graph.edges = graph.edges.map((e) => (e.field === undefined ? e : { ...e, toPort: `[data-field-row="${e.field}"]` }))
+  const key = layoutKey('type', typeEditor.original || d.name)
+  const at = layoutGraph(graph, layouts[key])
+  drawDeclGraph(typePanel.querySelector('.decl-host'), {
+    graph, at, viewKey: key, fixed: new Set(Object.keys(layouts[key] || {})),
+    card: (n) => `<b>${escapeAttr(n.name || n.op)}</b>${n.fields ? `<small>${n.fields.map((f) => escapeAttr(f.type)).join(', ')}</small>` : ''}`,
+    className: () => '',
+    onMoved: (_, positions) => {
+      layouts[key] = { ...positions }
+      draw()
+    },
+  })
+  restoreDisclosureState(typePanel)
   // Every _ must be filled before the declaration can apply.
   const update = (mutate) => { mutate(d); renderTypeEditor(d.constructors.some((c) => c.fields.some((f) => /(^|[^\w'])_(?![\w'])/.test(f.type))) ? 'Fill each _ in a field — drag a type into it' : applyTypeDraft()) }
   // A type variable a field mentions must be a parameter of the type (as in Haskell): it's added by itself.
@@ -763,12 +1111,18 @@ function renderTypeEditor(error = '') {
       const self = new RegExp(`\\b${old}\\b`, 'g')
       if (/^[A-Z]\w*$/.test(d.name)) d.constructors.forEach((c) => c.fields.forEach((fl) => { fl.type = fl.type.replace(self, d.name) }))
     },
-    ctor: (name, el) => { d.constructors[Number(el.dataset.ci)].name = name },
-    field: (name, el) => { d.constructors[Number(el.dataset.ci)].fields[Number(el.dataset.fi)].name = name },
+    ctor: (name, el) => {
+      const c = d.constructors[Number(el.dataset.ci)]
+      // its card stays where it is
+      const key = layoutKey('type', typeEditor.original || d.name)
+      if (layouts[key]) layouts[key] = renameLayout(layouts[key], { [`ctor:${c.name}`]: `ctor:${name}` })
+      c.name = name
+    },
+    field: (name, el) => { const ci = Number(el.dataset.ci); d.constructors[ci].fields[Number(el.dataset.fi)].name = name; nameRecordFields(d, ci, functionLabelsExcept()) },
   }
   typePanel.querySelectorAll('.te-ident').forEach((el) => {
-    el.onclick = () => showToast('Double-click a name to rename it')
-    el.ondblclick = () => {
+    el.onclick = el.ondblclick = () => {
+      if (!el.isConnected) return
       const input = document.createElement('input')
       input.className = `te-rename te-ident-${el.dataset.ident}`
       input.value = el.textContent
@@ -794,7 +1148,10 @@ function renderTypeEditor(error = '') {
   })
   $('[data-te="keyword"]').onclick = () => update(() => { d.keyword = d.keyword === 'data' ? 'newtype' : 'data'; if (d.keyword !== 'newtype') d.deriving.newtype = [] })
   const addParam = $('[data-te="add-param"]')
-  addParam.onclick = () => showToast('Drag a type variable (a, b, …) from TYPES in the workspace onto + to add a parameter')
+  addParam.onclick = () => chooseType('Add type parameter', (type) => {
+    if ((d.params || []).includes(type.id)) throw new Error(`${type.id} is already a parameter`)
+    update(() => { d.params = [...(d.params || []), type.id] })
+  }, { variable: true })
   dropZone(addParam, {
     shown: hole(),
     current: hole,
@@ -807,44 +1164,42 @@ function renderTypeEditor(error = '') {
   typePanel.querySelectorAll('[data-te="drop-param"]').forEach((b) => { b.onclick = () => update(() => { d.params.splice(Number(b.dataset.pi), 1) }) })
   typePanel.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => editDerived(b.dataset.edit) })
   typePanel.querySelectorAll('[data-reset]').forEach((b) => { b.onclick = () => { resetDerivedFunction(b.dataset.reset); renderTypeEditor() } })
+  typePanel.querySelectorAll('[data-use-derived]').forEach((b) => { b.onclick = () => { const id = b.dataset.useDerived; closeTypeEditor(); addFunctionCall(id) } })
   typePanel.querySelectorAll('.te-ctor').forEach((row) => {
     const c = d.constructors[Number(row.dataset.ci)]
+    row.querySelector('[data-te="use-ctor"]').onclick = () => { closeTypeEditor(); addFunctionCall(`type:${d.name}:${c.name}`) }
+    row.querySelector('[data-te="move-ctor"]')?.addEventListener('click', () => update(() => {
+      const ci = Number(row.dataset.ci)
+      ;[d.constructors[ci - 1], d.constructors[ci]] = [d.constructors[ci], d.constructors[ci - 1]]
+    }))
     row.querySelectorAll('.te-ftype').forEach((slot) => {
       const fl = c.fields[Number(slot.dataset.fi)]
       let shown = hole()
       try { shown = typeFromText(fl.type || '_') } catch {}
-      dropZone(slot, { shown, current: () => shown, commit: (type) => update(() => { fl.type = typeText(type); addParamsOf(type) }) })
+      const changeType = (type) => update(() => { fl.type = typeText(type); addParamsOf(type) })
+      dropZone(slot, { shown, current: () => shown, commit: changeType })
+      slot.tabIndex = 0
+      slot.setAttribute('role', 'button')
+      slot.title = 'Change field type — click to choose or drop a type'
+      slot.onclick = () => chooseType('Change field type', changeType, { initial: fl.type })
+      slot.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); slot.click() } }
     })
-    row.querySelector('[data-te="toggle-record"]')?.addEventListener('click', () => update(() => {
-      const record = c.fields.some((f) => f.name)
-      const taken = new Set(d.constructors.flatMap((o) => o.fields.map((f) => f.name)).filter(Boolean))
-      c.fields.forEach((f) => {
-        if (record) return void (f.name = '')
-        let k = 1
-        while (taken.has(`field${k}`)) k++
-        taken.add(f.name = `field${k}`)
-      })
-    }))
     row.querySelectorAll('[data-te="drop-field"]').forEach((b) => { b.onclick = () => update(() => { c.fields.splice(Number(b.dataset.fi), 1) }) })
     const addField = row.querySelector('[data-te="add-field"]')
-    addField.onclick = () => showToast('Drag a type from TYPES in the workspace onto + to add a field of that type')
-    dropZone(addField, {
-      shown: hole(),
-      current: hole,
-      commit: (type) => update(() => {
-        const record = c.fields.some((f) => f.name)
-        let k = c.fields.length + 1
-        while (c.fields.some((f) => f.name === `field${k}`)) k++
-        c.fields.push({ name: record || !c.fields.length ? `field${k}` : '', type: typeText(type) })
+    const appendField = (type) => update(() => {
+        c.fields.push({ name: '', type: typeText(type) })
+        nameRecordFields(d, Number(row.dataset.ci), functionLabelsExcept())
         addParamsOf(type)
-      }),
-    })
+      })
+    addField.onclick = () => chooseType('Add field', appendField)
+    dropZone(addField, { shown: hole(), current: hole, commit: appendField })
     row.querySelector('[data-te="drop-ctor"]')?.addEventListener('click', () => update(() => { d.constructors.splice(Number(row.dataset.ci), 1) }))
   })
   const addCtor = (type) => update(() => {
     let k = d.constructors.length + 1
     while (d.constructors.some((c) => c.name === `${d.name}${k}`)) k++
     d.constructors.push({ name: `${d.name}${k}`, fields: type ? [{ name: '', type: typeText(type) }] : [] })
+    nameRecordFields(d, d.constructors.length - 1, functionLabelsExcept())
     if (type) addParamsOf(type)
   })
   $('[data-te="add-ctor"]').onclick = () => addCtor(null)
@@ -902,6 +1257,7 @@ function classEditorFor(name) {
 function openClassEditor(name = null) {
   stopGame()
   typeEditor = null
+  universeOpen = false
   if (name) classEditor = classEditorFor(name)
   else {
     let k = 1
@@ -1010,12 +1366,41 @@ const methodArity = (sig) => {
 }
 const methodParams = (sig) => Array.from({ length: methodArity(sig) }, (_, i) => ['x', 'y', 'z', 'w'][i] || `x${i + 1}`)
 
+// Turn token `el` into a text box for its own text; `commit(text)` on Enter/blur when changed, `rerender()` otherwise.
+function editInPlace(el, commit, rerender) {
+  if (!el.isConnected) return
+  const input = document.createElement('input')
+  input.className = `te-rename ${el.className}`
+  input.value = el.dataset.text ?? el.textContent
+  input.spellcheck = false
+  const fit = () => { input.style.width = `${Math.max(input.value.length + 2, 6)}ch` }
+  fit()
+  let done = false
+  const finish = (keep) => {
+    if (done) return
+    done = true
+    const text = input.value.trim()
+    if (keep && text && text !== (el.dataset.text ?? el.textContent)) commit(text)
+    else rerender()
+  }
+  input.onchange = () => finish(true)
+  input.onblur = () => finish(true)
+  input.oninput = fit
+  input.onkeydown = (e) => { if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false) }
+  el.replaceWith(input)
+  input.focus()
+  input.select()
+}
+// A class as a graph (declGraph.js' classGraph): the class, the superclasses
+// implying it, its methods, and its instances — each one the class's record
+// of methods applied to an implementation per method, the implementing
+// functions wired into the methods they implement. Every edit is checked by
+// classDecls.js and applied at once (undoable).
 function renderClassEditor(error = '') {
   if (!classEditor) return
   const d = classEditor.draft
   const builtin = classEditor.builtin
   const applied = !builtin && classEditor.original && resolvedClasses.find((c) => c.name === classEditor.original)
-  const fnChoices = (selected, none) => `<option value="">${none}</option>${customFunctionChoices(selected)}<option value="__new">+ new function</option>`
   const takenHeads = new Set(d.instances.map((i) => i.head))
   // An instance can be added for a type that hasn't the class yet (a builtin class's own instances, or derived ones, already give it)
   // — or that has the Prelude's, for a type the Prelude declares: a written one replaces it (classDecls.js).
@@ -1047,83 +1432,153 @@ function renderClassEditor(error = '') {
     }
     const rInst = applied?.instances.find((r) => r.headName === inst.head)
     const rm = applied?.methods.find((x) => x.name === m.name)
-    if (!fnId) return m.default && nodes[m.default] ? '<span class="law ok">uses the default</span>' : '<span class="law bad">✗ pick a function</span>'
+    if (!fnId) return m.default && nodes[m.default] ? '<span class="law ok">uses the default</span>' : '<span class="law bad">✗ give it a function</span>'
     if (!rInst || !rm) return ''
     const have = implementationScheme(fnId)
     const problem = typeof have === 'string' ? have : instanceMethodProblem(have, applied, rm, rInst)
     return `<span class="law ${problem ? 'bad' : 'ok'}">${problem ? `✗ ${escapeAttr(problem)}` : '✓'}</span>`
   }
-  const head = builtin
-    ? `<b>CLASS</b> <span class="ce-builtin-head"><b>class</b> ${escapeAttr(superclassesOf(d.name).length ? `${superclassesOf(d.name).length > 1 ? `(${superclassesOf(d.name).join(', ')})` : superclassesOf(d.name)[0]} ⇒ ` : '')}<b>${escapeAttr(d.name)}</b> ${arity ? 'f' : 'a'} <b>where</b></span>
-      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : ''}</span>
-      <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>`
-    : `<b>CLASS</b>
-      <input class="ce-supers" value="${escapeAttr(d.supers.join(', '))}" placeholder="superclasses" title="Superclasses, comma-separated (Show, Eq, …): every instance needs them" spellcheck="false" /><i class="ce-arrow">⇒</i>
-      <input class="te-name ce-name" value="${escapeAttr(d.name)}" title="Class name" spellcheck="false" />
-      <input class="te-params ce-param" value="${escapeAttr(d.param)}" title="The class variable — the type an instance is for" spellcheck="false" />
-      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
-      <button class="tool-button" data-ce="delete">Delete class</button>
-      <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>`
-  const methodsHtml = builtin
-    ? `<p class="te-hint">A builtin class: its methods are fixed, and so are the instances it comes with (${escapeAttr(listInstances().filter((i) => i.cls === d.name && i.how !== 'written').map((i) => showHead(headName(i.head))).join(', ') || 'none')}). Give it an instance of your own — for a type of yours, a builtin one that hasn't it, or a type the Prelude declares (yours replaces the Prelude's) — by picking a function for each method${minimal ? `; the rest come from the class's defaults, so it's enough to define <code>${escapeAttr(minimal)}</code>` : ''}. Which instance a call means is worked out from the types.</p>
-      <div class="property"><label>METHODS</label>
-        ${methods.map((m) => `<div class="te-method ce-method"><code>${escapeAttr(m.label)}</code> <small class="ce-sigshow">${qualChainHtml(builtinSchemes[m.name].preds, builtinSchemes[m.name].type)}</small></div>`).join('') || '<small>none of its own — an instance is a claim the laws check</small>'}
-        ${minimal ? `<small class="ce-minimal">{-# MINIMAL ${escapeAttr(minimal)} #-}</small>` : ''}
-      </div>`
-    : `<p class="te-hint">A class is a set of methods every instance implements — like <code>class Show a => Pretty a where pretty :: a -> String</code>. A method's type mentions <code>${escapeAttr(d.param)}</code>; use it applied (<code>${escapeAttr(d.param)} b</code>) for a class of type constructors. Which instance a call means is worked out from the types, so a method needn't take an argument at all (<code>defaultValue :: ${escapeAttr(d.param)}</code>).</p>
-      <div class="property"><label>METHODS</label>
-        ${d.methods.map((m, mi) => `<div class="te-method ce-method" data-mi="${mi}"><input class="te-fname ce-mname" value="${escapeAttr(m.name)}" spellcheck="false" /><i>::</i><input class="te-ftype ce-sig" value="${escapeAttr(m.sig)}" spellcheck="false" /><small>default</small><select class="ce-default">${fnChoices(m.default, 'none')}</select>${nodes[m.default] ? ` <button class="law-check" data-open="${m.default}">Open body →</button>` : ''}${d.methods.length > 1 ? '<button class="te-x" data-ce="drop-method" title="Remove method">−</button>' : ''}${applied ? ` <small class="ce-sigshow">${classDefs[`class:${d.name}:${m.name}`] ? qualChainHtml(classDefs[`class:${d.name}:${m.name}`].scheme.preds, classDefs[`class:${d.name}:${m.name}`].scheme.type) : ''}</small>` : ''}</div>`).join('')}
-        <button class="use-again te-add-ctor" data-ce="add-method">+ method</button>
-      </div>`
-  typePanel.innerHTML = `
-    <div class="play-bar type-bar">${head}</div>
-    <div class="type-body">
-      ${methodsHtml}
-      <div class="property"><label>INSTANCES</label>
-        ${d.instances.map((inst, ii) => {
-          const ctx = inst.context || []
-          const chips = ctx.map((q, k) => `<span class="cc pinned" data-ci="${k}" title="${escapeAttr(`${q.cls} ${q.var} — drop another class here to change it, _ to remove it`)}">${escapeAttr(`${q.cls} ${q.var}`)}<button class="cc-x" title="Remove ${escapeAttr(`${q.cls} ${q.var}`)}">×</button></span>`)
-          const context = chips.length ? `<span class="tc-ctx ce-ctx">${chips.length > 1 ? '<i>(</i>' : ''}${chips.join('<i>,</i> ')}${chips.length > 1 ? '<i>)</i>' : ''} ⇒</span>` : ''
-          const w = written.find((x) => x.headName === inst.head)
-          const incomplete = w && writtenMinimalProblem(w)
-          return `<div class="te-instance" data-ii="${ii}"><div class="ce-instance-head"><b>instance</b> ${context} <b>${escapeAttr(d.name)}</b> <span class="ce-head">${classInstanceHeadHtml(d, inst)}</span> <b>where</b> <button class="te-x" data-ce="drop-instance" title="Remove this instance (its functions stay)">×</button>${incomplete ? ` <span class="law bad">✗ ${escapeAttr(incomplete)}</span>` : ''}</div>
-            ${methods.map((m) => {
-              const fnId = inst.methods?.[m.name]
-              return `<div class="te-method"><code>${escapeAttr(m.label)} =</code> <select data-method="${escapeAttr(m.name)}">${fnChoices(fnId, m.default || builtin ? '— the default —' : '— pick a function —')}</select>${nodes[fnId] ? ` <button class="law-check" data-open="${fnId}">Open body →</button>` : ''} ${statusOf(inst, m)}</div>`
-            }).join('')}
-          </div>`
-        }).join('')}
-        <select class="te-add-instance ce-add-instance"><option value="">+ instance for…</option>${heads.map((h) => `<option value="${escapeAttr(h)}">${escapeAttr(showHead(h))}</option>`).join('')}</select>
+  const namer = createNamer()
+  const kind = arity ? ['*', ...Array(arity).fill('*')].join(' ▸ ') : '*'
+  // A slot a function is put in: dragged from FUNCTIONS in the workspace, or picked (or made new) from its menu.
+  const fnSlot = (fnId, none, data) => `<span class="ce-fn-slot" data-fn-slot ${data}>${nodes[fnId] ? `<b>ƒ ${escapeAttr(nodes[fnId].label)}</b>` : `<i>${none}</i>`}<select title="Pick a function — or drag one from FUNCTIONS in the workspace onto this slot" ${data}><option value="">${none}</option>${customFunctionChoices(fnId)}<option value="__new">+ new function</option></select></span>${nodes[fnId] ? ` <button class="law-check" data-open="${fnId}" title="Open ${escapeAttr(nodes[fnId].label)}'s body">→</button>` : ''}`
+  const sigHtml = (m) => {
+    let t = null
+    try { if (!m.sig.includes('=>')) t = typeFromText(m.sig) } catch {}
+    return `<span class="ce-sig-slot" data-sig title="The method's type, mentioning ${escapeAttr(d.param)} — drag a type from TYPES onto it (or a part of it); click to type it">${t ? typeNodeHtml(t, namer, { paths: true, named: true }) : `<span class="tn tn-con">${escapeAttr(m.sig)}</span>`}</span>`
+  }
+  const cards = {
+    class: () => `
+      <div class="decl-kind">class :: ${escapeAttr(kind)} ▸ Constraint${builtin ? ' · builtin' : ''}</div>
+      <div class="decl-head">
+        <b class="te-keyword">class</b>
+        ${builtin ? `${superclassesOf(d.name).length ? `<span class="ce-supers-shown">${escapeAttr(superclassesOf(d.name).length > 1 ? `(${superclassesOf(d.name).join(', ')})` : superclassesOf(d.name)[0])} ⇒</span>` : ''}<b>${escapeAttr(d.name)}</b> <span class="tn tn-var">${arity ? 'f' : 'a'}</span>` : `<button class="te-ident te-ident-type" data-ce-ident="name" title="Class name — click to rename">${escapeAttr(d.name)}</button><button class="te-ident tn tn-var" data-ce-ident="param" title="The class variable — the type an instance is for; click to rename">${escapeAttr(d.param)}</button>`}
+        <b class="te-keyword">where</b>
       </div>
-    </div>`
+      <div class="decl-actions">
+        ${builtin ? '' : '<span class="te-drop te-add-ctor ce-add-super" data-ce="add-super" title="Drag a class from CLASSES here: every instance must have it too (a superclass)">+ superclass</span><button class="te-add-ctor" data-ce="add-method">+ method</button>'}
+        <span class="ce-add-instance-wrap te-drop te-add-ctor" data-ce="add-instance-zone" title="Drag a type from TYPES here for an instance of it — or pick one">+ instance <select class="ce-add-instance"><option value="">for…</option>${heads.map((h) => `<option value="${escapeAttr(h)}">${escapeAttr(showHead(h))}</option>`).join('')}</select></span>
+      </div>
+      ${minimal ? `<small class="ce-minimal">{-# MINIMAL ${escapeAttr(minimal)} #-}</small>` : ''}`,
+    super: (n) => `
+      <div class="decl-kind">superclass</div>
+      <span class="cc pinned">${escapeAttr(classShown(n.name))} ${escapeAttr(d.param)}<button class="cc-x" data-ce="drop-super" data-super="${escapeAttr(n.name)}" title="Remove this superclass">×</button></span>`,
+    method: (n) => {
+      if (n.builtin) return `
+      <div class="decl-kind">method</div>
+      <div class="te-method ce-method"><code>${escapeAttr(n.label)}</code> <small class="ce-sigshow">${qualChainHtml(builtinSchemes[n.name].preds, builtinSchemes[n.name].type)}</small></div>`
+      const m = d.methods[n.index]
+      const shown = classDefs[`class:${d.name}:${m.name}`]
+      return `
+      <div class="decl-kind">method${shown ? ` :: ${qualChainHtml(shown.scheme.preds, shown.scheme.type)}` : ''}</div>
+      <div class="decl-head ce-method" data-mi="${n.index}"><button class="te-ident" data-ce-ident="method" data-mi="${n.index}" title="Method name — click to rename">${escapeAttr(m.name)}</button><i>::</i>${sigHtml(m)}${d.methods.length > 1 ? `<button class="te-x" data-ce="drop-method" data-mi="${n.index}" title="Remove method">−</button>` : ''}</div>
+      <div class="decl-actions"><small>default</small>${fnSlot(m.default, 'none', `data-default="${n.index}"`)}</div>`
+    },
+    instance: (n) => {
+      const inst = d.instances[n.index]
+      const ctx = inst.context || []
+      const chips = ctx.map((q, k) => `<span class="cc pinned" data-ci="${k}" title="${escapeAttr(`${classShown(q.cls)} ${q.var} — drop another class here to change it, _ to remove it`)}">${escapeAttr(`${classShown(q.cls)} ${q.var}`)}<button class="cc-x" title="Remove ${escapeAttr(`${classShown(q.cls)} ${q.var}`)}">×</button></span>`)
+      const context = chips.length ? `<span class="tc-ctx ce-ctx">${chips.length > 1 ? '<i>(</i>' : ''}${chips.join('<i>,</i> ')}${chips.length > 1 ? '<i>)</i>' : ''} ⇒</span>` : ''
+      const w = written.find((x) => x.headName === inst.head)
+      const incomplete = w && writtenMinimalProblem(w)
+      return `
+      <div class="decl-kind">instance — the methods applied to one function each</div>
+      <div class="ce-instance-head"><b>instance</b> ${context} <b>${escapeAttr(d.name)}</b> <span class="ce-head">${classInstanceHeadHtml(d, inst)}</span> <b>where</b> <button class="te-x" data-ce="drop-instance" title="Remove this instance (its functions stay)">×</button></div>
+      ${incomplete ? `<span class="law bad">✗ ${escapeAttr(incomplete)}</span>` : ''}
+      ${methods.map((m) => `<div class="te-method" data-method-row="${escapeAttr(m.name)}"><code>${escapeAttr(m.label)} =</code> ${fnSlot(inst.methods?.[m.name], m.default || builtin ? '— the default —' : '— a function —', `data-method="${escapeAttr(m.name)}"`)} ${statusOf(inst, m)}</div>`).join('')}`
+    },
+    fn: (n) => `
+      <div class="decl-kind">function</div>
+      <div class="decl-head"><b>ƒ ${escapeAttr(nodes[n.fnId]?.label ?? n.fnId)}</b>${nodes[n.fnId] ? ` <small>${functionChainHtml(nodes[n.fnId], nodes)}</small>` : ''}</div>
+      ${nodes[n.fnId] ? `<div class="decl-actions"><button class="law-check" data-open="${n.fnId}">Open body →</button></div>` : ''}`,
+  }
+  typePanel.innerHTML = `
+    <div class="play-bar type-bar"><b>CLASS</b>
+      <span class="te-status ${error ? 'bad' : 'ok'}">${error ? escapeAttr(error) : applied ? '✓ applied' : ''}</span>
+      ${universeButtonHtml()}
+      ${builtin ? '' : '<button class="tool-button" data-ce="delete">Delete class</button>'}
+      <button class="tool-button icon-only" data-ce="close" title="Back to the canvas">×</button>
+    </div>
+    <p class="te-hint decl-hint">${builtin
+      ? `A builtin class: its methods are fixed, and so are the instances it comes with (${escapeAttr(listInstances().filter((i) => i.cls === d.name && i.how !== 'written').map((i) => showHead(headName(i.head))).join(', ') || 'none')}). Give it an instance of your own — drag a type onto + instance — and a function for each method${minimal ? `; it's enough to define ${escapeAttr(minimal)}` : ''}.`
+      : `A class is a set of methods every instance implements. Drag a class from CLASSES onto + superclass, a type from TYPES onto + instance or a method's type, a function from FUNCTIONS onto a slot. Drag a card to move it.`}</p>
+    <div class="decl-host"></div>`
+  const graph = classGraph(d, builtin ? { builtin: true, methods: methods.map((m) => ({ name: m.name, label: m.label })) } : {})
+  graph.edges = graph.edges.map((e) => (e.kind === 'implements' ? { ...e, toPort: `[data-method-row="${e.method}"]`, label: e.method } : e))
+  const key = layoutKey('class', classEditor.original || d.name)
+  const at = layoutGraph(graph, layouts[key])
+  drawDeclGraph(typePanel.querySelector('.decl-host'), {
+    graph, at, viewKey: key, fixed: new Set(Object.keys(layouts[key] || {})),
+    card: (n) => cards[n.kind](n),
+    onMoved: (_, positions) => { layouts[key] = { ...positions }; draw() },
+  })
+  const nodeOf = (el) => graph.nodes.find((n) => n.id === el.closest('.decl-node').dataset.node)
   const update = (mutate) => { mutate(d); renderClassEditor(applyClassDraft()) }
   const $ = (sel) => typePanel.querySelector(sel)
+  // A function slot: a pick from its menu, or a function dragged from FUNCTIONS (see setupFunctionDrag).
+  const bindFnSlot = (slot, set, newFor) => {
+    const select = slot.querySelector('select')
+    select.onchange = () => update(() => { set(select.value === '__new' ? newFor() : select.value || null); renderFunctionLibrary() })
+    fnSlots.set(slot, (fnId) => update(() => { set(fnId); renderFunctionLibrary() }))
+  }
   if (!builtin) {
-    $('.ce-name').onchange = (e) => update(() => { d.name = e.target.value.trim() })
-    $('.ce-param').onchange = (e) => update(() => {
-      const old = d.param
-      d.param = e.target.value.trim()
-      const word = new RegExp(`\\b${old}\\b`, 'g')
-      if (/^[a-z]\w*$/.test(d.param)) d.methods.forEach((m) => { m.sig = m.sig.replace(word, d.param) })
+    typePanel.querySelectorAll('[data-ce-ident]').forEach((el) => {
+      el.onclick = () => editInPlace(el, (text) => update(() => {
+        if (el.dataset.ceIdent === 'name') {
+          moveLayout(layoutKey('class', d.name), layoutKey('class', text))
+          d.name = text
+        } else if (el.dataset.ceIdent === 'param') {
+          const old = d.param
+          d.param = text
+          const word = new RegExp(`\\b${old}\\b`, 'g')
+          if (/^[a-z]\w*$/.test(d.param)) d.methods.forEach((m) => { m.sig = m.sig.replace(word, d.param) })
+        } else {
+          const m = d.methods[Number(el.dataset.mi)]
+          if (layouts[key]) layouts[key] = renameLayout(layouts[key], { [`method:${m.name}`]: `method:${text}` })
+          // each instance's implementation goes with the name
+          for (const inst of d.instances) if (inst.methods && m.name in inst.methods) { inst.methods[text] = inst.methods[m.name]; delete inst.methods[m.name] }
+          m.name = text
+        }
+      }), () => renderClassEditor())
     })
-    $('.ce-supers').onchange = (e) => update(() => { d.supers = e.target.value.split(/[\s,]+/).filter(Boolean) })
-    typePanel.querySelectorAll('.ce-method').forEach((row) => {
-      const m = d.methods[Number(row.dataset.mi)]
-      row.querySelector('.ce-mname').onchange = (e) => update(() => { m.name = e.target.value.trim() })
-      row.querySelector('.ce-sig').onchange = (e) => update(() => { m.sig = e.target.value.trim() })
-      row.querySelector('.ce-default').onchange = (e) => update(() => { m.default = e.target.value === '__new' ? createMethodFunction(m.name, 'Default', methodParams(m.sig)) : e.target.value || null; renderFunctionLibrary() })
-      row.querySelector('[data-ce="drop-method"]')?.addEventListener('click', () => update(() => { d.methods.splice(Number(row.dataset.mi), 1); d.instances.forEach((i) => { delete i.methods?.[m.name] }) }))
+    typePanel.querySelectorAll('[data-sig]').forEach((slot) => {
+      const m = d.methods[Number(slot.closest('[data-mi]').dataset.mi)]
+      let shown = hole()
+      try { shown = typeFromText(m.sig) } catch {}
+      dropZone(slot, { shown, current: () => shown, commit: (type) => update(() => { m.sig = typeText(type) }) })
+      slot.dataset.text = m.sig
+      slot.onclick = () => editInPlace(slot, (text) => update(() => { m.sig = text }), () => renderClassEditor())
+    })
+    typePanel.querySelectorAll('[data-default]').forEach((slot) => {
+      if (!slot.matches('[data-fn-slot]')) return
+      const m = d.methods[Number(slot.dataset.default)]
+      bindFnSlot(slot, (fnId) => { m.default = fnId }, () => createMethodFunction(m.name, 'Default', methodParams(m.sig)))
+    })
+    typePanel.querySelectorAll('[data-ce="drop-method"]').forEach((b) => {
+      const m = d.methods[Number(b.dataset.mi)]
+      b.onclick = () => update(() => { d.methods.splice(Number(b.dataset.mi), 1); d.instances.forEach((i) => { delete i.methods?.[m.name] }) })
     })
     $('[data-ce="add-method"]').onclick = () => update(() => {
       let name = 'newMethod'
       for (let k = 2; functionNameProblem(name) || d.methods.some((x) => x.name === name); k++) name = `newMethod${k}`
       d.methods.push({ name, sig: `${d.param} -> String`, default: null })
     })
+    const addSuper = $('[data-ce="add-super"]')
+    dropZone(addSuper, {
+      take: () => showToast('Drag a class from CLASSES here to make it a superclass'),
+      constrain: (_, cls) => {
+        if (cls === d.name || d.supers.includes(cls)) return showToast(`${cls} is already ${cls === d.name ? 'this class' : 'a superclass'}`)
+        update(() => { d.supers = [...d.supers, cls] })
+      },
+    })
+    addSuper.onclick = () => showToast('Drag a class from CLASSES here to make it a superclass')
+    typePanel.querySelectorAll('[data-ce="drop-super"]').forEach((b) => { b.onclick = () => update(() => { d.supers = d.supers.filter((s) => s !== b.dataset.super) }) })
   }
   const fnNameOf = (inst) => (inst.head === 'List' ? 'List' : inst.head.replace(/\W/g, ''))
-  typePanel.querySelectorAll('.te-instance').forEach((row) => {
-    const inst = d.instances[Number(row.dataset.ii)]
-    row.querySelector('[data-ce="drop-instance"]').onclick = () => update(() => { d.instances.splice(Number(row.dataset.ii), 1) })
+  typePanel.querySelectorAll('.decl-instance').forEach((card) => {
+    const inst = d.instances[nodeOf(card).index]
+    const at = d.instances.indexOf(inst)
+    card.querySelector('[data-ce="drop-instance"]').onclick = () => update(() => { d.instances.splice(at, 1) })
     // The context is built by dragging classes from the workspace: onto a
     // type variable of the head to ask that class of it, onto a constraint to
     // change its class; _ or × removes one. A context the class can't take is rolled back.
@@ -1135,10 +1590,8 @@ function renderClassEditor(error = '') {
       renderClassEditor(error)
     }
     const ctx = inst.context || []
-    const stop = (el) => el.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
-    row.querySelectorAll('.ce-hvar').forEach((el) => {
+    card.querySelectorAll('.ce-hvar').forEach((el) => {
       const v = el.dataset.var
-      stop(el)
       dropZone(el, {
         take: () => showToast(`Drag a class from CLASSES onto ${v} to ask it of ${v}`),
         constrain: (_, cls) => {
@@ -1149,27 +1602,25 @@ function renderClassEditor(error = '') {
       })
       el.addEventListener('click', () => showToast(`Drag a class from CLASSES onto ${v} to ask it of ${v}`))
     })
-    row.querySelectorAll('.ce-ctx .cc').forEach((chip) => {
+    card.querySelectorAll('.ce-ctx .cc').forEach((chip) => {
       const q = ctx[Number(chip.dataset.ci)]
       const without = () => ctx.filter((c) => c !== q)
-      stop(chip)
       dropZone(chip, {
         take: (sub) => (isHole(sub) ? setContext(without()) : showToast('Drop a class here to change this constraint, or _ to remove it')),
         constrain: (_, cls) => setContext(ctx.filter((c) => c === q || !(c.cls === cls && c.var === q.var)).map((c) => (c === q ? { cls, var: q.var } : c))),
       })
       chip.querySelector('.cc-x').addEventListener('click', (event) => { event.stopPropagation(); setContext(without()) })
     })
-    row.querySelectorAll('select[data-method]').forEach((sel) => {
-      sel.onchange = () => update(() => {
-        const m = methods.find((x) => x.name === sel.dataset.method)
-        inst.methods = { ...inst.methods, [m.name]: sel.value === '__new' ? createMethodFunction(builtin ? m.name : m.name, fnNameOf(inst), m.params) : sel.value || undefined }
-        renderFunctionLibrary()
-      })
+    card.querySelectorAll('[data-fn-slot][data-method]').forEach((slot) => {
+      const m = methods.find((x) => x.name === slot.dataset.method)
+      bindFnSlot(slot, (fnId) => { inst.methods = { ...inst.methods, [m.name]: fnId || undefined } }, () => createMethodFunction(m.name, fnNameOf(inst), m.params))
     })
   })
-  $('.ce-add-instance').onchange = (e) => {
-    const head = e.target.value
+  // A new instance — for a type picked, or dragged from TYPES.
+  const addInstance = (head) => {
     if (!head) return
+    if (takenHeads.has(head)) return renderClassEditor(`${d.name} already has an instance for ${showHead(head)}`)
+    if (!heads.includes(head)) return renderClassEditor(`${showHead(head)} already has ${d.name}`)
     // The context asks the class of each of the head's type variables (`Pretty a => Pretty (Maybe a)`); edit it if that's too much.
     const n = (types[head] ? (types[head].params || []).length : (constructorArity[head] || 0)) - arity
     const context = arity ? [] : ['a', 'b', 'c', 'd'].slice(0, Math.max(0, n)).map((v) => ({ cls: d.name, var: v }))
@@ -1181,9 +1632,19 @@ function renderClassEditor(error = '') {
     const inst = d.instances[d.instances.length - 1]
     const fresh = builtin ? (BUILTIN_CLASSES[d.name].minimal?.[0] || BUILTIN_CLASSES[d.name].methods).map((name) => methods.find((m) => m.name === name)) : methods.filter((m) => !m.default)
     for (const m of fresh) inst.methods[m.name] = createMethodFunction(m.name, fnNameOf(inst), m.params)
+    renderFunctionLibrary()
     renderClassEditor(applyClassDraft())
     if (fresh.length) showToast(`instance ${d.name} ${showHead(head)}: define ${fresh.map((m) => m.label).join(', ')} in the new function${fresh.length > 1 ? 's' : ''} (Open body →)`)
   }
+  $('.ce-add-instance').onchange = (e) => addInstance(e.target.value)
+  dropZone($('[data-ce="add-instance-zone"]'), {
+    shown: hole(), current: hole,
+    commit: (type) => {
+      const { head: h } = typeNode(type)
+      if (h.kind !== 'con') return showToast('Drag a type constructor (Int, Maybe, a type of yours) here for an instance of it')
+      addInstance(h.name)
+    },
+  })
   typePanel.querySelectorAll('[data-open]').forEach((b) => { b.onclick = () => { const id = b.dataset.open; closeTypeEditor(); state.activeFunction = null; enterFunction(id) } })
   $('[data-ce="close"]').onclick = closeTypeEditor
   if (builtin) return
@@ -1198,17 +1659,65 @@ function renderClassEditor(error = '') {
     const next = { ...classes }
     delete next[name]
     applyTypes(types, next)
+    delete layouts[layoutKey('class', name)]
     closeTypeEditor()
     renderFunctionLibrary(); updateInspector(); draw()
     showToast(`Deleted class ${name} (undo to bring it back)`)
   }
 }
 
+// Functions dragged from FUNCTIONS in the workspace onto a function slot of
+// a class graph (a method's default, an instance's method): the slot's
+// handler, by element.
+const fnSlots = new WeakMap()
+function setupFunctionDrag() {
+  let drag = null
+  document.addEventListener('pointerdown', (event) => {
+    const item = event.target.closest?.('.function-library-item')
+    if (!item || event.button !== 0 || typePanel.hidden || !nodes[item.dataset.functionId]?.custom) return
+    drag = { fnId: item.dataset.functionId, item, start: { x: event.clientX, y: event.clientY }, ghost: null, over: null }
+  })
+  window.addEventListener('pointermove', (event) => {
+    if (!drag) return
+    if (!drag.ghost) {
+      if (Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y) < 5) return
+      drag.ghost = document.createElement('span')
+      drag.ghost.className = 'type-ghost fn-ghost'
+      drag.ghost.textContent = `ƒ ${nodes[drag.fnId].label}`
+      document.body.append(drag.ghost)
+      document.body.classList.add('type-dragging')
+    }
+    drag.ghost.style.left = `${event.clientX + 10}px`
+    drag.ghost.style.top = `${event.clientY + 10}px`
+    const slot = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-fn-slot]')
+    if (drag.over !== slot) { drag.over?.classList.remove('drop-over'); slot?.classList.add('drop-over'); drag.over = slot }
+  })
+  const end = (event) => {
+    if (!drag) return
+    const { fnId, ghost, over } = drag
+    drag = null
+    if (!ghost) return
+    ghost.remove()
+    over?.classList.remove('drop-over')
+    document.body.classList.remove('type-dragging')
+    // (not a click on the item: it was dragged)
+    window.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault() }, { capture: true, once: true })
+    const slot = event && document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-fn-slot]')
+    if (slot && fnSlots.has(slot)) fnSlots.get(slot)(fnId)
+    else showToast('Drop a function on a slot of the class graph (a method’s default, an instance’s method)')
+  }
+  window.addEventListener('pointerup', end)
+  window.addEventListener('pointercancel', () => end(null))
+}
 const classLibrary = document.querySelector('#class-library')
 // Classes in the workspace, as nodes: drag one onto a type variable of a
 // signature to constrain it (`Ord a ⇒`) — see constrainVariable.
 function classPaletteHtml() {
-  return classPalette().map((g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.join(', ')} ⇒ ` : ''}${it.name} :: ${it.kind} — drag onto a type variable of a signature to constrain it; click to open the class (its methods and instances)`)}"><span class="tn tn-class"><b>${escapeAttr(it.name)}</b></span></span>`).join('')}</div>`).join('')
+  // Grouped by task (classGroups.js); the numeric tower under its Haskell names, with a note on what each piece of Num is.
+  const groupHtml = (g) => `<div class="tchip-group cchip-group"><small>${g.group}</small>${g.items.map((it) => `<span class="type-chip class-chip" data-cls="${escapeAttr(it.name)}" title="${escapeAttr(`class ${it.supers.length ? `${it.supers.map(classLabel).join(', ')} ⇒ ` : ''}${it.label} :: ${it.kind}${it.label !== it.name ? ` (structurally ${it.name})` : ''}${CLASS_NOTES[it.name] ? ` — ${CLASS_NOTES[it.name]}` : ''} — drag onto a type variable of a signature to constrain it; click to open the class (its methods and instances)`)}"><span class="tn tn-class"><b>${escapeAttr(it.label)}</b></span></span>`).join('')}</div>`
+  const groups = classPalette()
+  const advanced = groups.filter((g) => g.advanced)
+  return groups.filter((g) => !g.advanced).map(groupHtml).join('') + (advanced.length ? `<details class="cchip-advanced"><summary><small>고급</small></summary>${advanced.map(groupHtml).join('')}</details>` : '')
 }
 function renderClassLibrary() {
   document.querySelector('#class-palette').innerHTML = classPaletteHtml()
@@ -1304,11 +1813,15 @@ function createCustomFunction() {
   }
 }
 
+// A fit asked for while the canvas had no size (another column showing on a
+// phone) waits for the canvas to be shown again.
+let fitPending = false
 function resize() {
   const dpr = window.devicePixelRatio || 1
   canvas.width = Math.round(canvas.clientWidth * dpr)
   canvas.height = Math.round(canvas.clientHeight * dpr)
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  if (fitPending && canvas.clientWidth) { fitPending = false; return fitToView() }
   draw()
 }
 // --- Node geometry --------------------------------------------------------
@@ -1368,11 +1881,26 @@ function toScreen(world) { return { x: world.x * state.zoom + state.offset.x, y:
 function slotWorldCenter(node, index) { return { x: node.x + SLOT_START + index * SLOT_STRIDE, y: node.y } }
 function slotScreenCenter(node, index) { return toScreen(slotWorldCenter(node, index)) }
 function functionBlockLeft(node) { return node.x - FN_LEFT }
-// A folded call shows no slots: just its head and a "⋯" where they were.
+// A folded call shows no slots: just its head and, where they were, the
+// whole expression it stands for (`add 3 (mul x 2)`) — the block grows to fit it.
 function isFolded(node) { return !!node.folded && node.params.length > 0 }
-const FOLDED_W = 124     // world px from node.x to a folded call's right edge
+const FOLDED_W = 124     // world px from node.x to a folded call's right edge, at least
+const FOLDED_TEXT_X = 37 // world px from node.x to the start of a folded call's expression
+const FOLDED_TAIL = 44   // world px after the expression — room for the ▶ badge
+let foldedTexts = new Map() // node id -> its expression, until the next draw()
+function foldedText(node) {
+  if (!foldedTexts.has(node.id)) foldedTexts.set(node.id, printNodeText(activeNodes(), node.id, definitions, allBodies) || '⋯')
+  return foldedTexts.get(node.id)
+}
+function foldedWidth(node) {
+  ctx.save()
+  ctx.font = `600 ${CHIP_FONT}px ui-monospace, monospace`
+  const text = ctx.measureText(foldedText(node)).width
+  ctx.restore()
+  return Math.max(FOLDED_W, FOLDED_TEXT_X + text + FOLDED_TAIL)
+}
 function functionBlockRight(node) {
-  if (isFolded(node)) return node.x + FOLDED_W
+  if (isFolded(node)) return node.x + foldedWidth(node)
   return node.params.length > 0
     ? node.x + SLOT_START + (node.params.length - 1) * SLOT_STRIDE + SLOT_D / 2 + FN_TAIL
     : node.x + 78
@@ -1435,6 +1963,7 @@ function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)
 // reset to a hardcoded zoom/offset and left anything below the fold (e.g.
 // the lower rows of the 15-node main graph) cut off below the canvas edge.
 function fitToView() {
+  if (!canvas.clientWidth) { fitPending = true; return draw() }
   placeNewArguments() // measure where new arguments will actually be drawn
   const w = canvas.clientWidth, h = canvas.clientHeight
   const bounds = graphBounds()
@@ -1585,7 +2114,7 @@ function contextHtml(opts, namer) {
   const { pinned, inferred } = contextParts(opts)
   const text = (p) => showQual([p], tcon('_'), namer).split(' ⇒ ')[0]
   const chips = [
-    ...pinned.map((q, k) => `<span class="cc pinned${opts.contextBad ? ' bad' : ''}" data-ci="${k}" title="${escapeAttr(opts.contextBad || `Pinned: ${q.cls} ${q.var} — drop another class here to change it, _ to un-pin`)}">${escapeAttr(q.varId ? text(pred(q.cls, tvar(q.varId))) : `${q.cls} ${q.var}`)}<button class="cc-x" data-ci="${k}" title="Un-pin ${escapeAttr(`${q.cls} ${q.var}`)}">×</button></span>`),
+    ...pinned.map((q, k) => `<span class="cc pinned${opts.contextBad ? ' bad' : ''}" data-ci="${k}" title="${escapeAttr(opts.contextBad || `Pinned: ${classShown(q.cls)} ${q.var} — drop another class here to change it, _ to un-pin`)}">${escapeAttr(q.varId ? text(pred(q.cls, tvar(q.varId))) : `${classShown(q.cls)} ${q.var}`)}<button class="cc-x" data-ci="${k}" title="Un-pin ${escapeAttr(`${classShown(q.cls)} ${q.var}`)}">×</button></span>`),
     ...inferred.map((p, k) => `<span class="cc${opts.context ? ' inferred' : ''}" data-pi="${k}"${opts.context ? ` title="Inferred — what the body needs. Click to pin it in the signature"` : ''}>${escapeAttr(text(p))}</span>`),
   ]
   if (!chips.length) return ''
@@ -1601,6 +2130,7 @@ function bodyParams(fnId) { return Object.values(functionBodies[fnId] || {}).fil
 function chainInfo(node, pass) {
   const entry = pass.perNode.get(node.id)
   if (!entry) return null
+  if (node.match) return { segments: [valueTypeOfEntry(entry)], targets: [], opts: { preds: entry.preds } }
   // (A value node may share its source's entry — Output does — so it's the node's kind that decides.)
   if (node.type === 'function' && entry.paramTypes) {
     const editable = isSignatureEditable(node) === 'signature'
@@ -1665,7 +2195,7 @@ function wireChain(el, info) {
       constrain: (path, cls) => constrainAt(info, i, path, cls),
     })
     seg.addEventListener('pointerdown', (event) => { event.stopPropagation(); event.preventDefault() })
-    seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('Drag a type from TYPES in the workspace onto this chevron (or onto a part of it) — _ leaves it to inference. A class from CLASSES dropped on a type variable constrains it') })
+    seg.addEventListener('click', (event) => { event.stopPropagation(); showToast('작업 공간의 타입 목록에서 타입을 이 자리(또는 그 일부)에 끌어다 놓으세요 — _는 추론에 맡겨요. 클래스 목록의 클래스를 타입 변수에 놓으면 제약이 돼요') })
   })
   if (!info.opts.context) return
   const { pinned, inferred } = contextParts(info.opts)
@@ -1673,13 +2203,13 @@ function wireChain(el, info) {
   el.querySelectorAll('.tc-ctx .cc.pinned').forEach((chip) => {
     const q = pinned[Number(chip.dataset.ci)]
     const same = (c) => c.cls === q.cls && c.var === q.var
-    const unpin = () => editContext(info.fnId, (ctx) => ctx.filter((c) => !same(c)), `${q.cls} ${q.var} is un-pinned`)
+    const unpin = () => editContext(info.fnId, (ctx) => ctx.filter((c) => !same(c)), `${classShown(q.cls)} ${q.var} is un-pinned`)
     stop(chip)
     dropZone(chip, {
       take: (sub) => (isHole(sub) ? unpin() : showToast('Drop a class here to change this constraint, or _ to un-pin it')),
       constrain: (_, cls) => {
         if (classArity(cls) !== classArity(q.cls)) return showToast(`${cls} and ${q.cls} constrain different kinds of type — drop ${cls} on a type variable instead`)
-        editContext(info.fnId, (ctx) => ctx.filter((c) => !(c.cls === cls && c.var === q.var)).map((c) => (same(c) ? { cls, var: q.var } : c)), `${q.cls} ${q.var} is now ${cls} ${q.var}`)
+        editContext(info.fnId, (ctx) => ctx.filter((c) => !(c.cls === cls && c.var === q.var)).map((c) => (same(c) ? { cls, var: q.var } : c)), `${classShown(q.cls)} ${q.var} is now ${classShown(cls)} ${q.var}`)
       },
     })
     chip.querySelector('.cc-x').addEventListener('click', (event) => { event.stopPropagation(); unpin() })
@@ -1743,7 +2273,7 @@ function drawCanvasChains(pass) {
     const isFn = node.type === 'function'
     const rect = isFn ? functionBlockScreenRect(node) : valueBlockScreenRect(node)
     el.style.top = `${rect.top + rect.height + 30 * state.zoom}px`
-    if (isFn && node.params.length && !isFolded(node)) {
+    if (isFn && !node.match && node.params.length && !isFolded(node)) {
       el.style.left = `${slotScreenCenter(node, 0).x - (SLOT_STRIDE / 2) * state.zoom}px`
       info.opts.widths = node.params.map(() => `calc(${SLOT_STRIDE * state.zoom}px + .7em)`)
     } else {
@@ -1765,11 +2295,17 @@ function drawSignatureBar() {
   if (!signatureBar.isConnected) document.querySelector('.canvas-wrap')?.append(signatureBar)
   const fnId = state.activeFunction
   const def = fnId && nodes[fnId]
+  if (def?.matchBranch) {
+    signatureBar.hidden = false
+    const fields = bodyParams(fnId).filter((p) => !p.matchCapture).map((p) => p.label)
+    signatureBar.innerHTML = `<span class="sig-name"><b>⑂ ${escapeAttr([def.label, ...fields].join(' '))}</b></span><span class="sig-hint">분기 본문 · ←로 함수에 돌아가기</span>`
+    return
+  }
   const info = def && chainInfo(def, typePass(nodes))
   signatureBar.hidden = !info
   if (!info) return
   const names = [...bodyParams(fnId).map((p) => p.label), 'result']
-  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "the Prelude's type — kept" : 'drag a type from TYPES onto a block, a class from CLASSES onto a type variable'}</span>`
+  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "Prelude의 타입 — 유지됨" : '함수 시그니처'}</span>`
   wireChain(signatureBar, info)
 }
 
@@ -1833,12 +2369,14 @@ function endTypeDrag(event) {
   if (drop && cls) drop.zone.constrain ? drop.zone.constrain(drop.path, cls) : showToast(`A class constrains a type variable of a signature — drop ${cls} on one`)
   else if (drop) dropType(drop.zone, drop.path, sub)
   else if (event && !moved && cls) openClassEditor(cls) // a click: the class itself — its methods and instances
-  else if (event && !moved) showToast('Drag a type onto a chevron of a signature to pin it')
+  else if (event && !moved) showToast('타입을 시그니처의 자리에 끌어다 놓아 고정하세요')
 }
-document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
-window.addEventListener('pointermove', (event) => { if (typeDrag) moveTypeDrag(event) })
-window.addEventListener('pointerup', (event) => { if (typeDrag) endTypeDrag(event) })
-window.addEventListener('pointercancel', () => { if (typeDrag) endTypeDrag(null) })
+function setupTypeDrag() {
+  document.addEventListener('pointerdown', (event) => { const chip = event.target.closest?.('.type-chip'); if (chip && event.button === 0) startTypeDrag(chip, event) })
+  window.addEventListener('pointermove', (event) => { if (typeDrag) moveTypeDrag(event) })
+  window.addEventListener('pointerup', (event) => { if (typeDrag) endTypeDrag(event) })
+  window.addEventListener('pointercancel', () => { if (typeDrag) endTypeDrag(null) })
+}
 // Put `sub` at `path` of what a drop zone holds (see typeExpr.js' pinAt).
 function dropType(zone, path, sub) {
   if (zone.take) return zone.take(sub)
@@ -1895,10 +2433,11 @@ function commitSignature(fnId, edits, context, messages) {
   }
   if (Object.entries(before).every(([id, text]) => body[id]?.annotation === text) && JSON.stringify(output.context) === JSON.stringify(contextBefore)) return ''
   renderFunctionLibrary(); updateInspector(); draw()
-  showToast(`${messages.done()}${gone.length ? ` (${gone.map((q) => `${q.cls} ${q.var}`).join(', ')} went with it)` : ''}`)
+  showToast(`${messages.done()}${gone.length ? ` (${gone.map((q) => `${classShown(q.cls)} ${q.var}`).join(', ')} went with it)` : ''}`)
   return ''
 }
 function canConnect(source, target, index) {
+  if (target.match && index < target.match.branches.length) return false
   const pass = typePass()
   const expected = pass.perNode.get(target.id)?.paramTypes?.[index]
   if (!expected) return false
@@ -1958,8 +2497,9 @@ function useAgain(n) {
 // everything plugged into them. Purely a view — it all stays plugged in.
 // Everything starts open.
 function isVisible(n) { // a λ's (lifted) definition is never drawn — its call node is the λ — nor a customized derived function (it's listed under its type)
-  if (isHiddenDefinition(n)) return false
-  for (let at = slotHost(n), guard = 0; at && guard < 500; at = slotHost(at.host), guard++) if (at.host.folded) return false
+  if (n.matchInternal || n.matchCapture || isHiddenDefinition(n) || isBuiltinDefinition(n)) return false
+  if (n.type === 'parameter' && n.label === '_' && nodes[state.activeFunction]?.matchBranch) return false
+  for (let at = slotHost(n), guard = 0; at && guard < 500; at = slotHost(at.host), guard++) if (at.host.folded || at.host.matchInternal) return false
   return true
 }
 // `mountedTo` is `hostId:slotIndex` — split at the last colon, since ids can
@@ -2009,6 +2549,7 @@ function drawUnfoldedLinks() {
 // right end stays put, so the link into the call it feeds doesn't jump, and
 // so does the camera; opening lays out just what it reveals, to its left.
 function foldKeepingRight(n, folded) {
+  if (n.match || n.matchInternal) return
   const right = rightEdge(n)
   n.folded = folded
   setRightEdge(n, right)
@@ -2113,6 +2654,9 @@ function drawReferenceLinks() {
   ctx.restore()
 }
 function draw() {
+  foldedTexts = new Map()
+  updateRunLabel()
+  document.querySelector('.canvas-empty').hidden = !!state.activeFunction || Object.values(activeNodes()).some(isVisible)
   elaborationCache = null // something may have changed
   projectPassCache = null
   labelNamer = createNamer()
@@ -2140,12 +2684,11 @@ function draw() {
   drawWire()
   updatePortEditor(pass)
   renderExecutionOverlay()
-  document.querySelector('#node-count').textContent = Object.keys(activeNodes()).length
+  document.querySelector('#node-count').textContent = Object.values(activeNodes()).filter((n) => !isHiddenDefinition(n) && !isBuiltinDefinition(n)).length
   document.querySelector('#connection-count').textContent = Object.values(activeNodes()).filter(n => n.connected).length
   document.querySelector('#graph-name').textContent = activeName()
-  document.querySelector('#run').title = managedMain(nodes) ? '프로그램 전체 실행: main의 Output을 계산합니다. 다른 함수의 ▶ / Play function은 개별 테스트입니다.' : '기존 프로젝트의 ENTRY POINT 실행 (미지정 시 선택한 함수). ▶ / Play function은 개별 테스트입니다.'
   document.querySelector('#back-graph').hidden = !state.activeFunction
-  document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : 'top level'}`
+  document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : '최상위'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
   if (!state.drag && !state.wire) scheduleCheckpoint()
@@ -2219,8 +2762,12 @@ function drawFunctionBlock(node, pass, selected) {
   ctx.fillStyle = '#fff'; ctx.fill()
   ctx.shadowColor = 'transparent'; ctx.lineWidth = selected || broken ? 3 : 2; ctx.strokeStyle = broken ? '#e0537d' : selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
   ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
-  ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('ƒ', p.x, p.y + 1)
-  if (isFolded(node)) { ctx.fillStyle = '#9691a8'; ctx.font = `700 ${20 * state.zoom}px sans-serif`; ctx.fillText('⋯', p.x + 46 * state.zoom, p.y + 1) }
+  ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(node.match ? '⑂' : 'ƒ', p.x, p.y + 1)
+  if (isFolded(node)) {
+    ctx.textAlign = 'left'; ctx.fillStyle = '#211d34'; ctx.font = `600 ${CHIP_FONT * state.zoom}px ui-monospace, monospace`
+    ctx.fillText(foldedText(node), p.x + FOLDED_TEXT_X * state.zoom, p.y + 1)
+    ctx.textAlign = 'center'
+  }
   const playX = rect.right - 24 * state.zoom, playY = rect.top + 2 * state.zoom
   ctx.beginPath(); ctx.arc(playX, playY, 13 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = '#211d34'; ctx.fill()
   ctx.fillStyle = '#fff'; ctx.font = `${11 * state.zoom}px sans-serif`; ctx.fillText('▶', playX + 1, playY + 1)
@@ -2286,6 +2833,7 @@ function label(node, p, baseY) {
 // `3` into add's slot and params[0] becomes '3'), so the declared name comes
 // from the builtin as shipped, or a custom function's body parameter nodes.
 function paramDisplayName(node, index) {
+  if (node.match) return index === node.match.branches.length ? '대상' : branchPattern(node.match.branches[index])
   const sourceId = node.sourceFunctionId || node.id
   const declared = builtinNodes[sourceId]?.params?.[index]
     ?? Object.values(functionBodies[sourceId] || {}).filter((n) => n.type === 'parameter')[index]?.label
@@ -2326,6 +2874,7 @@ function makeRoom(grown) {
 // Why a call node no longer matches what it calls (a type edit renamed a
 // constructor or field, or a signature changed underneath it), or null.
 function callProblem(node) {
+  if (node.match) return matchProblem(node, activeNodes(), definitions, functionBodies)
   if (node.type !== 'function' || !node.sourceFunctionId) return null
   const def = definitions[node.sourceFunctionId]
   if (!def) return `${node.label} no longer exists (renamed or deleted)`
@@ -2364,7 +2913,7 @@ function updatePortEditor(pass = typePass()) {
   const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
   // One fold toggle per call, on the top border above its head badge: folds
   // (or opens) all its slots, and everything plugged into them, at once.
-  visibleFunctions.filter((node) => node.params.length > 0).forEach((node) => {
+  visibleFunctions.filter((node) => !node.match && node.params.length > 0).forEach((node) => {
     const p = point(node)
     const size = 20 * state.zoom
     const toggle = document.createElement('button')
@@ -2381,6 +2930,20 @@ function updatePortEditor(pass = typePass()) {
   })
   visibleFunctions.filter((node) => !isFolded(node)).forEach(node => node.params.forEach((rawValue, index) => {
     const center = slotScreenCenter(node, index)
+    if (node.match && index < node.match.branches.length) {
+      const branch = node.match.branches[index]
+      const button = document.createElement('button')
+      button.className = 'match-arm-button'
+      button.dataset.matchId = node.id; button.dataset.branchIndex = index
+      button.textContent = branchPattern(branch)
+      button.title = `${branchPattern(branch)} → 분기 본문 편집`
+      button.style.left = `${center.x - 58 * state.zoom}px`; button.style.top = `${center.y - 18 * state.zoom}px`
+      button.style.width = `${116 * state.zoom}px`; button.style.height = `${36 * state.zoom}px`; button.style.fontSize = `${11 * state.zoom}px`
+      button.onpointerdown = (event) => { event.stopPropagation(); event.preventDefault() }
+      button.onclick = () => enterFunction(branch.useDefault ? node.match.defaultBranch.fnId : branch.fnId)
+      editor.append(button)
+      return
+    }
     const mountedId = node.mounted[index]
     const mountedNode = mountedId ? activeNodes()[mountedId] : null
     const expectedType = pass.perNode.get(node.id)?.paramTypes?.[index]
@@ -2616,8 +3179,8 @@ function renderValueInspector(n) {
   const annotateRow = isNumber
     ? `<div class="property"><label>ANNOTATE TYPE</label><select class="type-annotate"><option value="">자동 (추론)</option>${numericTypes.filter((t) => n.annotation === t || entails([], litPred(t))).map((t) => `<option ${n.annotation === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`
     : ''
-  if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
-  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${n.label}</b><small>${nodeTypeLabel(n)}</small></div><span class="live">VALUE</span></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' || n.type === 'literal' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
+  if (parameterOf(n)) return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(nodeName(n))}</b></div></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${deleteButton(n)}<div class="inspector-note">Another use of this parameter: add it from PARAMETERS in the workspace.</div>`
+  return `<div class="selected-node"><span class="selected-icon number">#</span><div><b>${escapeAttr(n.label)}</b></div></div><div class="property"><label>TYPE${state.activeFunction && (n.type === 'parameter' || n.type === 'output' || parameterOf(n)) ? ' — drag a type onto it to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(parameterOf(n) || n)}</div></div>${defaultRow}${annotateRow}<div class="property"><label>VALUE</label>${n.type === 'boolean' ? `<select class="bool-input"><option ${n.value === 'true' ? 'selected' : ''}>true</option><option ${n.value !== 'true' ? 'selected' : ''}>false</option></select>` : `<input class="value-input" value="${escapeAttr(n.type === 'ref' || n.type === 'value' ? nodeDisplayText(n) : n.value ?? 'partial')}" ${isNumber || n.type === 'text' || n.type === 'literal' || n.type === 'value' ? '' : 'readonly'} />`}</div>${useAgainButton(n)}${deleteButton(n)}`
 }
 // Why `n` can't be deleted, or null if it can. Builtins are the language
 // itself; a function's Output and parameters are its signature, changed
@@ -2647,7 +3210,7 @@ function functionLawsPanel(n) {
     const status = !r ? '' : r.ok ? `<span class="law ok">✓ ${escapeAttr(r.law)}</span>` : `<span class="law bad">✗ ${escapeAttr(r.law)} — <em>${escapeAttr(r.counterexample)}</em></span>`
     return `<div class="law-row"><button class="law-check" data-law="${law}">${law}</button><button class="law-check" data-pin="${law}" title="Pin this claim on the canvas (re-checked after every edit)">📌</button>${status}</div>`
   })
-  return `<div class="property"><label>LAWS</label>${rows.join('')}</div>`
+  return `<details class="property" data-disclosure="laws:${escapeAttr(n.id)}"><summary>Law checks</summary>${rows.join('')}</details>`
 }
 function runFunctionLaw(n, law) {
   lawResults.set(n.id, { ...(lawResults.get(n.id) || {}), [law]: computeFunctionLaw(n, law) })
@@ -2702,7 +3265,7 @@ function definitionBlock(id, title = 'DEFINITION') {
   if (!tokens) return ''
   const type = def.scheme ? showQual(def.scheme.preds, def.scheme.type) : functionSignature(def, nodes)
   const note = def.note ? `\n-- ${def.note}` : ''
-  return `<div class="property definition"><label>${escapeAttr(title)}</label><pre class="haskell">${escapeAttr(`${def.label} :: ${asciiType(type)}`)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></div>`
+  return `<details class="property definition" data-disclosure="definition:${escapeAttr(id)}"><summary>${escapeAttr(title)}</summary><pre class="haskell">${escapeAttr(`${def.label} :: ${asciiType(type)}`)}\n${tokensHtml(tokens)}${escapeAttr(note)}</pre></details>`
 }
 // A call's DEFINITION: your own function's, or the definition graph of a
 // library one — with the way into it.
@@ -2785,10 +3348,10 @@ function readonlyInspector(n) {
     const editable = def?.view && isEditableView(active, viewDefs)
     return `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>${escapeAttr(def?.label ?? '')}</b><small>Definition · read-only</small></div><span class="live">VIEW</span></div>${definitionBlock(active)}${editable ? '<button class="evaluate" id="edit-definition">✎ &nbsp; Edit definition</button>' : ''}<div class="inspector-note">${editable ? (def.note ? `A primitive of the runtime. Edit definition makes it your own graph, starting as the primitive itself (${escapeAttr(primLabel(def.label))}) — wrap or replace it; every call then runs yours, checked against the same type.` : 'How the Prelude defines it. Edit definition makes it your own graph — every call then runs yours, checked against the same type.') : 'A read-only definition: nodes can be moved to look, not changed.'}</div>`
   }
-  return `<div class="selected-node"><span class="selected-icon">${n.type === 'function' ? 'ƒ' : '·'}</span><div><b>${escapeAttr(nodeDisplayText(n))}</b><small>${escapeAttr(nodeTypeLabel(n))} · read-only</small></div></div><div class="property"><label>TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${n.type === 'function' ? callDefinitionBlock(n) : ''}${definitions[n.sourceFunctionId]?.lambda ? '<button class="use-again" id="open-body">Open body →</button>' : ''}`
+  return `<div class="selected-node"><span class="selected-icon">${n.type === 'function' ? 'ƒ' : '·'}</span><div><b>${escapeAttr(nodeDisplayText(n))}</b><small>Read-only definition</small></div></div><div class="property"><label>TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${n.type === 'function' ? callDefinitionBlock(n) : ''}${definitions[n.sourceFunctionId]?.lambda ? '<button class="use-again" id="open-body">Open body →</button>' : ''}`
 }
 function useAgainButton(n) {
-  return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again <small>(Δ)</small></button>'
+  return n.type === 'output' ? '' : '<button class="use-again" id="use-again" title="Make a reference to plug this value into another slot">↪ Use again</button>'
 }
 function deleteButton(n) {
   return deleteBlocker(n) ? '' : '<button class="delete-node" id="delete-node">Delete node <kbd>Del</kbd></button>'
@@ -2814,6 +3377,7 @@ function deleteNode(id) {
     if (child) { child.mountedTo = null; child.connected = false; child.x = n.x + 150 + i * 40; child.y = n.y + 120 }
   })
   delete graph[id]
+  if (n.match) deleteMatch({ nodes, functionBodies }, graph, n)
   if (graph === nodes && n.custom) delete functionBodies[id]
   // The last call to a λ is the λ: take its hidden definition and body with it.
   const lambdaId = n.sourceFunctionId
@@ -2852,28 +3416,90 @@ function inspectorChainHtml(n) {
   inspectorChainInfo = info
   return info ? chainHtml(info.segments, createNamer(), info.opts) : '?'
 }
-// The whole signature of custom function `fnId` (as on its definition), pinnable segment by segment.
-function signatureChainHtml(fnId) {
-  const def = nodes[fnId]
-  const info = def && chainInfo(def, typePass(nodes))
-  inspectorChainInfo = info
-  return info ? chainHtml(info.segments, createNamer(), info.opts) : '?'
-}
 // Inside a body, whatever is selected, the body's own definition is shown
 // too (its tokens marking the selection) — the way back to any other node.
 function enclosingDefinition(n) {
   const fn = state.activeFunction
-  if (!fn || n.type === 'output' || definitions[fn]?.lambda) return ''
+  if (!fn || n.type === 'output' || definitions[fn]?.lambda || (n.sourceFunctionId || n.id) === fn) return ''
   return definitionBlock(fn, `DEFINITION · ƒ ${definitions[fn]?.label ?? ''}`)
+}
+function parameterControls(n) {
+  if (!n.params.length) return ''
+  const editable = nodes[n.id] === n && n.custom
+  return `<div class="property"><label>INPUTS</label>${n.params.map((value, i) => {
+    const source = n.mounted[i] && activeNodes()[n.mounted[i]]
+    return `<div class="port-row">${editable ? `<input class="param-rename" aria-label="Parameter ${i + 1} name" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" />${i ? `<button class="param-move" data-index="${i}" title="Move parameter left">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}</span>`}${source ? `<button class="input-source" data-select-input="${i}" title="Select connected value">${escapeAttr(nodeDisplayText(source))}</button><button class="disconnect-input" data-disconnect-input="${i}" title="Disconnect input" aria-label="Disconnect ${escapeAttr(paramDisplayName(n, i))}">×</button>` : '<small>Not connected</small>'}</div>`
+  }).join('')}</div>`
+}
+function scopeControls(n) {
+  const options = (value) => ['local', 'main', 'shared'].map((scope) => `<option ${value === scope ? 'selected' : ''}>${scope}</option>`).join('')
+  return `<details class="property" data-disclosure="scopes"><summary>Scope settings</summary><label for="function-scope">Function scope</label><select class="scope-select" id="function-scope">${options(n.scope)}</select>${n.params.map((_, i) => `<label class="scope-row">${escapeAttr(paramDisplayName(n, i))}<select class="param-scope" data-index="${i}">${options(n.paramScopes[i])}</select></label>`).join('')}</details>`
+}
+function renderFunctionInspector(n) {
+  if (n.match) return renderMatchInspector(n)
+  const problem = callProblem(n)
+  const editable = nodes[n.id] === n && n.custom
+  return `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${escapeAttr(n.label)}</b><small>${editable ? 'Function definition' : 'Function call'}</small></div></div>
+    ${functionNameRow(n)}${ambiguityRow(n)}
+    ${problem ? `<div class="property broken-call"><label>CONNECTION ERROR</label><div class="connection-tag">${escapeAttr(problem)}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}
+    <div class="property"><label>${isSignatureEditable(n) === 'signature' ? 'FUNCTION SIGNATURE' : 'TYPE AFTER CONNECTIONS'}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>
+    ${parameterControls(n)}
+    <button class="evaluate" id="evaluate">▶ Run this node</button>
+    ${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}
+    ${useAgainButton(n)}
+    ${nodes[n.id] === n ? `<div class="property"><label>PROJECT ENTRY</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Project entry · unset' : 'Set as project entry'}</button></div>` : ''}
+    ${canConvertMatch(n) ? '<button class="use-again" id="convert-match">⑂ 패턴 매칭으로 변환</button>' : ''}
+    ${callDefinitionBlock(n)}${customizedRow(n)}${editable ? functionLawsPanel(n) : ''}${scopeControls(n)}${deleteButton(n)}`
+}
+function canConvertMatch(n) {
+  const def = definitions[n.sourceFunctionId]
+  return state.activeFunction && !nodes[n.sourceFunctionId]?.override && def?.derived?.op === 'case' && n.mounted?.length === def.derived.arity && n.mounted.every((id) => activeNodes()[id])
+}
+function renderMatchInspector(n) {
+  const problem = matchProblem(n, activeNodes(), definitions, functionBodies)
+  const q = resolvedValueQual(n)
+  return `<div class="selected-node"><span class="selected-icon">⑂</span><div><b>${escapeAttr(n.match.type)} 패턴 매칭</b><small>분기를 눌러 본문을 작성하세요</small></div></div>
+    ${problem ? `<div class="property broken-call">${escapeAttr(problem)}</div>` : ''}
+    <div class="property"><label>결과 타입</label>${qualChainHtml(q.preds, q.type)}</div>
+    <div class="match-branches">${n.match.branches.map((b, i) => `<div class="match-branch-row"><button class="match-open" data-match-open="${i}">${escapeAttr(b.ctor)}${b.useDefault ? ' → _' : ' →'}</button>${!b.useDefault ? `<div class="match-binders">${b.fields.map((f, fi) => `<input aria-label="${escapeAttr(b.ctor)} 패턴 변수 ${fi + 1}" data-match-binder="${i}" data-field="${fi}" value="${escapeAttr(f.name)}" />`).join('')}</div>` : ''}<label class="match-default"><input type="checkbox" data-match-default="${i}" ${b.useDefault ? 'checked' : ''}/>기본 분기로 처리</label></div>`).join('')}</div>
+    ${n.match.defaultBranch ? '<button class="use-again" id="match-default-body">_ 기본 분기 편집 →</button>' : ''}
+    <button class="evaluate" id="evaluate">▶ Run this node</button>${useAgainButton(n)}${deleteButton(n)}`
 }
 function updateInspector() {
   const n = activeNodes()[state.selected]
-  if (!n) return
+  inspectorChainInfo = null
+  if (!n) { inspector.innerHTML = '<p class="inspector-empty">Select a node to edit its inputs and inspect its type.</p>'; return }
   inspector.innerHTML = (viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
-    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div><span class="live">TARGET</span></div><div class="property"><label>OUTPUT VALUE</label><div class="connection-tag">${n.source ? `ƒ ${activeNodes()[n.source]?.label || n.value}` : 'Drop a node here'}</div></div>${state.activeFunction ? `${nodes[state.activeFunction]?.library || nodes[state.activeFunction]?.override ? customizedRow(nodes[state.activeFunction]) : ''}<div class="property"><label>SIGNATURE${nodes[state.activeFunction]?.library ? ' — the Prelude\'s, kept' : ' — drag a type onto a chevron to pin it'}</label><div class="inspector-chain">${signatureChainHtml(state.activeFunction)}</div></div>${definitionBlock(state.activeFunction)}` : ''}${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}<div class="inspector-note">This node defines what the function returns.</div>`
-    : n.type === 'function'
-    ? `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${n.label}</b><small>Function · ${n.scope || 'main'}</small></div><span class="live">COMPOSABLE</span></div>${functionNameRow(n)}${customizedRow(n)}${ambiguityRow(n)}${callProblem(n) ? `<div class="property broken-call"><label>BROKEN</label><div class="connection-tag">${escapeAttr(callProblem(n))}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}<div class="property"><label>TYPE${isSignatureEditable(n) === 'signature' ? ' — drag a type onto a chevron to pin it' : ''}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>${callDefinitionBlock(n)}<div class="property"><label>PARAMETERS</label>${n.params.map((value, i) => `<div class="port-row"><span class="port ${value ? 'filled' : 'hollow'}"></span>${nodes[n.id] === n && n.custom ? `<input class="param-rename" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" title="Rename this parameter" spellcheck="false" />${i ? `<button class="param-move" data-index="${i}" title="Move this parameter one place left — the body, the definition and every call follow">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}${value && value !== paramDisplayName(n, i) ? ` = ${escapeAttr(value)}` : ''}</span>`}<select class="param-scope" data-index="${i}"><option ${n.paramScopes[i] === 'local' ? 'selected' : ''}>local</option><option ${n.paramScopes[i] === 'main' ? 'selected' : ''}>main</option><option ${n.paramScopes[i] === 'shared' ? 'selected' : ''}>shared</option></select><strong>${n.mounted[i] ? `ƒ ${activeNodes()[n.mounted[i]]?.label || 'function'}` : 'open'}</strong></div>`).join('')}</div><div class="property"><label>FUNCTION SCOPE</label><select class="scope-select" id="function-scope"><option ${n.scope === 'local' ? 'selected' : ''}>local</option><option ${n.scope === 'main' ? 'selected' : ''}>main</option><option ${n.scope === 'shared' ? 'selected' : ''}>shared</option></select></div>${nodes[n.id] === n && n.custom ? functionLawsPanel(n) : ''}${nodes[n.id] === n ? `<div class="property"><label>ENTRY POINT</label><button class="entry-toggle ${entryId === n.id ? 'on' : ''}" id="entry-toggle">${entryId === n.id ? '● Run graph plays this function' : '○ Make this the Run graph entry'}</button></div>` : ''}<button class="evaluate" id="evaluate">▶ &nbsp; Play function</button>${nodes[n.sourceFunctionId]?.lambda || (!state.activeFunction && nodes[n.sourceFunctionId || n.id]?.custom) ? '<button class="use-again" id="open-body">Open body →</button>' : ''}${useAgainButton(n)}${deleteButton(n)}<div class="inspector-note">The canvas is the function body.<br/>Connect any declared function to Output.</div>`
-    : renderValueInspector(n)) + enclosingDefinition(n)
+    ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div></div><div class="property"><label>RESULT TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div><div class="property"><label>RETURN VALUE</label><div class="connection-tag">${n.source ? escapeAttr(nodeDisplayText(activeNodes()[n.source]) || n.value) : 'Connect a node to Output'}</div></div>${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}${state.activeFunction ? `${nodes[state.activeFunction]?.library || nodes[state.activeFunction]?.override ? customizedRow(nodes[state.activeFunction]) : ''}${definitionBlock(state.activeFunction)}` : ''}`
+    : n.type === 'function' ? renderFunctionInspector(n) : renderValueInspector(n)) + enclosingDefinition(n)
+  if (!viewingReadonly() && state.activeFunction && !['output', 'law'].includes(n.type) && !n.matchInternal) inspector.insertAdjacentHTML('beforeend', '<button class="use-again" id="pattern-match">⑂ 패턴 매칭</button>')
+  restoreDisclosureState(inspector)
+  inspector.querySelector('#pattern-match')?.addEventListener('click', () => beginPatternMatch(n))
+  inspector.querySelector('#convert-match')?.addEventListener('click', () => {
+    const name = definitions[n.sourceFunctionId].derived.type
+    convertCaseToMatch({ nodes, functionBodies }, activeNodes(), n, types[name] || preludeTypes[name], state.activeFunction)
+    renderFunctionLibrary(); updateInspector(); draw()
+  })
+  inspector.querySelectorAll('[data-match-open]').forEach((b) => { b.onclick = () => {
+    const branch = n.match.branches[Number(b.dataset.matchOpen)]
+    enterFunction(branch.useDefault ? n.match.defaultBranch.fnId : branch.fnId)
+  } })
+  inspector.querySelector('#match-default-body')?.addEventListener('click', () => enterFunction(n.match.defaultBranch.fnId))
+  inspector.querySelectorAll('[data-match-binder]').forEach((input) => { input.onchange = () => {
+    const branch = n.match.branches[Number(input.dataset.matchBinder)]
+    if (!renameMatchBinder({ nodes, functionBodies }, branch, Number(input.dataset.field), input.value.trim())) showToast('소문자로 시작하는 고유 이름 또는 _를 입력하세요')
+    renderFunctionLibrary(); updateInspector(); draw()
+  } })
+  inspector.querySelectorAll('[data-match-default]').forEach((input) => { input.onchange = () => {
+    setMatchDefault({ nodes, functionBodies }, activeNodes(), n, Number(input.dataset.matchDefault), input.checked)
+    renderFunctionLibrary(); updateInspector(); draw()
+  } })
+  inspector.querySelectorAll('[data-select-input]').forEach((button) => { button.onclick = () => { state.selected = n.mounted[Number(button.dataset.selectInput)]; updateInspector(); draw() } })
+  inspector.querySelectorAll('[data-disconnect-input]').forEach((button) => { button.onclick = () => {
+    const i = Number(button.dataset.disconnectInput)
+    const source = activeNodes()[n.mounted[i]]
+    if (source) { detachMounted(n, i); source.placed = true; source.x = n.x + 100; source.y = n.y + 120; updateInspector(); draw() }
+  } })
   const chain = inspector.querySelector('.inspector-chain')
   if (chain && inspectorChainInfo) wireChain(chain, inspectorChainInfo)
   wireDefinitionTokens()
@@ -2903,7 +3529,7 @@ function updateInspector() {
     const label = fnRename.value.trim()
     const problem = label === n.label ? null : functionNameProblem(label, n.id)
     if (problem) showToast(problem)
-    else if (label !== n.label) { renameFunction({ nodes, functionBodies }, n.id, label); showToast(`Renamed to ${label} — every call follows`) }
+    else if (label !== n.label) { renameFunction({ nodes, functionBodies }, n.id, label); showToast(`${label}(으)로 이름을 바꿨어요 — 모든 호출이 따라가요`) }
     renderFunctionLibrary(); updateInspector(); draw()
   }
   const resetCustom = document.querySelector('#reset-derived')
@@ -2948,6 +3574,17 @@ function updateInspector() {
   // alone is enough to keep the canvas label live; the inspector's own TYPE
   // line catches up next time something reselects this node.
   if (valueInput && (n.type === 'number' || n.type === 'text' || n.type === 'literal')) valueInput.oninput = () => { n.value = valueInput.value; draw() }
+  // A data value is edited as Haskell text, read back at its type (valueParser.js).
+  if (valueInput && n.type === 'value') valueInput.onchange = () => {
+    try { n.data = parseValue(valueInput.value, resolvedValueQual(n).type, types) } catch (error) {
+      if (!(error instanceof ParseError)) throw error
+      valueInput.value = nodeDisplayText(n)
+      return showToast(`Not a ${showQual([], resolvedValueQual(n).type)} — ${error.message}`)
+    }
+    const at = slotHost(n)
+    if (at) at.host.params[at.index] = nodeDisplayText(n)
+    updateInspector(); draw()
+  }
 }
 // Plays `fn`: evaluates it as a value (callee applied to its applied slots —
 // see src/evaluator.js) and drops the result next to it. A fully-applied
@@ -2957,7 +3594,7 @@ function updateInspector() {
 function executeFunction(fn, { graph = activeNodes(), displayGraph = graph, anchor = fn } = {}) {
   resetExecution()
   if (!isFunction(fn)) return
-  if (viewingReadonly()) return showToast('This is a read-only definition — play the function where it is used')
+  if (viewingReadonly()) return showToast('읽기 전용 정의예요 — 이 함수를 쓰는 곳에서 실행하세요')
   if (isManagedMain(fn)) {
     const problem = programRunTarget({ nodes, functionBodies, entry: entryId })?.problem
     if (problem) return showToast(problem)
@@ -2989,9 +3626,20 @@ function executeFunction(fn, { graph = activeNodes(), displayGraph = graph, anch
     }
     throw error
   }
-  const id = `output-${++outputId}`
-  const position = { x: (isFunction(anchor) ? functionBlockRight(anchor) : anchor.x + chipHalfWidth(anchor)) + 90, y: anchor.y + (outputId % 2) * 45 }
+  const position = { x: (isFunction(anchor) ? functionBlockRight(anchor) : anchor.x + chipHalfWidth(anchor)) + 90, y: anchor.y + ((outputId + 1) % 2) * 45 }
   const valueType = entry ? valueTypeOfEntry(entry) : null
+  // A function value comes back as a call you can keep editing and play again.
+  const rebuilt = isClosure(result) && rebuildCall(result, displayGraph, position)
+  if (rebuilt) {
+    // Its arguments sit to its left: move the whole tree clear of `fn`.
+    const tree = [displayGraph[rebuilt], ...pluggedDescendants(displayGraph[rebuilt], displayGraph)]
+    const left = Math.min(...tree.map((k) => (isFunction(k) ? functionBlockLeft(k) : k.x - chipHalfWidth(k))))
+    tree.forEach((k) => { k.x += position.x - left })
+    state.selected = rebuilt; updateInspector(); draw()
+    replayExecution(displayGraph, fn, trace.events, { resultId: rebuilt })
+    return
+  }
+  const id = `output-${++outputId}`
   if (isClosure(result)) {
     const appliedCount = entry?.applied?.filter(Boolean).length ?? 0
     // Keep the residual's class constraints with it (`Semiring a ⇒ a → a`,
@@ -3015,6 +3663,50 @@ function executeFunction(fn, { graph = activeNodes(), displayGraph = graph, anch
   }
   state.selected = id; updateInspector(); draw()
   replayExecution(displayGraph, fn, trace.events, { resultId: id })
+}
+// A closure (a Play result with open slots) as an ordinary call of its
+// callee: each filled argument plugged back in — a number, Bool, Char or
+// String as a literal, other data as a value node, a function as a call
+// rebuilt the same way (or the stored closure, when it can't be) — and the
+// open slots left open. The call's own type is inferred again like any
+// other, so it can be edited, filled and played. Null when the callee isn't
+// a definition a call can name.
+function rebuildCall(closure, graph, position) {
+  const def = definitions[closure.callee]
+  if (!def?.params || viewDefs[closure.callee] || def.builtin === 'listOf' || def.params.length !== closure.args.length) return null
+  const id = `output-${++outputId}`
+  const node = graph[id] = {
+    id, type: 'function', sourceFunctionId: closure.callee, ...position,
+    label: def.label, params: def.params.map(() => ''),
+    mounted: def.params.map(() => null), paramScopes: def.params.map(() => 'local'),
+    scope: 'local', color: def.color,
+  }
+  closure.args.forEach((arg, i) => {
+    if (arg === null) return
+    const child = argumentNode(arg, graph, position)
+    Object.assign(graph[child], { mountedTo: `${id}:${i}`, connected: true, placed: true })
+    if (graph[child].type === 'function') graph[child].composedInto = id
+    node.mounted[i] = child
+    node.params[i] = nodeDisplayText(graph[child], graph)
+  })
+  layoutTree(node, graph)
+  return id
+}
+// One argument of a rebuilt call, as a new node (see rebuildCall).
+function argumentNode(value, graph, position) {
+  if (isClosure(value)) {
+    const rebuilt = rebuildCall(value, graph, position)
+    if (rebuilt) return rebuilt
+    const id = `output-${++outputId}`
+    graph[id] = { id, type: 'curried', closure: value, ...position, label: definitions[value.callee]?.label ?? value.callee, value: 'ƒ', remaining: value.args.filter((a) => a === null).length, color: '#a96ef0' }
+    return id
+  }
+  const id = `output-${++outputId}`
+  // A numeric literal still waiting for its dictionary (evaluator.js literalAt) keeps its text.
+  const text = value?.kind === 'literal' ? value.text : showValue(value, types)
+  if (parseLiteral(text)) graph[id] = { id, type: 'literal', label: 'literal', value: text, color: '#4f8ef7', ...position }
+  else graph[id] = { id, type: 'value', data: value, ...position, label: 'value', color: '#3cbe9e' }
+  return id
 }
 // The node under a canvas point (hidden ones — inside a folded call — have no hitbox).
 function hitNode(x, y) {
@@ -3096,7 +3788,7 @@ function finishConnection(dragged) {
     dragged.mountedTo = null
     dragged.connected = false
     projectPassCache = null
-    showToast(`Not connected — ${why}`)
+    showToast(`연결되지 않았어요 — ${why}`)
     return false
   }
   if (dragged.type === 'function') dragged.composedInto = targetNode.id
@@ -3154,111 +3846,113 @@ function setZoom(nextZoom, clientX = canvas.clientWidth / 2, clientY = canvas.cl
   document.querySelector('#zoom-level').textContent = `${Math.round(state.zoom * 100)}%`
   draw()
 }
-canvas.addEventListener('pointerdown', (event) => {
-  if (state.editingLiteral) finishLiteralEdit(state.editingLiteral) // clicking away is done typing
-  const p = canvasPoint(event), node = hitNode(p.x, p.y)
-  canvas.setPointerCapture(event.pointerId)
-  if (node) {
-    // Shift+click adds to / removes from a multi-selection (moved, deleted and copied together).
-    if (event.shiftKey) {
-      if (state.multi.size === 0 && state.selected && activeNodes()[state.selected]) state.multi.add(state.selected)
-      state.multi.has(node.id) ? state.multi.delete(node.id) : state.multi.add(node.id)
-    } else if (!state.multi.has(node.id)) state.multi.clear()
-    state.selected = node.id
-    if (node.type === 'output') {
-      updateInspector()
+function setupCanvasInput() {
+  canvas.addEventListener('pointerdown', (event) => {
+    if (state.editingLiteral) finishLiteralEdit(state.editingLiteral) // clicking away is done typing
+    const p = canvasPoint(event), node = hitNode(p.x, p.y)
+    canvas.setPointerCapture(event.pointerId)
+    if (node) {
+      // Shift+click adds to / removes from a multi-selection (moved, deleted and copied together).
+      if (event.shiftKey) {
+        if (state.multi.size === 0 && state.selected && activeNodes()[state.selected]) state.multi.add(state.selected)
+        state.multi.has(node.id) ? state.multi.delete(node.id) : state.multi.add(node.id)
+      } else if (!state.multi.has(node.id)) state.multi.clear()
+      state.selected = node.id
+      if (node.type === 'output') {
+        updateInspector()
+        draw()
+        return
+      }
+      beginDrag(node, p)
+      updateInspector(); draw()
+    } else {
+      if (!event.shiftKey) state.multi.clear()
+      state.pan = { x: event.clientX, y: event.clientY, offsetX: state.offset.x, offsetY: state.offset.y }
+      canvas.classList.add('panning')
+    }
+  })
+  // pointermove/pointerup/pointercancel live on `window`, not `canvas`, because
+  // a drag can now also START on a DOM slot chip (see updatePortEditor's
+  // detach handler) — that pointerdown's target is a sibling overlay element,
+  // not a descendant of canvas, so canvas-scoped listeners would never see the
+  // rest of that drag. Both drag origins funnel through the same state.drag,
+  // so one pair of window listeners drives them identically.
+  window.addEventListener('pointermove', (event) => {
+    if (state.wire) {
+      state.wire.at = canvasPoint(event)
+      if (!state.wire.moved && Math.hypot(event.movementX, event.movementY) > 2) { state.wire.moved = true; unplug(state.wire.node) }
+      if (state.wire.moved) state.snapTarget = findWireTarget(state.wire.node, state.wire.at)
       draw()
+    } else if (state.drag) {
+      const p = canvasPoint(event)
+      if (Math.hypot(event.movementX, event.movementY) > 2) state.drag.moved = true
+      const dx = p.x - state.drag.dx - state.drag.node.x, dy = p.y - state.drag.dy - state.drag.node.y
+      // the rest of a multi-selection moves with it, and everything plugged into what moves
+      const moving = new Set([state.drag.node])
+      if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m) moving.add(m) })
+      ;[...moving].forEach((m) => pluggedDescendants(m, activeNodes(), moving))
+      moving.forEach((m) => { m.x += dx; m.y += dy })
+      draw()
+    } else if (state.pan) {
+      state.offset.x = state.pan.offsetX + event.clientX - state.pan.x
+      state.offset.y = state.pan.offsetY + event.clientY - state.pan.y
+      draw()
+    }
+  })
+  window.addEventListener('pointerup', (event) => {
+    if (state.wire) {
+      // Released over nothing, a moved wire stays pulled out: disconnected.
+      if (state.wire.moved) finishConnection(state.wire.node)
+      endWire(); updateInspector(); draw()
       return
     }
-    beginDrag(node, p)
-    updateInspector(); draw()
-  } else {
-    if (!event.shiftKey) state.multi.clear()
-    state.pan = { x: event.clientX, y: event.clientY, offsetX: state.offset.x, offsetY: state.offset.y }
-    canvas.classList.add('panning')
-  }
-})
-// pointermove/pointerup/pointercancel live on `window`, not `canvas`, because
-// a drag can now also START on a DOM slot chip (see updatePortEditor's
-// detach handler) — that pointerdown's target is a sibling overlay element,
-// not a descendant of canvas, so canvas-scoped listeners would never see the
-// rest of that drag. Both drag origins funnel through the same state.drag,
-// so one pair of window listeners drives them identically.
-window.addEventListener('pointermove', (event) => {
-  if (state.wire) {
-    state.wire.at = canvasPoint(event)
-    if (!state.wire.moved && Math.hypot(event.movementX, event.movementY) > 2) { state.wire.moved = true; unplug(state.wire.node) }
-    if (state.wire.moved) state.snapTarget = findWireTarget(state.wire.node, state.wire.at)
-    draw()
-  } else if (state.drag) {
+    if (!state.drag && !state.pan) return
+    if (!state.drag) {
+      state.pan = null
+      canvas.classList.remove('panning')
+      return
+    }
+    const wasDragged = state.drag.moved
+    endDrag(); updateInspector(); draw()
+    if (wasDragged) {
+      state.suppressClick = true
+      event.stopPropagation()
+    }
+  })
+  window.addEventListener('pointercancel', () => { endDrag(); endWire(); state.pan = null; canvas.classList.remove('panning'); draw() })
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault()
+    setZoom(state.zoom + (event.deltaY < 0 ? .1 : -.1), event.clientX, event.clientY)
+  }, { passive: false })
+  canvas.addEventListener('click', (event) => {
+    if (state.suppressClick) {
+      state.suppressClick = false
+      return
+    }
     const p = canvasPoint(event)
-    if (Math.hypot(event.movementX, event.movementY) > 2) state.drag.moved = true
-    const dx = p.x - state.drag.dx - state.drag.node.x, dy = p.y - state.drag.dy - state.drag.node.y
-    // the rest of a multi-selection moves with it, and everything plugged into what moves
-    const moving = new Set([state.drag.node])
-    if (state.multi.has(state.drag.node.id)) state.multi.forEach((id) => { const m = activeNodes()[id]; if (m) moving.add(m) })
-    ;[...moving].forEach((m) => pluggedDescendants(m, activeNodes(), moving))
-    moving.forEach((m) => { m.x += dx; m.y += dy })
-    draw()
-  } else if (state.pan) {
-    state.offset.x = state.pan.offsetX + event.clientX - state.pan.x
-    state.offset.y = state.pan.offsetY + event.clientY - state.pan.y
-    draw()
-  }
-})
-window.addEventListener('pointerup', (event) => {
-  if (state.wire) {
-    // Released over nothing, a moved wire stays pulled out: disconnected.
-    if (state.wire.moved) finishConnection(state.wire.node)
-    endWire(); updateInspector(); draw()
-    return
-  }
-  if (!state.drag && !state.pan) return
-  if (!state.drag) {
-    state.pan = null
-    canvas.classList.remove('panning')
-    return
-  }
-  const wasDragged = state.drag.moved
-  endDrag(); updateInspector(); draw()
-  if (wasDragged) {
-    state.suppressClick = true
-    event.stopPropagation()
-  }
-})
-window.addEventListener('pointercancel', () => { endDrag(); endWire(); state.pan = null; canvas.classList.remove('panning'); draw() })
-canvas.addEventListener('wheel', (event) => {
-  event.preventDefault()
-  setZoom(state.zoom + (event.deltaY < 0 ? .1 : -.1), event.clientX, event.clientY)
-}, { passive: false })
-canvas.addEventListener('click', (event) => {
-  if (state.suppressClick) {
-    state.suppressClick = false
-    return
-  }
-  const p = canvasPoint(event)
-  const fn = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
-  if (fn) {
-    executeFunction(fn)
-    return
-  }
-})
-// A single click only selects (so the inspector shows the function);
-// double-clicking a custom function — its definition or a call to it — on
-// `main` opens its body, as does the inspector's "Open body". Double-clicking
-// a call to anything else opens its definition (a read-only view, or what
-// you took over), as does "Open definition".
-canvas.addEventListener('dblclick', (event) => {
-  const p = canvasPoint(event)
-  const literal = Object.values(activeNodes()).find((n) => n.type === 'literal' && isVisible(n) && pointInValueBlock(n, p.x, p.y))
-  if (literal) return startLiteralEdit(literal)
-  const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
-  const definitionId = selected && (selected.sourceFunctionId || selected.id)
-  if (selected && definitions[definitionId]?.lambda) enterFunction(definitionId)
-  else if (selected && nodes[definitionId]?.library) enterFunction(definitionId)
-  else if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
-  else if (selected && !definitions[definitionId]?.custom) openDefinitionView(definitionId, selected.params.length)
-})
+    const fn = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && Math.hypot(p.x - (functionBlockRight(n) - 16), p.y - (n.y - FN_H / 2 + 2)) < 18)
+    if (fn) {
+      executeFunction(fn)
+      return
+    }
+  })
+  // A single click only selects (so the inspector shows the function);
+  // double-clicking a custom function — its definition or a call to it — on
+  // `main` opens its body, as does the inspector's "Open body". Double-clicking
+  // a call to anything else opens its definition (a read-only view, or what
+  // you took over), as does "Open definition".
+  canvas.addEventListener('dblclick', (event) => {
+    const p = canvasPoint(event)
+    const literal = Object.values(activeNodes()).find((n) => n.type === 'literal' && isVisible(n) && pointInValueBlock(n, p.x, p.y))
+    if (literal) return startLiteralEdit(literal)
+    const selected = Object.values(activeNodes()).find(n => n.type === 'function' && isVisible(n) && pointInFunctionBlock(n, p.x, p.y))
+    const definitionId = selected && (selected.sourceFunctionId || selected.id)
+    if (selected && definitions[definitionId]?.lambda) enterFunction(definitionId)
+    else if (selected && nodes[definitionId]?.library) enterFunction(definitionId)
+    else if (selected && !state.activeFunction && nodes[definitionId]?.custom) enterFunction(definitionId)
+    else if (selected && !definitions[definitionId]?.custom) openDefinitionView(definitionId, selected.params.length)
+  })
+}
 function enterFunction(id) {
   if (nodes[id]?.readonly) return
   resetExecution()
@@ -3274,15 +3968,47 @@ function enterFunction(id) {
   updateInspector()
   fitToView()
 }
-document.querySelector('#back-graph').onclick = () => {
-  resetExecution()
-  state.activeFunction = state.functionStack.pop() || null
-  state.selected = state.activeFunction ? 'output' : 'add'
-  renderFunctionLibrary(); updateInspector(); fitToView()
+function setupBackButton() {
+  document.querySelector('#back-graph').onclick = () => {
+    resetExecution()
+    state.activeFunction = state.functionStack.pop() || null
+    state.selected = state.activeFunction ? 'output' : 'add'
+    renderFunctionLibrary(); updateInspector(); fitToView()
+  }
 }
-// Whole-program execution: new projects use their managed main; old
-// projects keep their explicit entry (or the existing selection fallback).
+// The practice panel (exercisePanel.js), once set up.
+let exercisePanel = null
+// Inside the body of the build exercise on screen, Run grades it instead:
+// there is nothing to play in a body, and the entry lives at top level.
+function gradingExercise() {
+  const exercise = exercisePanel?.currentBuild()
+  const fn = exercise && state.activeFunction && nodes[state.activeFunction]
+  return fn && fn.custom && fn.label === exercise.name ? exercise : null
+}
+// Plays the entry function (always in `main`), falling back to whichever
+// function is selected when no entry has been set.
+function updateRunLabel() {
+  const button = document.querySelector('#run')
+  const exercise = gradingExercise()
+  if (exercise) {
+    const label = `채점 ${exercise.name}`
+    button.querySelector('span').textContent = label
+    button.title = `연습 문제 ${exercise.name} 채점 (${shortcutModifier} Enter)`
+    button.disabled = false
+    document.querySelector('#run-shortcut-label').textContent = label
+    return
+  }
+  const entry = entryId && nodes[entryId]
+  const selected = activeNodes()[state.selected]
+  const target = entry || (selected && isFunction(selected) ? selected : null)
+  const label = target ? `실행 ${target.label}${entry ? '' : ' (선택)'}` : '함수를 선택하세요'
+  button.querySelector('span').textContent = label
+  button.title = `${isManagedMain(target) ? 'Run graph: main의 Output 전체 실행. 각 노드의 ▶는 개별 테스트' : entry ? '프로젝트 시작 함수' : '선택한 블록'}: ${target?.label || '없음'} (${shortcutModifier} Enter)`
+  button.disabled = !target
+  document.querySelector('#run-shortcut-label').textContent = label
+}
 function runEntry() {
+  if (gradingExercise()) { exercisePanel.grade(); return showMobileView('examples') }
   resetExecution()
   const target = programRunTarget({ nodes, functionBodies, entry: entryId })
   if (target && isManagedMain(target.fn)) {
@@ -3300,7 +4026,7 @@ function runEntry() {
     return executeFunction(target.fn, target)
   }
   const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
-  if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
+  if (ambiguous) return showToast(`실행할 수 없어요 — ${ambiguous}`)
   if (entryId && nodes[entryId] && startGameIfProgram(entryId)) return
   if (entryId && nodes[entryId]) {
     if (state.activeFunction) { state.activeFunction = null; renderFunctionLibrary(); fitToView() }
@@ -3308,9 +4034,11 @@ function runEntry() {
   }
   const selected = activeNodes()[state.selected]
   if (selected && isFunction(selected)) return executeFunction(selected)
-  showToast('Select a function, or make one the Run graph entry in the inspector')
+  showToast('함수를 선택하거나, 속성 패널에서 시작 함수로 지정하세요')
 }
-document.querySelector('#run').onclick = runEntry
+function setupRunButton() {
+  document.querySelector('#run').onclick = runEntry
+}
 // --- Playing a Program ------------------------------------------------------
 // When the entry point evaluates to a `Program m e` (see builtinSchemes.js'
 // `program` and src/runtime.js), Run graph plays it: the view is rendered in
@@ -3497,24 +4225,25 @@ function renderPlay() {
     return li
   }))
 }
-window.addEventListener('beforeunload', saveGame)
-// Keys go to the game's onKey subscriptions while it's playing (not while typing in a field).
-window.addEventListener('keydown', (event) => {
-  if (!play || play.editing || event.target.closest?.('input, select, textarea')) return
-  try {
-    if (play.game.keyPressed(event.key)) { event.preventDefault(); renderPlay() }
-  } catch (error) {
-    gameError(error)
-  }
-})
-// Lay a template's custom functions out in a grid to the right of the
-// builtins (the template can't know where the builtins sit).
+function setupPlayInput() {
+  window.addEventListener('beforeunload', saveGame)
+  // Keys go to the game's onKey subscriptions while it's playing (not while typing in a field).
+  window.addEventListener('keydown', (event) => {
+    if (!play || play.editing || document.querySelector('dialog[open]') || event.target.closest?.('input, select, textarea')) return
+    try {
+      if (play.game.keyPressed(event.key)) { event.preventDefault(); renderPlay() }
+    } catch (error) {
+      gameError(error)
+    }
+  })
+}
+// Lay a template's custom functions out in a grid on the top level (the
+// builtins aren't drawn there, so it starts at the left).
 function layoutCustomDefinitions() {
-  const builtins = Object.values(nodes).filter((n) => n.readonly && isFunction(n))
   const customs = Object.values(nodes).filter((n) => n.custom && !isHiddenDefinition(n))
   if (!customs.length) return
-  const left = Math.max(...builtins.map(functionBlockRight)) + 220
-  const top = Math.min(...builtins.map((n) => n.y))
+  const left = 110
+  const top = 190
   const colWidth = Math.max(...customs.map(functionBlockWidth)) + 160
   customs.forEach((n, i) => {
     n.x = left + (i % 2) * colWidth + FN_LEFT
@@ -3522,32 +4251,44 @@ function layoutCustomDefinitions() {
   })
   draw()
 }
-const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame], dice: ['the dice roller', buildDice] }
-document.querySelector('#template').onchange = (event) => {
-  const [name, build] = TEMPLATES[event.target.value] || []
-  event.target.value = ''
-  if (!build) return
-  stopGame()
-  state.activeFunction = null
-  loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
-  layoutCustomDefinitions()
-  fitToView()
-  showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
+const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounter], blankGame: ['a blank game', buildBlankGame], dice: ['the dice roller', buildDice], blackjack: ['the blackjack game', buildBlackjack],
+  vending: ['the vending machine', buildVending], nim: ['the nim game', buildNim], damage: ['the damage pipeline', buildDamage], rps: ['rock, paper, scissors', buildRps], simon: ['the simon game', buildSimon], highLow: ['the high-low game', buildHighLow] }
+function setupTemplates() {
+  document.querySelector('#template').onchange = (event) => {
+    const [name, build] = TEMPLATES[event.target.value] || []
+    event.target.value = ''
+    if (!build) return
+    stopGame()
+    state.activeFunction = null
+    loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
+    // Newly loaded templates teach the direct matching workflow. Imported
+    // projects retain their original case calls and offer explicit conversion.
+    for (const [ownerId, graph] of Object.entries(functionBodies)) for (const n of Object.values(graph)) {
+      const def = definitions[n.sourceFunctionId]
+      const decl = def?.derived?.op === 'case' && types[def.derived.type]
+      if (decl && !n.match && n.mounted?.length === def.derived.arity && n.mounted.every((id) => graph[id])) convertCaseToMatch({ nodes, functionBodies }, graph, n, decl, ownerId)
+    }
+    layoutCustomDefinitions()
+    fitToView()
+    showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
+  }
 }
 // Download the entry point's game as one HTML file that runs without the
 // editor: the player modules plus every definition, body and type it needs.
-document.querySelector('#export-game').onclick = () => {
-  const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
-  if (ambiguous) return showToast(`Can't export — ${ambiguous}`)
-  const info = entryId && nodes[entryId] ? programInfo(entryId) : null
-  if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
-  const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
-  const data = { title, definitions: { ...libraryDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
-  const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
-  const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
-  link.click()
-  URL.revokeObjectURL(url)
-  showToast(`Exported ${link.download} — open it in any browser to play`)
+function setupGameExport() {
+  document.querySelector('#export-game').onclick = () => {
+    const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
+    if (ambiguous) return showToast(`Can't export — ${ambiguous}`)
+    const info = entryId && nodes[entryId] ? programInfo(entryId) : null
+    if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
+    const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
+    const data = { title, definitions: { ...libraryDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
+    const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
+    const link = Object.assign(document.createElement('a'), { href: url, download: `${title.replace(/[^\w-]+/g, '-')}.html` })
+    link.click()
+    URL.revokeObjectURL(url)
+    showToast(`Exported ${link.download} — open it in any browser to play`)
+  }
 }
 // --- Toasts ---------------------------------------------------------------
 let toastTimer = null
@@ -3560,7 +4301,7 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200)
 }
 // --- Project snapshots, autosave, undo/redo ---------------------------------
-function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, instances, entry: entryId, outputId }) }
+function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, instances, layouts, entry: entryId, outputId }) }
 // Replaces the live project with `project` (already parsed + merged) in place
 // — `nodes`/`functionBodies` are shared with the evaluator, so they're
 // refilled rather than reassigned.
@@ -3573,8 +4314,10 @@ function loadProject(project) {
   ;[nodes, ...Object.values(functionBodies)].forEach(materializeLiterals)
   state.editingLiteral = null
   applyTypes(project.types || {}, project.classes || {}, project.instances || {})
+  layouts = project.layouts || {}
   if (typeEditor) { if (types[typeEditor.original]) { typeEditor = editorFor(typeEditor.original); renderTypeEditor() } else closeTypeEditor() }
   if (classEditor) { if (classes[classEditor.original] || classEditor.builtin) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }
+  renderUniverse()
   entryId = managedMain(nodes)?.id || project.entry
   outputId = project.outputId
   if (state.activeFunction && !allBodies[state.activeFunction]) state.activeFunction = null
@@ -3600,7 +4343,7 @@ function persist(snapshot) {
   const status = document.querySelector('#saved-status span')
   try {
     localStorage.setItem(STORAGE_KEY, snapshot)
-    status.textContent = `Saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    status.textContent = `저장됨 ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
   } catch {
     status.textContent = 'Not saved (storage unavailable)'
   }
@@ -3621,40 +4364,33 @@ function redo() {
   if (snapshot) { restoreSnapshot(snapshot); persist(snapshot) }
   updateHistoryButtons()
 }
-document.querySelector('#undo').onclick = undo
-document.querySelector('#redo').onclick = redo
-// Reset always means the whole project, even while editing a body. The
-// derived-definition and game resets elsewhere keep their existing scope.
-document.querySelector('#reset').title = '프로젝트 전체 초기화: 모든 작업을 지우고 빈 main을 준비합니다. 실행 취소할 수 있습니다.'
-document.querySelector('#reset').onclick = () => {
-  stopGame()
-  flushCheckpoint()
-  state.activeFunction = null
-  state.functionStack = []
-  state.multi.clear()
-  restoreSnapshot(defaultSnapshot)
-  enterFunction('main')
-}
-document.querySelector('#export').onclick = () => {
-  const url = URL.createObjectURL(new Blob([currentSnapshot()], { type: 'application/json' }))
-  const link = Object.assign(document.createElement('a'), { href: url, download: 'hs-simulate-project.json' })
-  link.click()
-  URL.revokeObjectURL(url)
-}
-const importFile = document.querySelector('#import-file')
-document.querySelector('#import').onclick = () => importFile.click()
-importFile.onchange = async () => {
-  const file = importFile.files[0]
-  importFile.value = ''
-  if (!file) return
-  try {
-    state.activeFunction = null
-    loadProject(mergeBuiltins(upgradeProject(parseProject(await file.text())), builtinNodes, builtinBodies))
-    fitToView()
-    showToast(`Imported ${file.name}`)
-  } catch (error) {
-    if (error instanceof ProjectError) return showToast(`Import failed: ${error.message}`)
-    throw error
+function setupProjectActions() {
+  document.querySelector('#undo').onclick = undo
+  document.querySelector('#redo').onclick = redo
+  // Reset is the whole project, independent of the currently open body.
+  document.querySelector('#reset').title = '프로젝트 전체 초기화: 빈 main을 준비합니다 (실행 취소 가능)'
+  document.querySelector('#reset').onclick = () => { stopGame(); flushCheckpoint(); state.activeFunction = null; state.functionStack = []; state.multi.clear(); restoreSnapshot(defaultSnapshot); enterFunction('main') }
+  document.querySelector('#export').onclick = () => {
+    const url = URL.createObjectURL(new Blob([currentSnapshot()], { type: 'application/json' }))
+    const link = Object.assign(document.createElement('a'), { href: url, download: 'hs-simulate-project.json' })
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+  const importFile = document.querySelector('#import-file')
+  document.querySelector('#import').onclick = () => importFile.click()
+  importFile.onchange = async () => {
+    const file = importFile.files[0]
+    importFile.value = ''
+    if (!file) return
+    try {
+      state.activeFunction = null
+      loadProject(mergeBuiltins(upgradeProject(parseProject(await file.text())), builtinNodes, builtinBodies))
+      fitToView()
+      showToast(`${file.name}을(를) 불러왔어요`)
+    } catch (error) {
+      if (error instanceof ProjectError) return showToast(`불러오기 실패: ${error.message}`)
+      throw error
+    }
   }
 }
 // --- Copy / paste -------------------------------------------------------------
@@ -3662,21 +4398,24 @@ importFile.onchange = async () => {
 // slots (the whole expression), and pastes them with fresh ids into the
 // graph in view. Builtins, Output and parameters aren't copied.
 let clipboard = null
+let clipboardOwned = null
 function copySelection() {
   const graph = activeNodes()
   const roots = (state.multi.size ? [...state.multi] : [state.selected]).map((id) => graph[id]).filter((n) => n && !n.readonly && n.type !== 'output' && n.type !== 'parameter' && !(graph === nodes && n.custom))
   if (!roots.length) return showToast('Nothing copyable selected (builtins, Output, parameters and function definitions stay put)')
   const take = new Map()
-  const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])) }
+  const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])); if (n.match?.defaultBranch) visit(graph[n.match.defaultBranch.callId]) }
   roots.forEach(visit)
   clipboard = [...take.values()]
-  showToast(`Copied ${clipboard.length} node${clipboard.length > 1 ? 's' : ''}`)
+  clipboardOwned = copyOwnedFunctions({ nodes, functionBodies }, clipboard)
+  showToast(`블록 ${clipboard.length}개를 복사했어요`)
 }
 function pasteClipboard() {
   if (!clipboard || readonlyBlocked()) return
   const graph = activeNodes()
   const stamp = Date.now()
   const ids = new Map(clipboard.map((n, i) => [n.id, `${n.id.replace(/-copy-\d+-\d+$/, '')}-copy-${stamp}-${i}`]))
+  pasteOwnedFunctions({ nodes, functionBodies }, clipboardOwned || { nodes: {}, functionBodies: {} }, ids, state.activeFunction)
   state.multi.clear()
   for (const original of clipboard) {
     const n = structuredClone(original)
@@ -3687,6 +4426,7 @@ function pasteClipboard() {
     if (n.mountedTo) { const [host, slot] = splitMountedTo(n.mountedTo); n.mountedTo = ids.has(host) ? `${ids.get(host)}:${slot}` : null; if (!n.mountedTo) n.connected = false }
     if (n.type === 'ref' && ids.has(n.target)) n.target = ids.get(n.target)
     if (n.type === 'ref' && !graph[n.target] && !ids.has(original.target)) continue // its original isn't in this graph
+    remapMatchNode(n, ids, state.activeFunction)
     graph[n.id] = n
     if (!n.mountedTo) state.multi.add(n.id)
   }
@@ -3696,125 +4436,204 @@ function pasteClipboard() {
   showToast(`Pasted ${clipboard.length} node${clipboard.length > 1 ? 's' : ''}`)
 }
 // --- Keyboard ---------------------------------------------------------------
-window.addEventListener('keydown', (event) => {
-  const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
-  const mod = event.ctrlKey || event.metaKey
-  if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
-  if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); searchInput.focus(); searchInput.select(); return }
-  if (typing || document.querySelector('#function-dialog') || play) return // no editing shortcuts while a game is playing
-  const key = event.key.toLowerCase()
-  if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
-  else if (mod && key === 'y') { event.preventDefault(); redo() }
-  else if (event.key === 'Delete' || event.key === 'Backspace') {
-    event.preventDefault()
-    if (state.multi.size) { const ids = [...state.multi]; state.multi.clear(); ids.forEach((id) => activeNodes()[id] && deleteNode(id)) }
-    else deleteNode(state.selected)
-  } else if (mod && key === 'c') { event.preventDefault(); copySelection() }
-  else if (mod && key === 'v') { event.preventDefault(); pasteClipboard() }
-})
-document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
-document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
-document.querySelector('#fit').onclick = () => fitToView()
-document.querySelector('#unfold-all').onclick = () => setAllFolded(false)
-document.querySelector('#fold-all').onclick = () => setAllFolded(true)
-// The canvas bitmap has to track the element's CSS size, not just the
-// window's: the element also changes size without any window resize (the
-// inspector collapsing at the breakpoint, layout settling after fonts load),
-// and a stale bitmap gets stretched by CSS — the drawn blocks come out
-// squashed and no longer line up with the DOM slots laid over them.
-new ResizeObserver(resize).observe(canvas)
-window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
-document.querySelector('.add-node').addEventListener('click', createCustomFunction)
-document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
-document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
-document.querySelectorAll('.node-library > .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
-  if (readonlyBlocked()) return
-  if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
-  if (item.dataset.type === 'lambda') return createLambda()
-  const graph = activeNodes()
-  if (item.dataset.type === 'text') {
-    const id = `text-${Date.now()}`
-    graph[id] = { id, type: 'text', label: 'text', value: 'text', color: '#e8b23c', ...freePosition(graph, CHIP_W) }
+function setupKeyboard() {
+  window.addEventListener('keydown', (event) => {
+    const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
+    const mod = event.ctrlKey || event.metaKey
+    if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
+    if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); searchInput.focus(); searchInput.select(); return }
+    if (typing || document.querySelector('#function-dialog, dialog[open]') || play) return // no editing shortcuts while a game is playing
+    const key = event.key.toLowerCase()
+    if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
+    else if (mod && key === 'y') { event.preventDefault(); redo() }
+    else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault()
+      if (state.multi.size) { const ids = [...state.multi]; state.multi.clear(); ids.forEach((id) => activeNodes()[id] && deleteNode(id)) }
+      else deleteNode(state.selected)
+    } else if (mod && key === 'c') { event.preventDefault(); copySelection() }
+    else if (mod && key === 'v') { event.preventDefault(); pasteClipboard() }
+  })
+}
+function setupToolbar() {
+  document.querySelector('#zoom-in').onclick = () => setZoom(state.zoom + .1)
+  document.querySelector('#zoom-out').onclick = () => setZoom(state.zoom - .1)
+  document.querySelector('#fit').onclick = () => fitToView()
+  document.querySelector('#unfold-all').onclick = () => setAllFolded(false)
+  document.querySelector('#fold-all').onclick = () => setAllFolded(true)
+  // The canvas bitmap has to track the element's CSS size, not just the
+  // window's: the element also changes size without any window resize (the
+  // inspector collapsing at the breakpoint, layout settling after fonts load),
+  // and a stale bitmap gets stretched by CSS — the drawn blocks come out
+  // squashed and no longer line up with the DOM slots laid over them.
+  new ResizeObserver(resize).observe(canvas)
+  window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
+}
+function setupSidebarButtons() {
+  document.querySelector('.add-node').addEventListener('click', createCustomFunction)
+  document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
+  document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
+  document.querySelectorAll('.open-universe').forEach((b) => b.addEventListener('click', openUniverse))
+  typePanel.addEventListener('click', (event) => { if (event.target.closest('[data-universe]')) openUniverse() })
+  document.querySelectorAll('#value-library .library-item[data-type]').forEach((item) => item.addEventListener('click', () => {
+    if (readonlyBlocked()) return
+    if (item.dataset.type === 'list') return addFunctionCall('prelude:listOf')
+    if (item.dataset.type === 'lambda') return createLambda()
+    const graph = activeNodes()
+    if (item.dataset.type === 'text') {
+      const id = `text-${Date.now()}`
+      graph[id] = { id, type: 'text', label: 'text', value: 'text', color: '#e8b23c', ...freePosition(graph, CHIP_W) }
+      state.selected = id
+      updateInspector(); draw()
+      return
+    }
+    if (!['number', 'boolean'].includes(item.dataset.type)) return
+    const isBoolean = item.dataset.type === 'boolean'
+    const id = `${item.dataset.type}-${Date.now()}`
+    graph[id] = { id, type: isBoolean ? 'boolean' : 'number', typeName: isBoolean ? 'Bool' : 'Int', label: isBoolean ? 'boolean' : 'number', value: isBoolean ? 'false' : '0', color: isBoolean ? '#ed6b84' : '#4f8ef7', ...freePosition(graph, CHIP_W) }
     state.selected = id
-    updateInspector(); draw()
-    return
+    updateInspector()
+    draw()
+  }))
+}
+// The practice panel grades against the live project; a build exercise's
+// function is created (named and with the asked parameters) or opened here.
+function openExerciseFunction(exercise) {
+  let fn = findExerciseFunction(nodes, exercise.name)
+  if (!fn) {
+    const problem = functionNameProblem(exercise.name)
+    if (problem) return showToast(problem)
+    const id = `custom-${Date.now()}`
+    const params = [...exercise.params]
+    fn = nodes[id] = { id, type: 'function', ...freePosition(nodes, 120 + params.length * SLOT_STRIDE), label: exercise.name, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
+    functionBodies[id] = createFunctionBody(id, params)
+    delete functionBodies[id].output.source // an empty body: the learner builds it
+    functionBodies[id].output.value = 'open'
+    showToast(`ƒ ${exercise.name}를 만들었어요 — 시그니처를 적고 본체를 만드세요`)
   }
-  if (!['number', 'boolean'].includes(item.dataset.type)) return
-  const isBoolean = item.dataset.type === 'boolean'
-  const id = `${item.dataset.type}-${Date.now()}`
-  graph[id] = { id, type: isBoolean ? 'boolean' : 'number', typeName: isBoolean ? 'Bool' : 'Int', label: isBoolean ? 'boolean' : 'number', value: isBoolean ? 'false' : '0', color: isBoolean ? '#ed6b84' : '#4f8ef7', ...freePosition(graph, CHIP_W) }
-  state.selected = id
-  updateInspector()
-  draw()
-}))
-initLearningPanel({
-  workspace: document.querySelector('.workspace'),
-  onModalOpen: () => {
-    endDrag()
-    endWire()
+  state.activeFunction = null
+  enterFunction(fn.id)
+  // The signature is written by dragging from Types: have them in view.
+  document.querySelector('#types-section').open = true
+  showMobileView('canvas')
+}
+function setupLearningPanel() {
+  exercisePanel = initExercisePanel({
+    workspace: document.querySelector('.workspace'),
+    project: () => ({ registry: definitions, functionBodies, userNodes: nodes, types, classes, instances }),
+    schemeOf: (name) => builtinSchemes[name],
+    openFunction: openExerciseFunction,
+    // A declare exercise: its type in the editor, or a new one to rename.
+    openType: (name) => { openTypeEditor(types[name] ? name : null); showMobileView('canvas') },
+    onChange: () => updateRunLabel(),
+    reveal: (name) => {
+      const input = document.querySelector('.sidebar .search input')
+      input.value = name
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      showMobileView('sidebar')
+      input.focus()
+    },
+  })
+  const workspace = document.querySelector('.workspace')
+  initLearningPanel({ workspace, examplesPanel: workspace.querySelector('.exercise-panel'), onModalOpen: () => {
+    endDrag(); endWire()
     if (typeDrag) endTypeDrag(null)
     state.pan = null
-    state.snapTarget = null
     canvas.classList.remove('panning')
-    draw()
-  },
-})
-// Inspector visibility has its own column and controls, independent of learning panels.
-const workspace = document.querySelector('.workspace')
-initWorkspaceResize({
-  workspace,
-  sidebar: workspace.querySelector('.sidebar'),
-  onResizeStart: () => {
+  } })
+  initWorkspaceResize({ workspace, sidebar: workspace.querySelector('.sidebar'), onResizeStart: () => {
     endDrag(); endWire()
     if (typeDrag) endTypeDrag(null)
     state.pan = null
     canvas.classList.remove('panning')
     draw()
-  },
-})
-const inspectorPanel = document.querySelector('.inspector')
-inspectorPanel.id = 'graph-inspector'
-const closeInspector = document.querySelector('.close-inspector')
-closeInspector.setAttribute('aria-label', 'Inspector 닫기')
-const reopenInspector = document.createElement('button')
-reopenInspector.type = 'button'
-reopenInspector.className = 'tool-button inspector-reopen'
-reopenInspector.textContent = 'Inspector'
-reopenInspector.setAttribute('aria-label', 'Inspector 열기')
-reopenInspector.setAttribute('aria-controls', inspectorPanel.id)
-reopenInspector.setAttribute('aria-expanded', 'true')
-reopenInspector.hidden = true
-document.querySelector('.toolbar-actions').prepend(reopenInspector)
-closeInspector.addEventListener('click', () => {
-  inspectorPanel.hidden = true
-  workspace.classList.add('inspector-hidden')
-  reopenInspector.hidden = false
-  reopenInspector.setAttribute('aria-expanded', 'false')
-  reopenInspector.focus({ preventScroll: true })
-})
-reopenInspector.addEventListener('click', () => {
-  inspectorPanel.hidden = false
-  workspace.classList.remove('inspector-hidden')
-  reopenInspector.hidden = true
-  reopenInspector.setAttribute('aria-expanded', 'true')
-  closeInspector.focus({ preventScroll: true })
-})
+  } })
+}
+// The inspector opens and closes from the top bar's Inspector button (one
+// control, not one per place it could be reopened from) and its own ×.
+function setupInspectorButtons() {
+  const closeInspector = document.querySelector('.close-inspector')
+  closeInspector.setAttribute('aria-label', 'Inspector 닫기')
+  closeInspector.addEventListener('click', () => {
+    toggleInspector(false)
+    document.querySelector('#toggle-inspector').focus({ preventScroll: true })
+  })
+}
+// On a phone-width screen the workspace shows one column at a time, picked
+// from a tab bar at the bottom: the learning panel, the blocks, the canvas,
+// or the inspector. Actions that lead to another column switch to it.
+const mobileQuery = matchMedia('(max-width:680px)')
+const MOBILE_VIEWS = [['examples', '연습'], ['syntax', '문법'], ['sidebar', '블록'], ['canvas', '캔버스'], ['inspector', '속성']]
+function showMobileView(view) {
+  if (!mobileQuery.matches) return
+  const workspace = document.querySelector('.workspace')
+  workspace.dataset.view = view
+  document.querySelectorAll('.mobile-tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === view)))
+  if (view === 'inspector') toggleInspector(true)
+  const panel = document.querySelector(view === 'syntax' ? '.syntax-panel' : '.examples-panel')
+  if (['examples', 'syntax'].includes(view) && panel.classList.contains('is-collapsed')) panel.querySelector('.learning-toggle').click()
+}
+function setupMobileTabs() {
+  const bar = document.createElement('nav')
+  bar.className = 'mobile-tabs'
+  bar.setAttribute('role', 'tablist')
+  bar.setAttribute('aria-label', '화면')
+  bar.innerHTML = MOBILE_VIEWS.map(([view, label]) => `<button type="button" role="tab" data-view="${view}" aria-selected="false">${label}</button>`).join('')
+  document.querySelector('.shell').append(bar)
+  bar.querySelectorAll('button').forEach((b) => { b.onclick = () => showMobileView(b.dataset.view) })
+  document.querySelector('.workspace').dataset.view = 'canvas'
+  showMobileView('canvas')
+  mobileQuery.addEventListener('change', () => showMobileView(document.querySelector('.workspace').dataset.view))
+  // Adding a block from the sidebar, or opening a function, lands on the canvas.
+  document.querySelector('.sidebar').addEventListener('click', (event) => {
+    if (event.target.closest('.library-item, .add-call, .derived-item')) setTimeout(() => showMobileView('canvas'))
+  })
+  document.querySelector('#toggle-inspector').addEventListener('click', () => showMobileView('inspector'))
+}
 // Restore the autosaved project, if any, then start history from whatever
 // is on screen.
-let restoredProject = false
-try {
-  const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) {
-    loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
-    restoredProject = true
+function restoreSavedProject() {
+  let restoredProject = false
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
+      restoredProject = true
+    }
+  } catch (error) {
+    showToast(`Couldn't restore the saved project: ${error.message}`)
   }
-} catch (error) {
-  showToast(`Couldn't restore the saved project: ${error.message}`)
+  if (!restoredProject) loadProject(parseProject(defaultSnapshot))
+  const initialMain = managedMain(nodes)
+  if (initialMain) enterFunction(initialMain.id)
+  renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
+  history.reset(currentSnapshot())
+  if (!restoredProject) persist(currentSnapshot())
+  updateHistoryButtons()
 }
-if (!restoredProject) loadProject(parseProject(defaultSnapshot))
-const initialMain = managedMain(nodes)
-if (initialMain) enterFunction(initialMain.id)
-renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
-history.reset(currentSnapshot())
-if (!restoredProject) persist(currentSnapshot())
-updateHistoryButtons()
+
+// --- Start ------------------------------------------------------------------
+// Every piece of the page is wired by its own setup function; `main` runs
+// them in order (listeners on the same event fire in this order) and then
+// brings back the saved project.
+function main() {
+  setupShortcutHints()
+  setupTopBar()
+  setupSearch()
+  setupTypeDrag()
+  setupFunctionDrag()
+  setupCanvasInput()
+  setupBackButton()
+  setupRunButton()
+  setupPlayInput()
+  setupTemplates()
+  setupGameExport()
+  setupProjectActions()
+  setupKeyboard()
+  setupToolbar()
+  setupSidebarButtons()
+  setupLearningPanel()
+  setupInspectorButtons()
+  setupMobileTabs()
+  restoreSavedProject()
+}
+main()

@@ -1,7 +1,7 @@
 import { syntaxLessons, exampleProblems, lessonGuide, lessonSource } from './learningContent.js'
 
 // This module owns only learning UI state; it never receives or mutates a graph.
-export function initLearningPanel({ workspace, onModalOpen }) {
+export function initLearningPanel({ workspace, onModalOpen, examplesPanel: sharedExamplesPanel }) {
   let selectedExample = null
   let returnFocus = null
   const panel = document.createElement('aside')
@@ -18,10 +18,11 @@ export function initLearningPanel({ workspace, onModalOpen }) {
       </section>`
   workspace.insertBefore(panel, workspace.querySelector('.sidebar'))
 
-  const examplesPanel = document.createElement('aside')
-  examplesPanel.className = 'learning-panel examples-panel'
-  examplesPanel.setAttribute('aria-label', '예제 문제 패널')
-  examplesPanel.innerHTML = `
+  const examplesPanel = sharedExamplesPanel || document.createElement('aside')
+  if (!sharedExamplesPanel) {
+    examplesPanel.className = 'learning-panel examples-panel'
+    examplesPanel.setAttribute('aria-label', '예제 문제 패널')
+    examplesPanel.innerHTML = `
     <header class="learning-header">
       <div class="learning-heading"><span class="learning-eyebrow">PRACTICE</span><h2 id="examples-heading">예제 문제</h2></div>
       <button type="button" class="learning-toggle" aria-expanded="true" aria-controls="examples-section" aria-label="예제 문제 패널 접기" title="예제 문제 패널 접기">‹</button>
@@ -31,7 +32,15 @@ export function initLearningPanel({ workspace, onModalOpen }) {
         <ul class="learning-list example-list" aria-label="예제 문제 목록"></ul>
         <p class="learning-footnote">지금은 문제 선택만 할 수 있어요.</p>
       </section>`
-  workspace.prepend(examplesPanel)
+    workspace.prepend(examplesPanel)
+  } else {
+    // Keep the original selection-only examples in the same practice
+    // column as the new graded courses, without a second panel or toggle.
+    const legacy = document.createElement('details')
+    legacy.className = 'legacy-example-selection'
+    legacy.innerHTML = '<summary>예제 선택 · 기존 목록</summary><ul class="learning-list example-list" aria-label="예제 문제 목록"></ul>'
+    examplesPanel.querySelector('.learning-section').prepend(legacy)
+  }
 
   const dialog = document.createElement('dialog')
   dialog.className = 'syntax-dialog'
@@ -182,7 +191,7 @@ export function initLearningPanel({ workspace, onModalOpen }) {
     })
   }
   bindToggle(panel, '문법', 'syntax-collapsed', '‹', '›')
-  bindToggle(examplesPanel, '예제 문제', 'examples-collapsed', '‹', '›')
+  if (!sharedExamplesPanel) bindToggle(examplesPanel, '예제 문제', 'examples-collapsed', '‹', '›')
 
   closeButton.addEventListener('click', () => dialog.close())
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); dialog.close() })

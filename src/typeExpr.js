@@ -23,6 +23,7 @@
 // kept on the body's Output node as `context: [{ cls, var }]`. The context
 // stays open, like GHC's `(Ord a, _) =>`: whatever else the body needs of
 // its variables is still inferred.
+import { CLASS_GROUPS, classLabel } from './classGroups.js'
 import { DeclError, builtinTypeNames, parseTypeText } from './typeDecls.js'
 import { classArity, classNames, isUserClass, superclassesOf } from './prelude.js'
 import { constructorArity, constructorKind, createNamer, freshVar, showKind, tapp, tcon, tfun, userTypeArities } from './typeSystem.js'
@@ -270,21 +271,15 @@ export function occurrenceOf(type, id, arity, path = []) {
   return null
 }
 
-/** The classes a constraint can be built from, grouped for a palette — each with its kind (`* ▸ Constraint`). */
+/** The classes a constraint can be built from, grouped by task for a palette (classGroups.js) — each with its kind (`* ▸ Constraint`). */
 export function classPalette() {
-  const groups = [
-    ['Comparing', ['Eq', 'Ord', 'Show', 'PartialOrd', 'Lattice']],
-    ['Numbers', ['Semiring', 'Ring', 'Field', 'OrderedRing', 'EuclideanRing', 'OrderedField', 'Transcendental', 'IEEEFloat']],
-    ['Algebra', ['Semigroup', 'Monoid', 'AddSemigroup', 'AddMonoid', 'AddCommutativeMonoid', 'AddGroup', 'AddAbelianGroup', 'MulSemigroup', 'MulMonoid', 'VectorSpace']],
-    ['Containers', ['Functor', 'Foldable', 'Traversable', 'Applicative', 'Monad']],
-  ]
   const all = classNames()
-  const listed = new Set(groups.flatMap(([, names]) => names))
-  const entry = (name) => ({ name, arity: classArity(name), supers: superclassesOf(name), kind: `${classArity(name) ? '(* ▸ *)' : '*'} ▸ Constraint` })
+  const listed = new Set(CLASS_GROUPS.flatMap((g) => g.names))
+  const entry = (name) => ({ name, label: classLabel(name), arity: classArity(name), supers: superclassesOf(name), kind: `${classArity(name) ? '(* ▸ *)' : '*'} ▸ Constraint` })
   const user = all.filter((n) => isUserClass(n))
   const other = all.filter((n) => !listed.has(n) && !isUserClass(n))
   return [
-    ...groups.map(([group, names]) => ({ group, items: names.filter((n) => all.includes(n)).map(entry) })),
+    ...CLASS_GROUPS.map(({ group, names, advanced }) => ({ group, advanced: !!advanced, items: names.filter((n) => all.includes(n)).map(entry) })),
     ...(other.length ? [{ group: 'Other', items: other.map(entry) }] : []),
     ...(user.length ? [{ group: 'Yours', items: user.map(entry) }] : []),
   ].filter((g) => g.items.length)

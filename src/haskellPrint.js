@@ -19,7 +19,7 @@
 // its tokens. Joining the tokens' text gives the plain definition.
 import { parseLiteral } from './literals.js'
 
-const OPERATORS = { '(+)': '+', '(-)': '-', '(*)': '*', '(/)': '/', '(>=)': '>=', '(==)': '==', '(<>)': '<>', '(++)': '++', '(:)': ':', '(&&)': '&&', '(||)': '||', '(!?)': '!?', '(*^)': '*^', '(\\/)': '\\/', '(/\\)': '/\\' }
+const OPERATORS = { '(+)': '+', '(-)': '-', '(*)': '*', '(/)': '/', '(>=)': '>=', '(==)': '==', '(<>)': '<>', '(++)': '++', '(:)': ':', '(&&)': '&&', '(||)': '||', '(!?)': '!?', '(*^)': '*^', '(\\/)': '\\/', '(/\\)': '/\\', '(<$>)': '<$>', '(<$)': '<$', '(<*>)': '<*>', '(*>)': '*>', '(>>=)': '>>=', '(>>)': '>>', '(>=>)': '>=>' }
 // Right-associative operators (infixr): `x : y : []` needs no parentheses on the right.
 const RIGHT_ASSOC = new Set([':', '++', '<>'])
 export const identifier = (s) => typeof s === 'string' && /^[a-z_][A-Za-z0-9_']*$/.test(s)
@@ -83,9 +83,23 @@ function printLambda(fnId, definitions, functionBodies) {
   return [...head, { text: ' ' }, { text: '->', ...at('output') }, { text: ' ' }, ...body]
 }
 
-/** The pieces of a function body: parameters, the right-hand side, and shared bindings — each as tokens. */
-function printBody(fnId, definitions, functionBodies) {
-  const body = functionBodies[fnId]
+/**
+ * The expression node `nodeId` of `graph` stands for, e.g. `add 3 (mul x 2)` —
+ * what a folded call shows in place of its slots. Shared values are printed
+ * where they are used, so the text needs no `where`.
+ */
+export function printNodeText(graph, nodeId, definitions, functionBodies) {
+  const printed = printBody(null, definitions, functionBodies, { body: graph, root: nodeId, inline: true })
+  return printed ? tokensText(printed.rhs) : ''
+}
+
+/**
+ * The pieces of a function body: parameters, the right-hand side, and shared bindings — each as tokens.
+ * `options` prints another graph (`body`) from another node (`root`) than the
+ * body's output, and `inline` prints shared values in place instead of binding them.
+ */
+function printBody(fnId, definitions, functionBodies, options = {}) {
+  const body = options.body ?? functionBodies[fnId]
   if (!body) return null
   const at = (id, extra) => ({ id, scope: fnId, ...extra })
   const tok = (text, id, extra) => (id ? { text, ...at(id, extra) } : { text })
@@ -125,8 +139,8 @@ function printBody(fnId, definitions, functionBodies) {
     const n = body[id]
     if (!n) return atom([{ text: 'undefined' }])
     if (n.type === 'ref') return expr(n.target, via)
-    if (n.type === 'parameter') return atom([tok(n.label, via, { role: 'param' })])
-    if (refCount.get(id)) {
+    if (n.type === 'parameter') return options.parameterValues?.get(n.id) || atom([tok(n.label, via, { role: 'param' })])
+    if (refCount.get(id) && !options.inline) {
       if (!shared.has(id)) {
         const name = claimed.get(id) ?? freshName(id)
         shared.set(id, name)
@@ -136,8 +150,12 @@ function printBody(fnId, definitions, functionBodies) {
       }
       return atom([tok(shared.get(id), via, { role: 'binding' })])
     }
-    return print(n)
+    if (!options.inline) return print(n)
+    if (inlining.has(id)) return atom([{ text: '…' }]) // a value that holds itself
+    inlining.add(id)
+    try { return print(n) } finally { inlining.delete(id) }
   }
+  const inlining = new Set()
 
   function literal(textValue, id, extra) {
     const t = textValue.trim()
@@ -153,6 +171,7 @@ function printBody(fnId, definitions, functionBodies) {
     if (n.type === 'text') return atom([tok(JSON.stringify(String(n.value ?? '')), n.id, { role: 'literal' })])
     if (n.type === 'output') return n.source ? expr(n.source) : atom([{ text: 'undefined' }])
     if (n.type !== 'function') return atom([tok(n.label || '?', n.id)])
+    if (n.match) return printMatch(n)
     const callee = definitions[n.sourceFunctionId || n.id]
     // A λ node is a call to its (lambda-lifted) function: print the lambda
     // itself, applied to whatever its slots capture — a β-redex.
@@ -175,6 +194,11 @@ function printBody(fnId, definitions, functionBodies) {
       return atom([tok(x, n.id, { role: 'hole', slot: i })])
     })
     const callTok = (t) => tok(t, n.id, { role: 'call' })
+    // m >>= (\x -> rest) and m >> rest read as do-notation, one statement per step.
+    if (!head && !holes.length && applied.length === 2 && (labelText === '(>>=)' || labelText === '(>>)')) {
+      const block = doBlock(n, labelText, applied, callTok)
+      if (block) return block
+    }
     let e
     if (labelText === '(,)' && applied.length === 2 && !head) e = atom([callTok('('), ...applied[0].tokens, callTok(', '), ...applied[1].tokens, callTok(')')])
     else if (labelText === '[ , , ]' && !head) e = atom([callTok('['), ...applied.flatMap((a, i) => (i ? [callTok(', '), ...a.tokens] : a.tokens)), callTok(']')])
@@ -200,9 +224,71 @@ function printBody(fnId, definitions, functionBodies) {
     return lambda([tok('\\', n.id, { role: 'call' }), ...binders, { text: ' -> ' }, ...e.tokens])
   }
 
-  const output = body.output
-  const rhs = output?.source ? expr(output.source).tokens : [{ text: 'undefined' }]
-  return { params: params.map((p) => ({ name: p.label, id: p.id })), rhs, bindings }
+  function printMatch(n) {
+    const at = n.match.branches.length
+    const source = n.mounted?.[at]
+    const target = source ? expr(source) : atom([{ text: 'undefined' }])
+    const arms = n.match.branches.filter((b) => !b.useDefault)
+    if (n.match.branches.some((b) => b.useDefault) && n.match.defaultBranch) arms.push({ ...n.match.defaultBranch, ctor: '_', fields: [] })
+    const fieldNames = new Set(arms.flatMap((b) => b.fields.map((f) => f.name)))
+    fieldNames.forEach((name) => used.add(name))
+    const captureValues = new Map()
+    const valueFor = (id) => {
+      if (captureValues.has(id)) return captureValues.get(id)
+      let value = expr(id)
+      // A pattern binder must not shadow an outer variable substituted here.
+      if (value.tokens.some((t) => fieldNames.has(t.text))) {
+        const name = freshName('outer')
+        bindings.push({ name, id, value: value.tokens })
+        value = atom([{ text: name, id, scope: fnId, role: 'binding' }])
+      }
+      captureValues.set(id, value)
+      return value
+    }
+    const rows = arms.map((branch) => {
+      const params = Object.values(functionBodies[branch.fnId] || {}).filter((p) => p.type === 'parameter')
+      const captures = new Map(branch.captures.map((id, i) => [params[i]?.id, id]))
+      const parameterValues = { get: (id) => captures.has(id) ? valueFor(captures.get(id)) : undefined }
+      const inner = printBody(branch.fnId, definitions, functionBodies, { parameterValues })
+      const rhs = inner ? inner.bindings.length ? [{ text: 'let { ' }, ...inner.bindings.flatMap((b, i) => [...(i ? [{ text: '; ' }] : []), { text: b.name, id: b.id, scope: branch.fnId, role: 'binding' }, { text: ' = ' }, ...b.value]), { text: ' } in ' }, ...inner.rhs] : inner.rhs : [{ text: 'undefined' }]
+      return [{ text: branch.ctor, id: n.id, scope: fnId, role: 'call' }, ...branch.fields.flatMap((f, i) => [{ text: ' ' }, { text: f.name, id: params[branch.captures.length + i]?.id, scope: branch.fnId, role: 'param' }]), { text: ' -> ' }, ...rhs]
+    })
+    return lambda([tok('case', n.id, { role: 'call' }), { text: ' ' }, ...target.tokens, { text: ' of { ' }, ...rows.flatMap((row, i) => [...(i ? [{ text: '; ' }] : []), ...row]), { text: ' }' }])
+  }
+
+  // A do block `do { s₁; s₂; … }` (braces and semicolons, so it reads the
+  // same inline); `stmts` lets a block that ends in another one flatten it —
+  // `m >>= \x -> (k >>= \y -> e)` is one block, by the monad's associativity.
+  const stmtsOf = (e) => e.stmts || [e.tokens]
+  const resolve = (id) => { let r = id; while (body[r]?.type === 'ref') r = body[r].target; return r }
+  const doExpr = (stmts) => ({ tokens: [{ text: 'do { ' }, ...stmts.flatMap((st, i) => (i ? [{ text: '; ' }, ...st] : st)), { text: ' }' }], prec: 0, stmts })
+  function doBlock(n, labelText, applied, callTok) {
+    if (labelText === '(>>)') return doExpr([applied[0].tokens, ...stmtsOf(applied[1])])
+    // (>>=): the continuation must be an unshared λ whose captures are this
+    // body's parameters under the λ's own names — then its last binder is
+    // the statement's `x <-` and its body the statements after.
+    const k = n.mounted?.[1]
+    if (!k || body[k]?.type === 'ref' || refCount.get(k)) return null
+    const kn = body[k]
+    const lam = definitions[kn?.sourceFunctionId]
+    if (!lam?.lambda) return null
+    const inner = printBody(lam.id, definitions, functionBodies)
+    const last = (inner?.params.length || 0) - 1
+    if (last < 0 || (kn.params || []).length !== last + 1 || kn.mounted?.[last] || parseLiteral(kn.params[last] ?? '')) return null
+    for (let i = 0; i < last; i++) {
+      const cap = body[resolve(kn.mounted?.[i])]
+      if (cap?.type !== 'parameter' || cap.label !== inner.params[i].name) return null
+    }
+    const x = inner.params[last]
+    const bindStmt = [{ text: x.name, id: x.id, scope: lam.id, role: 'param' }, callTok(' <- '), ...applied[0].tokens]
+    const lets = inner.bindings.length ? [[{ text: 'let { ' }, ...inner.bindings.flatMap((b, i) => [...(i ? [{ text: '; ' }] : []), { text: b.name, id: b.id, scope: lam.id, role: 'binding' }, { text: ' = ' }, ...b.value]), { text: ' }' }]] : []
+    return doExpr([bindStmt, ...lets, ...(inner.stmts || [inner.rhs])])
+  }
+
+  const root = 'root' in options ? options.root : body.output?.source
+  const rhsExpr = root ? expr(root) : null
+  const rhs = rhsExpr ? rhsExpr.tokens : [{ text: 'undefined' }]
+  return { params: params.map((p) => ({ name: p.label, id: p.id })), rhs, bindings, stmts: rhsExpr?.stmts }
 }
 
 /** A type as Haskell source (ASCII arrows). */
