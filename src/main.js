@@ -1,10 +1,7 @@
 import './style.css'
-import { initLearningPanel } from './learningPanel.js'
 import { initWorkspaceResize } from './workspaceResize.js'
 import { createExecutionTrace, createExecutionPlayback } from './executionTrace.js'
 import { createBlankProject, isManagedMain, managedMain, MAIN_GUIDANCE, MAIN_PROTECTION, programRunTarget, returnsProgram } from './programEntry.js'
-import { initExercisePanel } from './exercisePanel.js'
-import { findExerciseFunction } from './grader.js'
 import { applySubst, classShown, constructorArity, constructorKind, showKind, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
@@ -84,7 +81,7 @@ app.innerHTML = `
       </aside>
       <section class="canvas-panel">
         <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>그래프</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>방금 저장됨</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="실행 취소" disabled>↶</button><button class="tool-button icon-only" id="redo" title="다시 실행" disabled>↷</button><details class="project-menu"><summary class="tool-button">프로젝트</summary><div class="project-menu-items"><button class="tool-button" id="export" title="프로젝트를 JSON으로 내려받기">⤓ <span>프로젝트 저장 (.json)</span></button><button class="tool-button" id="import" title="프로젝트 JSON 파일 불러오기">⤒ <span>프로젝트 열기</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="템플릿에서 시작 (실행 취소 가능)"><option value="">✦ 템플릿…</option><option value="clickCounter">클릭 카운터</option><option value="blankGame">빈 게임</option><option value="vending">자판기 (함수와 타입)</option><option value="nim">님 (조건)</option><option value="dice">주사위 (난수 · 그림)</option><option value="damage">데미지 (커링과 합성)</option><option value="rps">가위바위보 (데이터 타입)</option><option value="simon">사이먼 (리스트와 재귀)</option><option value="highLow">하이로우 (타입 클래스)</option><option value="blackjack">블랙잭 (리스트)</option></select><button class="tool-button" id="export-game" title="게임을 독립 HTML 파일 하나로 내려받기">⬇ <span>게임 내보내기 (.html)</span></button><button class="tool-button" id="reset">↺ <span>프로젝트 초기화</span></button></div></details><button class="tool-button primary" id="run">▶ <span>실행 add</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div class="canvas-empty" hidden><b>빈 그래프예요</b><span>왼쪽 <i>연습 문제</i>에서 문제를 고르거나, 사이드바에서 값·함수를 끌어다 놓으세요.</span><span><kbd data-shortcut="K"></kbd> 블록 검색 · <i>프로젝트 › 템플릿</i>으로 예제 열기</span></div><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="모든 함수 펼치기: 슬롯에 꽂힌 것을 캔버스에 보여요">⤢</button><button id="fold-all" title="모든 함수 접기: 꽂힌 것을 슬롯 안에 넣어요">⤡</button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div class="canvas-empty" hidden><b>빈 그래프예요</b><span>사이드바에서 값·함수를 추가하거나 캔버스로 끌어다 놓으세요.</span><span><kbd data-shortcut="K"></kbd> 블록 검색 · <i>프로젝트 › 템플릿</i>으로 예제 열기</span></div><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="모든 함수 펼치기: 슬롯에 꽂힌 것을 캔버스에 보여요">⤢</button><button id="fold-all" title="모든 함수 접기: 꽂힌 것을 슬롯 안에 넣어요">⤡</button></div></div>
         <footer class="canvas-footer"><span>블록 <b id="node-count">2</b>개</span><span>연결 <b id="connection-count">0</b>개</span><span class="footer-spacer"></span><span class="shortcut"><kbd data-shortcut="Enter"></kbd><span id="run-shortcut-label">실행 add</span></span></footer>
       </section>
       <aside class="inspector" id="inspector-panel"><div class="inspector-title"><span>속성</span><button class="close-inspector" aria-label="속성 패널 닫기">×</button></div><div id="inspector-content"></div></aside>
@@ -123,7 +120,7 @@ function setupTopBar() {
   document.querySelector('#help').onclick = () => {
     const dialog = document.createElement('dialog')
     dialog.className = 'help-dialog'
-    dialog.innerHTML = `<h2>그래프 다루기</h2><ul><li>함수 이름을 눌러 본체를 열고, + 버튼으로 호출을 추가해요.</li><li>사이드바에서 값을 추가해요. 블록 오른쪽 출력 포트를 입력 슬롯이나 Output으로 끌어 이어요.</li><li>빈 입력 슬롯을 누르면 값을 적을 수 있어요.</li><li>빈 캔버스를 끌면 이동, 스크롤하면 확대·축소해요.</li><li>위쪽 실행 버튼에는 프로젝트의 시작 함수 이름이 나와요. 연습 문제의 본체 안에서는 채점 버튼이 돼요.</li><li>타입 편집기에서는 +를 눌러 타입을 고르거나 타입 목록에서 끌어 와요. 이름을 누르면 바꿀 수 있어요.</li></ul><p>${shortcutModifier} K: 검색해서 추가 · ${shortcutModifier} Enter: 실행 · ${shortcutModifier} Z: 실행 취소</p><p>프로젝트는 이 브라우저에 자동으로 저장돼요. 실행기는 이 컴퓨터에서 돌아가요.</p><form method="dialog"><button class="tool-button">닫기</button></form>`
+    dialog.innerHTML = `<h2>그래프 다루기</h2><ul><li>함수 이름을 눌러 본체를 열고, + 버튼으로 호출을 추가해요.</li><li>사이드바에서 값을 추가해요. 블록 오른쪽 출력 포트를 입력 슬롯이나 Output으로 끌어 이어요.</li><li>빈 입력 슬롯을 누르면 값을 적을 수 있어요.</li><li>빈 캔버스를 끌면 이동, 스크롤하면 확대·축소해요.</li><li>위쪽 실행 버튼에는 프로젝트의 시작 함수 이름이 나와요.</li><li>타입 편집기에서는 +를 눌러 타입을 고르거나 타입 목록에서 끌어 와요. 이름을 누르면 바꿀 수 있어요.</li></ul><p>${shortcutModifier} K: 검색해서 추가 · ${shortcutModifier} Enter: 실행 · ${shortcutModifier} Z: 실행 취소</p><p>프로젝트는 이 브라우저에 자동으로 저장돼요. 실행기는 이 컴퓨터에서 돌아가요.</p><form method="dialog"><button class="tool-button">닫기</button></form>`
 
     document.body.append(dialog)
     dialog.addEventListener('close', () => dialog.remove())
@@ -3976,28 +3973,10 @@ function setupBackButton() {
     renderFunctionLibrary(); updateInspector(); fitToView()
   }
 }
-// The practice panel (exercisePanel.js), once set up.
-let exercisePanel = null
-// Inside the body of the build exercise on screen, Run grades it instead:
-// there is nothing to play in a body, and the entry lives at top level.
-function gradingExercise() {
-  const exercise = exercisePanel?.currentBuild()
-  const fn = exercise && state.activeFunction && nodes[state.activeFunction]
-  return fn && fn.custom && fn.label === exercise.name ? exercise : null
-}
 // Plays the entry function (always in `main`), falling back to whichever
 // function is selected when no entry has been set.
 function updateRunLabel() {
   const button = document.querySelector('#run')
-  const exercise = gradingExercise()
-  if (exercise) {
-    const label = `채점 ${exercise.name}`
-    button.querySelector('span').textContent = label
-    button.title = `연습 문제 ${exercise.name} 채점 (${shortcutModifier} Enter)`
-    button.disabled = false
-    document.querySelector('#run-shortcut-label').textContent = label
-    return
-  }
   const entry = entryId && nodes[entryId]
   const selected = activeNodes()[state.selected]
   const target = entry || (selected && isFunction(selected) ? selected : null)
@@ -4008,7 +3987,6 @@ function updateRunLabel() {
   document.querySelector('#run-shortcut-label').textContent = label
 }
 function runEntry() {
-  if (gradingExercise()) { exercisePanel.grade(); return showMobileView('examples') }
   resetExecution()
   const target = programRunTarget({ nodes, functionBodies, entry: entryId })
   if (target && isManagedMain(target.fn)) {
@@ -4495,51 +4473,8 @@ function setupSidebarButtons() {
     draw()
   }))
 }
-// The practice panel grades against the live project; a build exercise's
-// function is created (named and with the asked parameters) or opened here.
-function openExerciseFunction(exercise) {
-  let fn = findExerciseFunction(nodes, exercise.name)
-  if (!fn) {
-    const problem = functionNameProblem(exercise.name)
-    if (problem) return showToast(problem)
-    const id = `custom-${Date.now()}`
-    const params = [...exercise.params]
-    fn = nodes[id] = { id, type: 'function', ...freePosition(nodes, 120 + params.length * SLOT_STRIDE), label: exercise.name, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
-    functionBodies[id] = createFunctionBody(id, params)
-    delete functionBodies[id].output.source // an empty body: the learner builds it
-    functionBodies[id].output.value = 'open'
-    showToast(`ƒ ${exercise.name}를 만들었어요 — 시그니처를 적고 본체를 만드세요`)
-  }
-  state.activeFunction = null
-  enterFunction(fn.id)
-  // The signature is written by dragging from Types: have them in view.
-  document.querySelector('#types-section').open = true
-  showMobileView('canvas')
-}
-function setupLearningPanel() {
-  exercisePanel = initExercisePanel({
-    workspace: document.querySelector('.workspace'),
-    project: () => ({ registry: definitions, functionBodies, userNodes: nodes, types, classes, instances }),
-    schemeOf: (name) => builtinSchemes[name],
-    openFunction: openExerciseFunction,
-    // A declare exercise: its type in the editor, or a new one to rename.
-    openType: (name) => { openTypeEditor(types[name] ? name : null); showMobileView('canvas') },
-    onChange: () => updateRunLabel(),
-    reveal: (name) => {
-      const input = document.querySelector('.sidebar .search input')
-      input.value = name
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      showMobileView('sidebar')
-      input.focus()
-    },
-  })
+function setupWorkspaceResize() {
   const workspace = document.querySelector('.workspace')
-  initLearningPanel({ workspace, examplesPanel: workspace.querySelector('.exercise-panel'), onModalOpen: () => {
-    endDrag(); endWire()
-    if (typeDrag) endTypeDrag(null)
-    state.pan = null
-    canvas.classList.remove('panning')
-  } })
   initWorkspaceResize({ workspace, sidebar: workspace.querySelector('.sidebar'), onResizeStart: () => {
     endDrag(); endWire()
     if (typeDrag) endTypeDrag(null)
@@ -4559,18 +4494,16 @@ function setupInspectorButtons() {
   })
 }
 // On a phone-width screen the workspace shows one column at a time, picked
-// from a tab bar at the bottom: the learning panel, the blocks, the canvas,
-// or the inspector. Actions that lead to another column switch to it.
+// from a tab bar at the bottom: the blocks, the canvas, or the inspector.
+// Actions that lead to another column switch to it.
 const mobileQuery = matchMedia('(max-width:680px)')
-const MOBILE_VIEWS = [['examples', '연습'], ['syntax', '문법'], ['sidebar', '블록'], ['canvas', '캔버스'], ['inspector', '속성']]
+const MOBILE_VIEWS = [['sidebar', '블록'], ['canvas', '캔버스'], ['inspector', '속성']]
 function showMobileView(view) {
   if (!mobileQuery.matches) return
   const workspace = document.querySelector('.workspace')
   workspace.dataset.view = view
   document.querySelectorAll('.mobile-tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === view)))
   if (view === 'inspector') toggleInspector(true)
-  const panel = document.querySelector(view === 'syntax' ? '.syntax-panel' : '.examples-panel')
-  if (['examples', 'syntax'].includes(view) && panel.classList.contains('is-collapsed')) panel.querySelector('.learning-toggle').click()
 }
 function setupMobileTabs() {
   const bar = document.createElement('nav')
@@ -4631,7 +4564,7 @@ function main() {
   setupKeyboard()
   setupToolbar()
   setupSidebarButtons()
-  setupLearningPanel()
+  setupWorkspaceResize()
   setupInspectorButtons()
   setupMobileTabs()
   restoreSavedProject()

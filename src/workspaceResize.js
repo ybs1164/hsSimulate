@@ -32,7 +32,7 @@ export function initWorkspaceResize({ workspace, sidebar, onResizeStart }) {
   try { preferredWidth = storedWorkspaceWidth(localStorage.getItem(STORAGE_KEY)) } catch { /* storage may be unavailable */ }
   let drag = null
   const clamp = (width, { min, max }) => Math.max(min, Math.min(max, width))
-  const siblings = [...workspace.querySelectorAll('.learning-panel, .inspector')]
+  const siblings = [...workspace.querySelectorAll('.inspector')]
 
   function sizes() {
     const css = getComputedStyle(workspace)
@@ -114,7 +114,7 @@ export function initWorkspaceResize({ workspace, sidebar, onResizeStart }) {
     refresh()
     save()
   })
-  // Re-clamp after window changes and independent panel collapse/Inspector close.
+  // Re-clamp after window changes and Inspector close.
   // Keep the user's preference so a temporarily smaller window can grow back.
   window.addEventListener('resize', refresh)
   const observer = new ResizeObserver(refresh)
