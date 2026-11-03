@@ -111,7 +111,7 @@ for(const c of manifest.cases)for(const [i,check] of c.checks.entries())test(`co
   for(const body of Object.values(doc.functionBodies))for(const node of Object.values(body)){
     if(node.id==='output')continue
     const span=doc.locations[node.id];assert.ok(span.start>=0&&span.end<=source.length&&span.start<span.end)
-    for(const arg of node.mounted||[])assert.ok(body[arg])
+    for(const arg of node.mounted||[])if(arg)assert.ok(body[arg])
     if(node.sourceFunctionId)assert.ok(doc.nodes[node.sourceFunctionId])
   }
 })

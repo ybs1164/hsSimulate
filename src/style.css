@@ -62,6 +62,8 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .code-pane p,.code-pane details{font-size:11px;line-height:1.65;margin:0;overflow-wrap:anywhere}
 .code-pane details{color:#767086}.code-pane summary{cursor:pointer}
 .code-run-controls{display:flex;gap:6px;flex-wrap:wrap}.code-run-controls button{flex:1;justify-content:center;white-space:normal}
+.code-equation-title{margin:26px 0 8px;font-size:12px;color:var(--accent-ink)}
+.code-patterns{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.code-patterns button{font-family:'DM Mono',monospace}
 #code-status[data-state="error"]{color:#a22a42}#code-status[data-state="stale"]{color:#8b610c}
 #code-functions{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
 #code-functions button{width:100%;border:1px solid var(--line);border-radius:9px;padding:8px;background:var(--panel);color:var(--ink);font:11px/1.6 'DM Mono';text-align:left;overflow-wrap:anywhere;cursor:pointer}

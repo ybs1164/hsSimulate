@@ -25,6 +25,22 @@ const source = async text => { await js(`(() => { const el = document.querySelec
 const select = name => js(`[...document.querySelectorAll('#code-functions button')].find(b => b.textContent.startsWith(${JSON.stringify(name + ' ::')})).click()`)
 const snapshot = () => js(`localStorage.getItem('hs-simulate:project')`)
 const savedCode = () => js(`localStorage.getItem('hs-simulate:code-document:v1')`)
+async function waitResult(expected) {
+  for(let i=0;i<120;i++){
+    const result=await js(`document.querySelector('.code-result')?.dataset.result`)
+    if(result===expected)return
+    if(result==='error')throw new Error(await js(`document.querySelector('.code-result').textContent`))
+    await sleep(50)
+  }
+  throw new Error('result was not ready: '+expected)
+}
+async function waitPlayback() {
+  for(let i=0;i<160;i++){
+    if(await js(`document.querySelector('#code-stop-playback').disabled&&document.querySelector('.code-surface').dataset.calculating!=='true'`))return
+    await sleep(50)
+  }
+  throw new Error('execution playback did not finish')
+}
 const shot = async name => writeFileSync(join(artifacts, name), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
 async function check(name, run) { try { await run(); console.log(`✓ ${name}`) } catch (e) { failures++; console.log(`✗ ${name}: ${e.message}`); await shot(`source-failure-${failures}.png`) } }
 try {
@@ -53,7 +69,7 @@ try {
     await click('#run')
     for(let i=0;i<40 && !(await js(`!!document.querySelector('.code-node[data-state="running"]')`));i++)await sleep(25)
     expect(await js(`!!document.querySelector('.code-node[data-state="running"]')`), 'running state not visible')
-    await sleep(1200)
+    await waitResult('8');await waitPlayback()
     expect(await js(`document.querySelector('.code-result')?.dataset.result === '8'`), 'expected 8')
     expect(await js(`document.querySelectorAll('.code-node[data-state="done"]').length === 3`), 'wrong visible completion nodes')
     await js(`[...document.querySelectorAll('.code-node')].find(n => n.querySelector('text').textContent === 'add').dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
@@ -85,7 +101,7 @@ try {
       ['f :: Int -> Int\nf x = x\nresult :: Int\nresult = f', 'Int'],
       ['result :: Int\nresult = (1 +', '표현식'],
       ['import Prelude\nresult :: Int\nresult = 1', '지원하지'],
-      ['result :: Int\nresult = [1]', '지원하지'],
+      ['result :: Int\nresult = (1,2)', '지원하지'],
     ]) {
       await source(text)
       expect((await js(`document.querySelector('#code-status').textContent`)).includes(reason), 'wrong diagnostic: ' + reason)
@@ -101,15 +117,15 @@ try {
     await click('#run'); await click('#run'); await select('combine'); await sleep(1000)
     expect(await js(`!document.querySelector('.code-result') && !document.querySelector('.code-node[data-state="done"], .code-node[data-state="running"]')`), 'old run contaminated another function')
     await source('main :: Int\nmain = 6 * 7')
-    await click('#run'); await sleep(800)
+    await click('#run'); await waitResult('42')
     expect(await js(`document.querySelector('.code-result')?.dataset.result === '42'`), 'imported main not evaluated independently')
     expect(await snapshot() === manual, 'imported main replaced manual main')
   })
   await check('numeric bound errors identify a node; correction clears it; source restore never restores old results', async () => {
     await source('result :: Int\nresult = (9007199254740991 + 1) - 1')
-    await click('#run'); await sleep(1400)
+    await click('#run'); await waitResult('error');await waitPlayback()
     expect(await js(`document.querySelector('.code-result')?.dataset.result === 'error' && !!document.querySelector('.code-node[data-state="error"]')`), 'missing overflow error')
-    await source(example); await click('#run'); await sleep(1200)
+    await source(example); await click('#run'); await waitResult('8');await waitPlayback()
     expect(await js(`document.querySelector('.code-result')?.dataset.result === '8' && !document.querySelector('.code-node[data-state="error"]')`), 'correction did not clear error')
     const saved = await savedCode()
     await send('Page.reload'); await sleep(900)
@@ -120,7 +136,7 @@ try {
     expect(await js(`!document.querySelector('#manual-tools').hidden && document.querySelector('#run').textContent.includes('main') && !document.querySelector('#reset').disabled`), 'manual controls not restored')
     expect(await snapshot() === manual, 'manual state changed')
   })
-  await check('raw recursion cases 03–06 execute through the Worker with expected results',async()=>{
+  await check('raw recursion/list/HOF cases 03–09 execute through the Worker with expected results',async()=>{
     await click('#code-tab')
     const fixtures=new URL('../test/fixtures/source-complex/',import.meta.url)
     const cases=JSON.parse(readFileSync(new URL('manifest.json',fixtures),'utf8')).cases.slice(2)
@@ -132,7 +148,7 @@ try {
   })
   await check('lazy conditions skip errors/recursion; Bool display and explicit limit recover',async()=>{
     await source('loop :: Int -> Int\nloop n = loop n\nresult :: Int\nresult = if False && (loop 0 == 0) || True then 8 else div 1 0')
-    await click('#run');await sleep(2200)
+    await click('#run');await waitResult('8');await waitPlayback()
     expect(await js(`document.querySelector('.code-result')?.dataset.result==='8'`),'lazy evaluation failed')
     expect(await js(`[...document.querySelectorAll('.code-node')].filter(n=>['loop','div'].includes(n.querySelector('text').textContent)).every(n=>n.dataset.state==='idle')`),'dead branch was animated')
     await source('loop :: Int -> Int\nloop n = loop (n + 1)\nresult :: Int\nresult = loop 0');await click('#run');await sleep(600)
@@ -145,7 +161,7 @@ try {
     await source('result :: Int\nresult = 4 + 7')
     await js(`document.querySelector('#run').click();document.querySelector('#code-stop').click()`);await sleep(250)
     expect(await js(`document.querySelector('.code-result')?.textContent.includes('사용자가 계산을 중단')`),'Worker stop failed')
-    await click('#run');await sleep(300);await click('#code-stop-playback')
+    await click('#run');await waitResult('11');await click('#code-stop-playback')
     expect(await js(`document.querySelector('.code-result')?.dataset.result==='11'&&!document.querySelector('.code-node[data-state="running"]')`),'replay stop changed calculation')
     await click('#run');await click('#manual-tab');await sleep(300);await click('#code-tab')
     expect(await js(`!document.querySelector('.code-result')&&!document.querySelector('.code-node[data-state="done"],.code-node[data-state="running"]')`),'Worker reply leaked after mode switch')

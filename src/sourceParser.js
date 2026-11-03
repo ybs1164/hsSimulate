@@ -11,7 +11,7 @@ export function sourceLocation(source, offset) {
   return { line: before.length, column: before.at(-1).length + 1 }
 }
 const reserved = new Set('module import qualified as hiding data newtype type class instance deriving case of let in where do infix infixl infixr foreign default'.split(' '))
-export const SOURCE_OPERATORS = { '||': 2, '&&': 3, '==': 4, '/=': 4, '<': 4, '<=': 4, '>': 4, '>=': 4, '+': 6, '-': 6, '*': 7 }
+export const SOURCE_OPERATORS = { '||': 2, '&&': 3, '==': 4, '/=': 4, '<': 4, '<=': 4, '>': 4, '>=': 4, ':':5, '++':5, '+': 6, '-': 6, '*': 7 }
 export function tokenizeSource(source) {
   const out = []
   const fail = (message, start, end = start + 1) => { throw new SourceError('syntax', message, source, { start, end }) }
@@ -39,9 +39,9 @@ export function tokenizeSource(source) {
       while (/[0-9]/.test(source[i] || '') && i < source.length) i++
       push('integer', start); continue
     }
-    if (['::','->','==','/=','<=','>=','&&','||'].includes(source.slice(i,i+2))) { i += 2; push(source.slice(start, i), start); continue }
-    if ('=+-*()<>`'.includes(ch)) { i++; push(ch, start); continue }
-    fail(`지원하지 않는 문자 ${JSON.stringify(ch)}입니다. Int·Bool, 조건식·산술·비교·논리와 일반 함수 호출을 지원합니다. 리스트·패턴·data는 미지원입니다.`, start)
+    if (['::','->','==','/=','<=','>=','&&','||','++'].includes(source.slice(i,i+2))) { i += 2; push(source.slice(start, i), start); continue }
+    if ('=+-*()<>`[],:'.includes(ch)) { i++; push(ch, start); continue }
+    fail(`지원하지 않는 문자 ${JSON.stringify(ch)}입니다. 튜플·가드·data·let/where·import 등은 미지원입니다.`, start)
   }
   if (out.length > 8000) fail('코드가 너무 큽니다 (토큰 최대 8,000개).', 0, 0)
   out.push({ kind: 'eof', text: '', start: i, end: i })
@@ -60,7 +60,8 @@ export function parseSource(source) {
   function type() {
     let left
     if (current().kind === '(') { i++; left = nested(type); take(')') }
-    else { const token = take('name'); if (!['Int','Bool'].includes(token.text)) error('코드 분석은 Int·Bool 타입만 지원합니다.', token); left = token.text === 'Int' ? intType() : {kind:'bool'} }
+    else if(current().kind==='['){i++;const element=nested(type);take(']');left={kind:'list',element}}
+    else { const token = take('name'); if (!['Int','Bool'].includes(token.text)) error('명시적인 Int·Bool 타입과 이들로 구성한 리스트·함수 타입만 지원합니다.', token); left = token.text === 'Int' ? intType() : {kind:'bool'} }
     if (current().kind === '->') { i++; return { kind: 'fun', from: left, to: nested(type) } }
     return left
   }
@@ -69,12 +70,25 @@ export function parseSource(source) {
     if (token.kind === 'integer') { i++; return { kind: 'integer', text: token.text, span: span(token) } }
     if (token.kind === 'boolean') { i++; return { kind: 'boolean', value:token.text==='True', span:span(token) } }
     if (token.kind === 'name') { i++; return { kind: 'name', name: token.text, span: span(token) } }
-    if (token.kind === '(') { i++; const expr = nested(() => expression(0)); const end = take(')'); return { kind: 'group', expr, span: span(token, end) } }
+    if (token.kind === '[') {
+      i++;const items=[]
+      if(current().kind!==']')for(;;){items.push(nested(()=>expression(0)));if(current().kind!==',')break;i++}
+      const end=take(']');return {kind:'list',items,span:span(token,end)}
+    }
+    if (token.kind === '(') {
+      i++
+      const op=current()
+      if(op.kind in SOURCE_OPERATORS && tokens[i+1].kind===')'){i++;return {kind:'operator',op:op.kind,span:span(token,take(')'))}}
+      if(op.kind in SOURCE_OPERATORS && op.kind!=='-'){
+        i++;const right=nested(()=>expression(0));return {kind:'section',op:op.kind,right,span:span(token,take(')'))}
+      }
+      const expr = nested(() => expression(0)); if(current().kind===',')error('튜플 구문은 이번 버전에서 지원하지 않습니다.'); const end = take(')'); return { kind: 'group', expr, span: span(token, end) }
+    }
     error('정수·Bool, 변수·함수 이름 또는 괄호 표현식이 필요합니다.')
   }
   function application() {
     let expr = atom()
-    while (['name', 'integer', 'boolean', '('].includes(current().kind)) {
+    while (['name', 'integer', 'boolean', '(', '['].includes(current().kind)) {
       const arg = atom()
       expr = { kind: 'application', fn: expr, arg, span: { start: expr.span.start, end: arg.span.end } }
     }
@@ -97,10 +111,26 @@ export function parseSource(source) {
       if(op.kind==='`'){const name=identifier();take('`');callee={kind:'name',name:name.text,span:span(name)}}
       if(precedence===4&&left.kind==='binary'&&SOURCE_OPERATORS[left.op]===4)error('비교 연산자는 연속 연결할 수 없습니다. 괄호 또는 &&/||를 사용하세요.',op)
       if (current().kind === '-') error('연산자 뒤 음수는 괄호로 감싸세요. 예: 3 * (-2)')
-      const right = nested(() => expression(precedence + (['&&','||'].includes(op.kind)?0:1)))
+      const right = nested(() => expression(precedence + (['&&','||',':','++'].includes(op.kind)?0:1)))
       left = { kind: 'binary', op: callee?.name||op.kind, callee, left, right, span: { start: left.span.start, end: right.span.end } }
     }
     return left
+  }
+  function pattern(min=0) {
+    const token=current();let p
+    if(token.kind==='name'){
+      i++;if(token.text!=='_'&&!/^[a-z][a-zA-Z0-9_']*$/.test(token.text))error('패턴은 변수·_·리스트만 지원합니다.',token)
+      p={kind:token.text==='_'?'wildcard':'variable',name:token.text,text:token.text,span:span(token),nameSpan:span(token)}
+    }else if(token.kind==='('){i++;p=nested(()=>pattern());const end=take(')');p={...p,span:span(token,end)}}
+    else if(token.kind==='['){
+      i++;const items=[]
+      if(current().kind!==']')for(;;){items.push(nested(()=>pattern()));if(current().kind!==',')break;i++}
+      const end=take(']');p={kind:'nil',span:span(end)}
+      for(let n=items.length-1;n>=0;n--)p={kind:'cons',head:items[n],tail:p,span:{start:items[n].span.start,end:end.end}}
+      p.span=span(token,end)
+    }else error('리스트 패턴([]·[x]·(x:xs)), 변수 또는 _가 필요합니다.')
+    if(min===0&&current().kind===':'){i++;const tail=nested(()=>pattern());p={kind:'cons',head:p,tail,span:{start:p.span.start,end:tail.span.end}}}
+    return p
   }
   const signatures = [], definitions = []
   while (current().kind !== 'eof') {
@@ -111,7 +141,7 @@ export function parseSource(source) {
       signatures.push({ name: name.text, type: signature, span: span(name, tokens[i - 1]) })
     } else {
       const params = []
-      while (current().kind === 'name') params.push(identifier())
+      while (['name','(','['].includes(current().kind)) params.push(nested(()=>pattern(1)))
       take('=')
       const expr = expression(0)
       definitions.push({ name: name.text, params, expr, nameSpan: span(name), span: { start: name.start, end: expr.span.end } })

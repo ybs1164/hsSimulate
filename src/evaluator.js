@@ -158,7 +158,7 @@ function asFraction(q) {
 const paren = (yes, s) => (yes ? `(${s})` : s)
 
 // A closure over a function that takes dictionaries carries them (plain data).
-const closure = (callee, args, dicts) => (dicts?.length ? { kind: 'closure', callee, args, dicts } : { kind: 'closure', callee, args })
+const closure = (callee, args, dicts, context) => ({kind:'closure',callee,args,...(dicts?.length?{dicts}:{}),...(context?{context}:{})})
 
 /** Fully force a value into JSON-safe data (closure args included). */
 function serializeValue(v) {
@@ -347,8 +347,17 @@ export function createEvaluator(registry) {
       return l.ctorIndex === 0 ? nothing : just(now(pair(l.args[0], l.args[1])))
     }],
     null: [1, (t, [d]) => list(listVia(d, t)).ctorIndex === 0],
-    // foldl, strict in the accumulator (Data.List's foldl'): same result on total functions, no thunk chain.
+    // Manual graphs retain their historical strict fold. Imported Haskell
+    // requests the actual lazy foldl; each accumulator captures the previous thunk.
     foldl: [3, (f, z, xs) => {
+      if (registry.sourceEvaluation) {
+        let acc=z
+        for(let l=list(xs);l.ctorIndex===1;l=list(l.args[1])) {
+          const previous=acc,element=l.args[0]
+          acc=delay(()=>applyValue(f,[previous,element]))
+        }
+        return force(acc)
+      }
       let acc = z
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) acc = now(applyValue(f, [acc, l.args[0]]))
       return force(acc)
@@ -678,6 +687,7 @@ export function createEvaluator(registry) {
   }
 
   function list(t) {
+    if(registry.executionLimits){listSteps++;budget()}
     const v = force(t)
     if (!isData(v) || v.type !== 'List') throw new EvalError(`Expected a list, got ${show(v)}`)
     return v
@@ -1071,7 +1081,7 @@ export function createEvaluator(registry) {
 
   function arityOf(callee) {
     const def = definition(callee)
-    if (def.method) return def.params.length
+    if (def.method || def.sourceEquations) return def.params.length
     if (def.derived) return def.derived.arity
     if (def.builtin) {
       const impl = builtins[def.builtin]
@@ -1082,17 +1092,33 @@ export function createEvaluator(registry) {
     return body ? Object.values(body).filter((n) => n.type === 'parameter').length : 0
   }
 
-  let callDepth = 0, demandDepth = 0, callSerial = 0, calls = 0, demands = 0, started = 0
+  let callDepth = 0, demandDepth = 0, applyDepth = 0, callSerial = 0, calls = 0, demands = 0, listSteps = 0, started = 0, activeEnv = null
   function budget() {
     const limits = registry.executionLimits
-    if (limits && (calls > limits.calls || demands > limits.nodes || Date.now() - started > limits.milliseconds)) {
+    if (limits && (calls > limits.calls || demands > limits.nodes || listSteps > (limits.listSteps ?? 6000) || Date.now() - started > limits.milliseconds)) {
       throw new EvalError('코드 실행 제한을 초과했습니다 (호출·노드·시간). 계산을 중단했습니다.')
     }
+  }
+  // Only the source compiler produces this finite, typed equation table.
+  // Match constructors left-to-right without forcing variable/wildcard fields.
+  function matchSourcePattern(pattern,arg,bindings) {
+    if(pattern.kind==='wildcard')return true
+    if(pattern.kind==='variable'){bindings.set(pattern.name,arg);return true}
+    const cell=list(arg)
+    if(pattern.kind==='nil')return cell.ctorIndex===0
+    return cell.ctorIndex===1&&matchSourcePattern(pattern.head,cell.args[0],bindings)&&matchSourcePattern(pattern.tail,cell.args[1],bindings)
   }
   function call(callee, args, dicts = [], caller = null) {
     calls++; budget()
     if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
     const def = definition(callee)
+    if(def.sourceEquations && registry.sourceEvaluation) {
+      for(const row of def.sourceEquations) {
+        const bindings=new Map()
+        if(row.patterns.every((p,i)=>matchSourcePattern(p,args[i],bindings)))return call(row.branchId,row.binders.map(name=>bindings.get(name)),dicts,caller)
+      }
+      throw new EvalError(`${def.label}: 일치하는 함수 방정식/패턴이 없습니다. 호출 인자와 패턴을 확인하세요.`)
+    }
     if (def.method) {
       if (!dicts?.length) throw new EvalError(`${def.method.name}: a method of class ${def.method.cls} needs to know its type — run it from a graph (the type pass picks the instance)`)
       return invoke(dicts[0], def.method.name, args, dicts.slice(1))
@@ -1101,7 +1127,9 @@ export function createEvaluator(registry) {
     if (def.builtin) {
       const through = customizedVia(def.builtin)
       if (through) return call(through.id, through.args ? through.args(args) : args)
-      return def.builtin === 'listOf' ? builtins.listOf[1](...args) : builtins[def.builtin][1](...args, dicts)
+      const value=def.builtin === 'listOf' ? builtins.listOf[1](...args) : builtins[def.builtin][1](...args, dicts)
+      registry.validateRuntimeValue?.(value,activeEnv||caller||{})
+      return value
     }
     const body = registry.functionBodies[callee]
     const output = body?.output
@@ -1148,15 +1176,19 @@ export function createEvaluator(registry) {
 
   /** Apply a function value to argument thunks, filling its open slots left to right. */
   function applyValue(f, argThunks) {
-    let v = f
-    for (const arg of argThunks) {
-      v = force(v)
-      if (!isClosure(v)) throw new EvalError(`Cannot apply ${show(v)} — it is not a function`)
-      const args = v.args.slice()
-      args[args.indexOf(null)] = arg
-      v = args.includes(null) ? closure(v.callee, args, v.dicts) : call(v.callee, args, v.dicts)
-    }
-    return force(v)
+    if(registry.executionLimits && applyDepth>=registry.executionLimits.demandDepth)throw new EvalError('함수 적용 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
+    applyDepth++
+    try {
+      let v = f
+      for (const arg of argThunks) {
+        v = force(v)
+        if (!isClosure(v)) throw new EvalError(`Cannot apply ${show(v)} — it is not a function`)
+        const args = v.args.slice()
+        args[args.indexOf(null)] = arg
+        v = args.includes(null) ? closure(v.callee, args, v.dicts, v.context) : call(v.callee, args, v.dicts, activeEnv || v.context)
+      }
+      return force(v)
+    } finally { applyDepth-- }
   }
 
   /** A node's value as a memoized thunk, within one call frame (`env`). */
@@ -1168,11 +1200,12 @@ export function createEvaluator(registry) {
       demands++; budget()
       if (registry.executionLimits && demandDepth >= registry.executionLimits.demandDepth) throw new EvalError('표현식 평가 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
       demandDepth++
+      const previousEnv=activeEnv;activeEnv={...env,graph,nodeId:id}
       try {
         const value = computeNode(graph, id, env)
         registry.validateNodeValue?.(value, { graph, nodeId: id })
         return value
-      } finally { demandDepth-- }
+      } finally { demandDepth--;activeEnv=previousEnv }
     }
     const t = delay(() => {
       const observer = trace
@@ -1262,7 +1295,7 @@ export function createEvaluator(registry) {
     })
     const dicts = dictsOf(env, node.id)
     if (!args.includes(null)) return call(callee, args, dicts, env)
-    return closure(callee, args, dicts)
+    return closure(callee, args, dicts, registry.sourceEvaluation?{callId:env.callId??0,functionId:env.functionId??null,nodeId:node.id}:undefined)
   }
 
   /** The dictionaries `evidence` (a list, closed: no parameters) describes. */
@@ -1271,7 +1304,7 @@ export function createEvaluator(registry) {
   return {
     /** Evaluate node `nodeId` of `graph` to JSON-safe data: a number, a boolean, a data value, or a closure. */
     run(graph, nodeId, { onNode } = {}) {
-      return guarded(() => serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map(), elab: elab?.forGraph(graph) || {} })), graph, onNode)
+      return guarded(() => {const value=nodeValue(graph,nodeId,{args:null,memo:new Map(),elab:elab?.forGraph(graph)||{}});return registry.serializeResult?registry.serializeResult(value,{force:v=>{listSteps++;budget();return force(v)}}):serializeValue(value)},graph,onNode)
     },
     /** Apply builtin `name` to values, with the dictionaries `evidence` describes (closed evidence: see classEnv.js) — used by the law checker. */
     invoke(name, values, evidence = []) {
@@ -1295,7 +1328,7 @@ export function createEvaluator(registry) {
   function guarded(run, graph = null, onNode = null) {
     const previousTrace = trace
     trace = typeof onNode === 'function' ? { onNode, errors: new Set() } : null
-    steps = 0; callDepth = 0; demandDepth = 0; callSerial = 0; calls = 0; demands = 0; started = Date.now()
+    steps = 0; callDepth = 0; demandDepth = 0; applyDepth = 0; listSteps = 0; activeEnv = null; callSerial = 0; calls = 0; demands = 0; started = Date.now()
     try {
       elab = registry.elaboration?.(graph) || null
       return run()
