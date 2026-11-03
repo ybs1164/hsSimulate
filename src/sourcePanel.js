@@ -1,5 +1,6 @@
 import { formatSourceValue, sourceValueTruncated } from './sourceValue.js'
-import { SourceDocument, SOURCE_STORAGE_KEY } from './sourceDocument.js'
+import { SourceDocument, SOURCE_STORAGE_KEY, SOURCE_FILES_STORAGE_KEY } from './sourceDocument.js'
+import { readSelectedSourceFiles } from './sourceFiles.js'
 import { createSourceRunner } from './sourceRunner.js'
 import { sourceLocation } from './sourceParser.js'
 import { createSourceHistory, describeTraceValue } from './sourceHistory.js'
@@ -8,7 +9,10 @@ import { addTraceInspector } from './sourceDebuggerPanel.js'
 // Read-only analysis uses the existing Graph area, never loadProject/autosave.
 export function initSourcePanel({ onEnter, onLeave }) {
   const workspace = document.querySelector('.workspace'), sidebar = workspace.querySelector('.sidebar')
-  const model = new SourceDocument({ save: data => localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(data)) })
+  const pasted = new SourceDocument({ save: data => localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(data)) })
+  const imported = new SourceDocument({ fileMode: true, save: data => localStorage.setItem(SOURCE_FILES_STORAGE_KEY, JSON.stringify(data)) })
+  const modeKey = 'hs-simulate:code-source-mode'
+  let model = pasted, fileRequest = 0
   let active = false, selectedNode = null, calculating = false, generation = 0
   const runner=createSourceRunner()
   const show=formatSourceValue
@@ -21,16 +25,31 @@ export function initSourcePanel({ onEnter, onLeave }) {
   manual.id = 'manual-tools'; manual.setAttribute('role', 'tabpanel'); manual.setAttribute('aria-labelledby', 'manual-tab')
   const pane = document.createElement('section')
   pane.className = 'code-pane'; pane.id = 'code-pane'; pane.hidden = true; pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-labelledby', 'code-tab')
-  pane.innerHTML = `<label for="code-input">Haskell 코드 · 첫 버전</label><textarea id="code-input" spellcheck="false" aria-describedby="code-support"></textarea>
+  pane.innerHTML = `<div class="code-file-controls">
+      <button type="button" class="tool-button" id="code-paste-mode">붙여넣기</button>
+      <button type="button" class="tool-button" id="code-files-mode">파일 작업</button>
+      <button type="button" class="tool-button" id="code-open-files">.hs 파일 열기</button>
+      <input type="file" id="code-file-input" aria-label=".hs 파일 선택" accept=".hs" multiple hidden>
+    </div>
+    <div id="code-file-controls" hidden>
+      <label for="code-file-view">원문 파일</label>
+      <select id="code-file-view"></select>
+      <button type="button" class="tool-button" id="code-remove-file">현재 파일 제거</button>
+    </div>
+    <p id="code-file-status" role="status" hidden></p>
+    <label id="code-input-label" for="code-input">Haskell 코드</label><textarea id="code-input" spellcheck="false" aria-describedby="code-support"></textarea>
     <button type="button" id="code-convert" class="tool-button primary">그래프로 변환</button>
     <div class="code-run-controls"><button type="button" class="tool-button" id="code-stop" disabled>계산 중단</button></div>
     <p id="code-status" role="status" aria-live="polite"></p>
-    <details id="code-support"><summary>지원 범위와 제한</summary><p>정의는 한 줄씩, 모든 정의에 구체적인 Int/Bool·리스트·함수 시그니처가 필요합니다. 정수·True/False·+ − *·비교·&amp;&amp;·||·if then else·abs/div/mod·백틱 호출·괄호·변수·자기/상호 재귀·빈 줄·-- 주석을 지원합니다. 리스트([Int]·[Bool], 중첩 가능), :·++, 순서 있는 []·[x]·(x:xs)·변수·_ 패턴, 함수 값·부분 적용, map/filter/지연 foldl, 오른쪽 연산자 섹션(< pivot)을 지원합니다. 정의의 인자는 전부 명시합니다. 음수 인자는 (-2)처럼 괄호로 감싸세요.</p><p>import·IO·튜플·가드·let/where·사용자 data·사용자 다형 시그니처는 미지원입니다. 모든 중간 계산은 ±9007199254740991 이내여야 합니다. Graph JS 실행이며 GHC 실행이 아닙니다. 호출 깊이 48·평가 깊이 128, 함수/노드/리스트 검사 각 6,000회, 계산 1.5초(Worker 강제 종료 4초), 노드 기록 20,000개가 상한입니다. 탐색 기록은 최대 4,000단계와 값 참조 10,000개까지 보관하며 초과분은 생략합니다. 리스트 표시는 앞 100개·총 300개·중첩 8단계까지만 요구하며, 나머지는 강제로 계산하지 않고 …로 표시합니다. 계산 한도를 넘으면 오류로 중단합니다. 계산 중단과 기록 재생 중단은 별개입니다.</p><p>분석 문서는 수동 프로젝트와 별도 저장됩니다. 생성 그래프는 읽기 전용이며 원문으로의 역변환은 없습니다.</p></details>
+    <details id="code-support"><summary>지원 범위와 제한</summary><p>정의는 한 줄씩, 모든 정의에 구체적인 Int/Bool·리스트·함수 시그니처가 필요합니다. 정수·True/False·+ − *·비교·&amp;&amp;·||·if then else·abs/div/mod·백틱 호출·괄호·변수·자기/상호 재귀·빈 줄·-- 주석을 지원합니다. 리스트([Int]·[Bool], 중첩 가능), :·++, 순서 있는 []·[x]·(x:xs)·변수·_ 패턴, 함수 값·부분 적용, map/filter/지연 foldl, 오른쪽 연산자 섹션(< pivot)을 지원합니다. 정의의 인자는 전부 명시합니다. 음수 인자는 (-2)처럼 괄호로 감싸세요.</p><p>사용자가 선택한 UTF-8 .hs 파일만 불러옵니다. 파일당 40,000자, 전체 120,000자, 파일 12개까지 지원합니다. 로컬 module·export·import·qualified·as와 함수/값 목록을 지원합니다. 명시적 Prelude import·hiding·재내보내기·순환 모듈·외부 라이브러리·IO·튜플·가드·let/where·사용자 data·사용자 다형 시그니처는 미지원입니다. 모든 중간 계산은 ±9007199254740991 이내여야 합니다. Graph JS 실행이며 GHC 실행이 아닙니다. 호출 깊이 48·평가 깊이 128, 함수/노드/리스트 검사 각 6,000회, 계산 1.5초(Worker 강제 종료 4초), 노드 기록 20,000개가 상한입니다. 탐색 기록은 최대 4,000단계와 값 참조 10,000개까지 보관하며 초과분은 생략합니다. 리스트 표시는 앞 100개·총 300개·중첩 8단계까지만 요구하며, 나머지는 강제로 계산하지 않고 …로 표시합니다. 계산 한도를 넘으면 오류로 중단합니다. 계산 중단과 기록 재생 중단은 별개입니다.</p><p>분석 문서는 수동 프로젝트와 별도 저장됩니다. 생성 그래프는 읽기 전용이며 원문으로의 역변환은 없습니다.</p></details>
+    <div id="code-module-controls" hidden><label for="code-module">분석 대상 모듈</label><select id="code-module"></select></div>
     <h2>분석 함수 / 값</h2><ul id="code-functions"></ul>
     <label for="code-source-preview">변환된 원문 · 노드를 눌러 위치 확인</label><pre id="code-source-preview" tabindex="0"></pre>`
   sidebar.querySelector('.side-heading').after(tabs, manual, pane)
   const input = pane.querySelector('textarea'), status = pane.querySelector('#code-status'), preview = pane.querySelector('pre')
-  input.value = model.draft
+  const fileInput = pane.querySelector('#code-file-input'), fileView = pane.querySelector('#code-file-view')
+  const moduleSelect = pane.querySelector('#code-module'), fileStatus = pane.querySelector('#code-file-status')
+  const fileButton = pane.querySelector('#code-open-files'), removeButton = pane.querySelector('#code-remove-file')
   const surface = document.createElement('div')
   surface.className = 'code-surface'; surface.hidden = true
   surface.innerHTML = '<div class="code-graph-heading"></div><div class="code-graph-sheet"></div>'
@@ -92,7 +111,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
     frameId = callId
     selectedNode = null
     stepNode = nodeId || null
-    model.highlight = range ? { ...range, version: model.document.version } : null
+    highlight(range)
     if (viewFunction()?.id !== previousOwner) renderGraph()
     renderSource(); renderInspector(); renderPlayback()
   }
@@ -104,6 +123,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
     const owner = step?.functionId || model.selected
     const locationId = step?.equationId || step?.nodeId || (step?.kind === 'finish' ? owner : '')
     const range = step?.span || model.document.locations[locationId]
+    if (!step && model.viewFile(current()?.fileId)) syncFileView()
     showPosition(owner, step?.callId || (step?.kind === 'finish' ? root?.callId : null), step?.nodeId, range)
   }
   function showCall(call, atSite = false) {
@@ -112,7 +132,82 @@ export function initSourcePanel({ onEnter, onLeave }) {
     selectedCallId = call.callId
     const site = atSite ? call.site : null
     showPosition(site?.functionId || call.functionId, site?.callId || call.callId, site?.nodeId || call.nodeId,
-      model.document.locations[site?.nodeId || call.functionId])
+      site?.span || call.span || model.document.locations[site?.nodeId || call.functionId])
+  }
+
+  function syncFileView() {
+    input.value = model.draft
+    fileView.value = model.fileId || ''
+    const filename = model.files?.find(file => file.id === model.fileId)?.name
+    pane.querySelector('#code-input-label').textContent = filename || 'Haskell 코드'
+  }
+  function highlight(range) {
+    model.highlight = range && !model.stale ? { ...range, version: model.document.version } : null
+    if (model.highlight && model.viewFile(range.fileId)) syncFileView()
+  }
+  function reportFiles(message, error = false) {
+    fileStatus.textContent = message
+    fileStatus.hidden = !message
+    fileStatus.dataset.state = error ? 'read-error' : 'ready'
+  }
+  function chooseSource(next) {
+    if (model !== next) {
+      clear()
+      model.result = model.highlight = null
+      model = next
+      model.result = model.highlight = null
+      syncFileView()
+      try {
+        if (next === pasted || next.document) localStorage.setItem(modeKey, next === pasted ? 'paste' : 'files')
+      } catch { /* mode preference is optional */ }
+    }
+    render()
+  }
+  pane.querySelector('#code-paste-mode').onclick = () => { reportFiles(''); chooseSource(pasted) }
+  pane.querySelector('#code-files-mode').onclick = () => { reportFiles(''); chooseSource(imported) }
+  fileButton.onclick = () => fileInput.click()
+  fileInput.addEventListener('change', async () => {
+    const files = Array.from(fileInput.files)
+    fileInput.value = ''
+    if (!files.length) return
+    const request = ++fileRequest, revision = imported.revision
+    try {
+      const loaded = await readSelectedSourceFiles(files)
+      if (request !== fileRequest) return
+      if (revision !== imported.revision) throw new Error('읽는 동안 파일이 편집됐습니다. 현재 편집을 보존했습니다. 다시 선택하세요.')
+      const duplicates = loaded.filter(file => imported.files.some(previous => previous.id === file.id))
+      if (duplicates.length && !window.confirm(`${duplicates.map(file => file.name).join(', ')}의 현재 편집 내용을 선택한 파일로 교체할까요?`)) return
+      imported.replaceFiles(loaded)
+      if (active) {
+        clear()
+        chooseSource(imported)
+        syncFileView()
+      }
+      reportFiles(`${loaded.length}개 파일을 읽었습니다. 그래프로 변환하세요.`)
+    } catch (error) {
+      if (request === fileRequest) reportFiles(error.message, true)
+    }
+  })
+  fileView.onchange = () => {
+    if (!model.viewFile(fileView.value, true)) return
+    history.pause(false)
+    syncFileView()
+    renderSource(); renderPlayback()
+    renderStatus()
+  }
+  removeButton.onclick = () => {
+    clear()
+    model.removeFile(model.fileId)
+    syncFileView()
+    reportFiles('파일을 제거했습니다. 저장된 변환을 갱신하려면 다시 변환하세요.')
+    render()
+  }
+  moduleSelect.onchange = () => {
+    clear()
+    model.selectModule(moduleSelect.value)
+    const file = model.document.files.find(file => file.moduleName === model.moduleName)
+    if (model.viewFile(file?.id, true)) syncFileView()
+    render()
   }
 
   function mode(value) {
@@ -128,7 +223,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       if (active) { savedDisabled.set(button, button.disabled); button.disabled = true }
       else button.disabled = savedDisabled.get(button)
     }
-    if (active) render()
+    if (active) { syncFileView(); render() }
     else onLeave()
   }
   tabs.querySelector('#code-tab').onclick = () => mode(true)
@@ -143,41 +238,78 @@ export function initSourcePanel({ onEnter, onLeave }) {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); evaluate() }
   })
   input.addEventListener('input', () => { clear(); model.edit(input.value); render() })
-  pane.querySelector('#code-convert').onclick = () => { clear(); model.convert(); render() }
-  try {
-    const saved = JSON.parse(localStorage.getItem(SOURCE_STORAGE_KEY) || 'null')
-    if (saved && typeof saved.source === 'string' && Number.isSafeInteger(saved.version) && saved.version > 0) { model.edit(saved.source); model.convert(saved.version, false); input.value = model.draft }
-  } catch { /* corrupt analysis storage cannot affect the manual project */ }
+  pane.querySelector('#code-convert').onclick = () => {
+    clear()
+    if (model.convert() && model.files && !model.storageError) {
+      try { localStorage.setItem(modeKey, 'files') } catch { /* file data is already saved */ }
+    }
+    reportFiles('')
+    render()
+  }
+  for (const [target, key] of [[pasted, SOURCE_STORAGE_KEY], [imported, SOURCE_FILES_STORAGE_KEY]]) {
+    try { target.restore(JSON.parse(localStorage.getItem(key) || 'null')) }
+    catch { /* unreadable analysis storage cannot affect the manual project */ }
+  }
+  try { if (imported.files.length && localStorage.getItem(modeKey) !== 'paste') model = imported }
+  catch { /* paste remains available even if storage is disabled */ }
+  syncFileView()
 
   function refreshRunLabel() {
     if (!active) return
     const button = document.querySelector('#run'), fn = current()
-    button.querySelector('span').textContent = fn ? `평가 ${fn.name}` : '분석 값 선택'
+    button.querySelector('span').textContent = fn ? `평가 ${functionName(fn)}` : '분석 값 선택'
     button.disabled = calculating || model.stale || !fn || fn.arity > 0
     button.title = model.stale ? '코드를 그래프로 변환하세요' : fn?.arity ? '인자가 없는 최상위 값만 평가합니다' : 'Graph JS로 선택한 코드 값을 한 번 평가합니다 (Ctrl/⌘+Enter)'
     document.querySelector('#run-shortcut-label').textContent = '선택 값 평가'
   }
+  const functionName = fn => model.files ? `${fn.moduleName}.${fn.name}` : fn.name
+  function renderStatus() {
+    status.textContent = model.error ? (model.document ? `재변환 필요 · ${model.error.message}` : model.error.message)
+      : model.stale ? (model.document ? `재변환 필요 · 아래 그래프는 이전 v${model.document.version}입니다` : model.files ? '.hs 파일을 선택하고 변환하세요.' : '코드를 붙여 넣고 변환하세요')
+        : `v${model.document.version} 변환 완료 · 그래프는 읽기 전용`
+    if (model.storageError) status.append(' · 브라우저 저장 실패. 현재 편집은 이 탭에 남아 있습니다.')
+    status.dataset.state = model.error ? 'error' : model.stale ? 'stale' : 'ready'
+    status.dataset.stage = model.error?.stage || ''
+  }
   function render() {
     refreshRunLabel()
-    status.textContent = model.error ? model.error.message : model.stale ? (model.document ? `재변환 필요 · 아래 그래프는 이전 v${model.document.version}입니다` : '코드를 붙여 넣고 변환하세요') : `v${model.document.version} 변환 완료 · 그래프는 읽기 전용`
-    status.dataset.state = model.error ? 'error' : model.stale ? 'stale' : 'ready'
+    renderStatus()
+    const fileMode = Boolean(model.files)
+    pane.querySelector('#code-paste-mode').setAttribute('aria-pressed', String(!fileMode))
+    pane.querySelector('#code-files-mode').setAttribute('aria-pressed', String(fileMode))
+    pane.querySelector('#code-file-controls').hidden = !fileMode
+    pane.querySelector('#code-module-controls').hidden = !fileMode || !model.document
+    fileView.replaceChildren(...(model.files || []).map(file => {
+      const name = model.sourceFile(file.id)?.moduleName || file.moduleName || '모듈 미확인'
+      return new Option(`${file.name} · ${name}`, file.id)
+    }))
+    fileView.value = model.fileId || ''
+    moduleSelect.replaceChildren(...(model.document?.files || []).map(file => new Option(`${file.moduleName} · ${file.name}`, file.moduleName)))
+    moduleSelect.value = model.moduleName || ''
+    input.disabled = fileMode && !model.fileId
+    removeButton.disabled = input.disabled
+    pane.querySelector('#code-convert').disabled = input.disabled
     const list = pane.querySelector('ul'); list.replaceChildren()
     for (const fn of model.document?.functions || []) {
+      if (fileMode && fn.moduleName !== model.moduleName) continue
       const li = document.createElement('li'), button = document.createElement('button')
       button.type = 'button'; button.dataset.codeFunction = fn.id; button.textContent = `${fn.name} :: ${fn.signature}`
       button.setAttribute('aria-pressed', String(model.selected === fn.id))
-      button.onclick = () => { clear(); model.selectFunction(fn.id); render() }
+      button.onclick = () => { clear(); model.selectFunction(fn.id); highlight(model.highlight); render() }
       li.append(button); list.append(li)
     }
-    crumb.textContent = `코드 / ${current()?.name || '미변환'}`
+    crumb.textContent = `코드 / ${current() ? functionName(current()) : '미변환'}`
     renderSource(); renderGraph(); renderInspector(); renderPlayback()
   }
   function renderSource() {
     preview.replaceChildren()
-    const source = model.document?.source || '', range = model.highlight
-    if (!range || model.stale) { preview.textContent = source; return }
+    const file = model.sourceFile(), source = file?.source || '', range = model.highlight
+    preview.dataset.fileId = file?.id || ''
+    preview.dataset.filename = file?.name || ''
+    if (!range || model.stale || range.fileId !== file?.id) { preview.textContent = source; return }
     const mark = document.createElement('mark'); mark.textContent = source.slice(range.start, range.end)
     mark.dataset.start = range.start; mark.dataset.end = range.end; mark.dataset.version = range.version
+    mark.dataset.fileId = file.id
     preview.append(source.slice(0, range.start), mark, source.slice(range.end))
     input.setSelectionRange(range.start, range.end)
     mark.scrollIntoView({ block: 'nearest', inline: 'nearest' })
@@ -186,16 +318,27 @@ export function initSourcePanel({ onEnter, onLeave }) {
     inspector.replaceChildren()
     const heading = document.createElement('h2')
     // All user source is inserted as text, never HTML.
-    heading.textContent = selectedNode ? `노드 · ${selectedNode.label}` : viewFunction()?.name || '코드 분석'; inspector.append(heading)
+    heading.textContent = selectedNode ? `노드 · ${selectedNode.label}` : viewFunction() ? functionName(viewFunction()) : '코드 분석'; inspector.append(heading)
     const text = value => { const p = document.createElement('p'); p.textContent = value; inspector.append(p); return p }
     text(model.stale ? '이전 변환 그래프입니다. 최신 코드는 재변환해야 평가할 수 있습니다.' : current()?.arity ? '매개변수가 있는 함수입니다. 인자가 없는 값에서 호출해 평가하세요.' : '상단 평가 버튼으로 선택한 값을 실행합니다.')
     if (model.highlight && !model.stale) {
-      const range = model.highlight, start = sourceLocation(model.document.source, range.start), end = sourceLocation(model.document.source, range.end)
-      text(`원문 v${range.version} · ${start.line}:${start.column}–${end.line}:${end.column} · ${range.kind}`)
-      const pre = document.createElement('pre'); pre.textContent = model.document.source.slice(range.start, range.end); inspector.append(pre)
+      const range = model.highlight, file = model.sourceFile(range.fileId), source = file?.source || ''
+      const start = sourceLocation(source, range.start), end = sourceLocation(source, range.end)
+      text(`${file?.name ? file.name + ' · ' : ''}원문 v${range.version} · ${start.line}:${start.column}–${end.line}:${end.column} · ${range.kind}`)
+      const pre = document.createElement('pre'); pre.textContent = source.slice(range.start, range.end); inspector.append(pre)
       if (range.targetDefinition) {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'tool-button'; button.textContent = '호출한 함수 정의로 이동'
-        button.onclick = () => { clear(); model.selectFunction(range.targetDefinition); render() }; inspector.append(button)
+        button.onclick = () => {
+          if (!model.files) {
+            clear()
+            model.selectFunction(range.targetDefinition)
+            render()
+            return
+          }
+          history.pause(false)
+          showPosition(range.targetDefinition, null, null, model.document.locations[range.targetDefinition])
+        }
+        inspector.append(button)
       }
     }
     if (model.result) {
@@ -227,7 +370,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       }
       if(model.result.error?.callSpan){
         const button=document.createElement('button');button.type='button';button.className='tool-button';button.textContent='오류가 전달된 호출 위치'
-        button.onclick=()=>{selectedNode=null;surface.querySelectorAll('.code-selected').forEach(n=>n.classList.remove('code-selected'));model.highlight={...model.result.error.callSpan,version:model.document.version};renderSource();renderInspector()};inspector.append(button)
+        button.onclick=()=>{const range=model.result.error.callSpan;history.pause(false);showPosition(range.owner,null,null,range)};inspector.append(button)
       }
     }
   }
@@ -238,7 +381,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
     renderedOwner = viewed?.id
     const graph = model.document?.functionBodies[viewed?.id]
     sheet.replaceChildren()
-    heading.textContent = graph ? `${viewed.name} :: ${viewed.signature} · v${model.document.version}${model.stale ? ' · 재변환 필요' : ''}` : '코드를 변환하면 이곳에 읽기 전용 그래프가 표시됩니다.'
+    heading.textContent = graph ? `${functionName(viewed)} :: ${viewed.signature} · v${model.document.version}${model.stale ? ' · 재변환 필요' : ''}` : '코드를 변환하면 이곳에 읽기 전용 그래프가 표시됩니다.'
     surface.classList.toggle('code-stale', model.stale)
     if (!graph) return
     surface.style.scrollPaddingTop=`${heading.offsetHeight+12}px`
@@ -251,7 +394,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       const patterns=document.createElement('div');patterns.className='code-patterns'
       for(const p of body.patterns){
         const button=document.createElement('button');button.type='button';button.className='tool-button code-pattern';button.textContent=p.text
-        button.onclick=()=>{selectedNode=null;surface.querySelectorAll('.code-selected').forEach(n=>n.classList.remove('code-selected'));model.highlight={...p.span,version:model.document.version,kind:'pattern',owner:body.id};renderSource();renderInspector()};patterns.append(button)
+        button.onclick=()=>{selectedNode=null;surface.querySelectorAll('.code-selected').forEach(n=>n.classList.remove('code-selected'));highlight({...p.span,kind:'pattern',owner:body.id});renderSource();renderInspector()};patterns.append(button)
       }
       sheet.append(patterns)
     }
@@ -281,7 +424,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       const select = () => {
         history.pause(false)
         selectedNode = node
-        model.highlight = model.stale ? null : model.document.locations[node.id === 'output' ? viewed.id + ':output' : node.id]
+        highlight(model.document.locations[node.id === 'output' ? viewed.id + ':output' : node.id])
         renderSource()
         // Keep the actual SVG/focus/scroll position when choosing a node.
         surface.querySelectorAll('.code-node').forEach(n=>n.classList.toggle('code-selected',n.dataset.codeNode===node.id))
@@ -325,13 +468,14 @@ export function initSourcePanel({ onEnter, onLeave }) {
     summary.textContent = calculating ? 'Graph JS 계산 중 · 계산 중단 가능' : model.stale ? '재변환 필요 · 이전 결과 표시 안 함' : history.playing ? '실행 기록 재생 중 · 계산은 한 번만 실행' : model.result?.error ? `Graph JS 오류: ${model.result.error.message}` : model.result ? `Graph JS 결과: ${show(model.result.value)}${sourceValueTruncated(model.result.value)?' · 표시 일부 생략':''}` : '읽기 전용 코드 그래프 · Graph JS'
   }
   async function evaluate() {
-    if (!active || model.stale || current()?.arity) return
+    if (!active || model.stale || !current() || current().arity) return
     clear()
     const token=generation
     calculating=true; model.result=model.highlight=null; render()
     const result=await model.evaluateWith((doc,id)=>runner.run(doc,id))
     if(token!==generation)return
     calculating=false
+    if (model.highlight) highlight(model.highlight)
     history.load(result?.debug?.steps || [])
     render()
     if (result?.error) {

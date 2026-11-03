@@ -1,4 +1,4 @@
-import { SourceError, parseSource } from './sourceParser.js'
+import { SourceError, locateSourceError, parseSource } from './sourceParser.js'
 import { sourceNames, sourceScheme } from './sourceBuiltins.js'
 import { tcon, tfun, tlist, freshVar, unify, applySubst, instantiate } from './typeSystem.js'
 
@@ -10,7 +10,7 @@ export function showSourceType(t) {
 }
 const declared=t=>t.kind==='int'?tcon('Int'):t.kind==='bool'?tcon('Bool'):t.kind==='list'?tlist(declared(t.element)):tfun(declared(t.from),declared(t.to))
 const Int=tcon('Int'), Bool=tcon('Bool')
-export function analyzeSource(parsed) {
+export function analyzeSource(parsed, moduleName = 'Main', imported = new Map()) {
   const {source,definitions,signatures}=parsed, names=new Map(), sigs=new Map()
   const fail=(stage,message,span)=>{throw new SourceError(stage,message,source,span)}
   let subst=new Map()
@@ -28,7 +28,7 @@ export function analyzeSource(parsed) {
       if(!sig)fail('types',`${eq.name}: 명시적인 Int/Bool/리스트/함수 타입 시그니처가 필요합니다.`,eq.nameSpan)
       const type=declared(sig.type),paramTypes=[];let result=type
       while(result.kind==='fun'){paramTypes.push(result.from);result=result.to}
-      def={...eq,type,paramTypes,returnType:result,signatureSpan:sig.span,equations:[],dependencies:[]};names.set(eq.name,def)
+      def={...eq,type,paramTypes,returnType:result,signatureSpan:sig.span,equations:[],dependencies:[],moduleName,key:`${moduleName}.${eq.name}`};names.set(eq.name,def)
     }
     if(eq.params.length!==def.paramTypes.length)fail('types',`${eq.name}: 시그니처의 인자 ${def.paramTypes.length}개를 모두 패턴/변수 매개변수로 적어 주세요.`,eq.nameSpan)
     if(def.equations.length&&!eq.params.length)fail('names',`${eq.name} 정의가 중복됩니다. 인자 없는 값은 한 번만 정의하세요.`,eq.nameSpan)
@@ -60,10 +60,20 @@ export function analyzeSource(parsed) {
     else if(expr.kind==='list'){
       const element=freshVar();for(const item of expr.items)fits(element,child(item),item.span,'리스트 원소 타입은 모두 같아야 합니다.');type=tlist(element)
     }else if(expr.kind==='name'){
-      if(eq.scope.has(expr.name)){expr.binding='parameter';type=eq.scope.get(expr.name)}
-      else if(names.has(expr.name)){expr.binding='definition';type=names.get(expr.name).type;def.dependencies.push({name:expr.name,span:expr.span})}
-      else if(sourceNames.has(expr.name)){expr.binding='builtin';type=instantiate(sourceScheme(expr.name)).type}
-      else fail('names',`정의되지 않은 이름 ${expr.name}입니다. 외부 함수·import는 지원하지 않습니다.`,expr.span)
+      if(!expr.qualifier && eq.scope.has(expr.name)){expr.binding='parameter';type=eq.scope.get(expr.name)}
+      else {
+        const written = expr.qualifier ? `${expr.qualifier}.${expr.name}` : expr.name
+        const candidates = new Set(imported.get(written))
+        if ((!expr.qualifier || expr.qualifier === moduleName) && names.has(expr.name)) candidates.add(names.get(expr.name))
+        if (candidates.size > 1) fail('names', `모호한 이름 ${written}입니다. 후보: ${[...candidates].map(candidate => candidate.key).sort().join(', ')}.`, expr.span)
+        const target = candidates.values().next().value
+        if (target) {
+          expr.binding='definition'; expr.targetKey=target.key; type=target.type
+          def.dependencies.push({name:target.key,span:expr.span})
+        } else if (!expr.qualifier && sourceNames.has(expr.name)) {
+          expr.binding='builtin'; type=instantiate(sourceScheme(expr.name)).type
+        } else fail('names', `정의되지 않은 이름 ${written}입니다. 모듈의 공개 이름과 import 목록을 확인하세요.`, expr.span)
+      }
     }else if(expr.kind==='application'){
       const fn=child(expr.fn), arg=child(expr.arg), result=freshVar(), resolved=applySubst(subst,fn)
       if(resolved.kind!=='fun'&&resolved.kind!=='var')fail('types','Int/Bool 값은 함수처럼 호출할 수 없습니다. 리스트도 함수가 아닙니다.',expr.fn.span)
@@ -95,4 +105,62 @@ export function analyzeSource(parsed) {
   for(const def of names.values())for(const eq of def.equations){resolve(eq.expr);for(const b of eq.binders)b.type=applySubst(subst,b.type)}
   return {source,definitions:[...names.values()]}
 }
-export const parseAndAnalyze=source=>analyzeSource(parseSource(source))
+
+// The dependency graph is resolved before body analysis. Each body keeps its
+// own names, and imported candidates only contain the defining module's exports.
+export function analyzeSourceFiles(files) {
+  if (!files.length) throw new SourceError('syntax', '분석할 .hs 파일을 선택하세요.', '')
+  const modules = new Map()
+  const fail = (file, stage, message, span) => { throw locateSourceError(new SourceError(stage, message, file.source, span), file) }
+  for (const file of files) {
+    let parsed
+    try { parsed = parseSource(file.source) }
+    catch (error) { throw locateSourceError(error, file) }
+    const name = parsed.module?.name || 'Main'
+    if (name === 'Prelude') fail(file, 'support', 'Prelude 모듈 선언은 지원하지 않습니다.', parsed.module.span)
+    if (modules.has(name)) fail(file, 'names', `모듈 ${name}이 중복됩니다. ${modules.get(name).file.name}과 모듈 이름을 구분하세요.`, parsed.module?.span)
+    modules.set(name, { name, file, parsed })
+  }
+  const visiting = []
+  function visit(module) {
+    if (module.exports) return
+    const { name, file, parsed } = module
+    visiting.push(name)
+    const imported = new Map()
+    const add = (key, definition) => {
+      if (!imported.has(key)) imported.set(key, new Set())
+      imported.get(key).add(definition)
+    }
+    for (const entry of parsed.imports) {
+      if (entry.name === 'Prelude') fail(file, 'support', '명시적인 Prelude import 구문은 지원하지 않습니다. 기존 내장 함수는 바로 사용할 수 있습니다.', entry.span)
+      const dependency = modules.get(entry.name)
+      if (!dependency) fail(file, 'dependency', `import ${entry.name}: 제공한 .hs 파일에서 모듈을 찾을 수 없습니다.`, entry.span)
+      if (visiting.includes(entry.name)) fail(file, 'dependency', `순환 import는 이 앱에서 지원하지 않습니다. ${[...visiting, entry.name].join(' → ')}`, entry.span)
+      visit(dependency)
+      const selected = entry.names || [...dependency.exports.keys()].map(name => ({ name }))
+      for (const { name, span } of selected) {
+        const target = dependency.exports.get(name)
+        if (!target) fail(file, 'names', `${entry.name} 모듈이 ${name}을(를) 공개하지 않습니다.`, span)
+        add(`${entry.alias || entry.name}.${name}`, target)
+        if (!entry.qualified) add(name, target)
+      }
+    }
+    try {
+      module.definitions = analyzeSource(parsed, name, imported).definitions.map(def => ({ ...def, fileId: file.id }))
+    } catch (error) { throw locateSourceError(error, file) }
+    const local = new Map(module.definitions.map(def => [def.name, def]))
+    const names = parsed.module?.exports
+    if (names) for (const entry of names) {
+      if (!local.has(entry.name)) fail(file, 'names', `export 목록의 ${entry.name}은(는) ${name}에서 정의되지 않았습니다.`, entry.span)
+    }
+    module.exports = names ? new Map(names.map(({ name }) => [name, local.get(name)])) : local
+    visiting.pop()
+  }
+  for (const module of modules.values()) visit(module)
+  const definitions = [...modules.values()].flatMap(module => module.definitions)
+  if (!definitions.length || definitions.length > 100) fail(files[0], 'support', '분석 문서의 함수·값 정의는 1~100개여야 합니다.')
+  return {
+    definitions,
+    files: [...modules.values()].map(({ name, file }) => ({ ...file, moduleName: name })),
+  }
+}

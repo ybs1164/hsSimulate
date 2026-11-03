@@ -60,6 +60,12 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .code-pane label,.code-pane h2{margin:0;font-size:11px;font-weight:600;color:var(--accent-ink)}
 .code-pane textarea{flex:none;resize:vertical;width:100%;min-height:160px;height:210px;max-height:50vh;border:1px solid var(--accent-soft-2);border-radius:10px;padding:9px;font:11px/1.7 'DM Mono',monospace;tab-size:2;color:var(--ink);background:var(--panel)}
 .code-pane p,.code-pane details{font-size:11px;line-height:1.65;margin:0;overflow-wrap:anywhere}
+.code-file-controls{display:flex;gap:4px;flex-wrap:wrap}
+.code-file-controls button{font-size:11px;padding:5px 8px}
+.code-file-controls button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent-ink)}
+#code-file-controls:not([hidden]),#code-module-controls:not([hidden]){display:grid;gap:4px;min-width:0}
+#code-file-view,#code-module{width:100%;min-width:0}
+#code-file-status[data-state="read-error"]{color:#a72b45}
 .code-pane details{color:#767086}.code-pane summary{cursor:pointer}
 .code-run-controls{display:flex;gap:6px;flex-wrap:wrap}.code-run-controls button{flex:1;justify-content:center;white-space:normal}
 .code-equation-title{margin:26px 0 8px;font-size:12px;color:var(--accent-ink)}

@@ -151,10 +151,10 @@ try {
     await click('#run');await waitResult('8');await waitPlayback()
     expect(await js(`document.querySelector('.code-result')?.dataset.result==='8'`),'lazy evaluation failed')
     expect(await js(`[...document.querySelectorAll('.code-node')].filter(n=>['loop','div'].includes(n.querySelector('text').textContent)).every(n=>n.dataset.state==='idle')`),'dead branch was animated')
-    await source('loop :: Int -> Int\nloop n = loop (n + 1)\nresult :: Int\nresult = loop 0');await click('#run');await sleep(600)
-    expect(await js(`document.querySelector('.code-result')?.textContent.includes('제한')`),'missing controlled recursion limit')
+    await source('loop :: Int -> Int\nloop n = loop (n + 1)\nresult :: Int\nresult = loop 0');await click('#run');await waitResult('error')
+    expect(await js(`document.querySelector('.code-result')?.textContent.includes('재귀 호출 깊이 제한')`),'missing controlled recursion limit')
     expect(await js(`!!document.querySelector('#code-source-preview mark')`),'error has no source highlight')
-    await source('result :: Bool\nresult = (-7) `mod` 3 == 2');await click('#run');await sleep(500)
+    await source('result :: Bool\nresult = (-7) `mod` 3 == 2');await click('#run');await waitResult('True')
     expect(await js(`document.querySelector('.code-result')?.dataset.result==='True'`),'Bool correction failed')
   })
   await check('calculation stop terminates Worker; replay stop preserves result; stale replies never leak',async()=>{
