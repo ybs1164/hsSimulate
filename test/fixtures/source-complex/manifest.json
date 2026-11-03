@@ -1,0 +1,269 @@
+{
+  "entry": "result",
+  "cases": [
+    {
+      "id": "01_price_pipeline",
+      "file": "cases/01_price_pipeline.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "575"
+        },
+        {
+          "expression": "finalBill 1 0 0 1",
+          "expected": "160"
+        },
+        {
+          "expression": "finalBill 0 2 1 0",
+          "expected": "45"
+        }
+      ],
+      "user_functions": [
+        "basePrice",
+        "optionPrice",
+        "subtotal",
+        "discountValue",
+        "delivery",
+        "finalBill"
+      ],
+      "function_count": 6
+    },
+    {
+      "id": "02_nested_calls",
+      "file": "cases/02_nested_calls.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "348"
+        },
+        {
+          "expression": "combine 1 2",
+          "expected": "94"
+        },
+        {
+          "expression": "combine 0 0",
+          "expected": "16"
+        }
+      ],
+      "user_functions": [
+        "inc",
+        "twice",
+        "square",
+        "difference",
+        "score",
+        "transform",
+        "combine"
+      ],
+      "function_count": 7
+    },
+    {
+      "id": "03_recursive_combinations",
+      "file": "cases/03_recursive_combinations.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "63"
+        },
+        {
+          "expression": "adjusted 0 4",
+          "expected": "-2"
+        },
+        {
+          "expression": "adjusted 2 2",
+          "expected": "8"
+        }
+      ],
+      "user_functions": [
+        "factorial",
+        "choose",
+        "paths",
+        "scaledPaths",
+        "adjusted"
+      ],
+      "function_count": 5
+    },
+    {
+      "id": "04_euclidean_recursion",
+      "file": "cases/04_euclidean_recursion.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "105"
+        },
+        {
+          "expression": "combinedScore 0 5 8 12",
+          "expected": "33"
+        },
+        {
+          "expression": "combinedScore 0 0 1 1",
+          "expected": "1"
+        }
+      ],
+      "user_functions": [
+        "gcdInt",
+        "lcmInt",
+        "coprime",
+        "pairScore",
+        "combinedScore"
+      ],
+      "function_count": 5
+    },
+    {
+      "id": "05_fibonacci_window",
+      "file": "cases/05_fibonacci_window.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "104"
+        },
+        {
+          "expression": "weighted 0 5 1",
+          "expected": "12"
+        },
+        {
+          "expression": "weighted 4 4 3",
+          "expected": "9"
+        }
+      ],
+      "user_functions": [
+        "fib",
+        "sumFib",
+        "window",
+        "weighted"
+      ],
+      "function_count": 4
+    },
+    {
+      "id": "06_mutual_recursion",
+      "file": "cases/06_mutual_recursion.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "60"
+        },
+        {
+          "expression": "sumWeights 0",
+          "expected": "0"
+        },
+        {
+          "expression": "sumWeights 5",
+          "expected": "12"
+        }
+      ],
+      "user_functions": [
+        "isEvenInt",
+        "isOddInt",
+        "evenWeight",
+        "sumWeights"
+      ],
+      "function_count": 4
+    },
+    {
+      "id": "07_list_pattern_recursion",
+      "file": "cases/07_list_pattern_recursion.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "45"
+        },
+        {
+          "expression": "score [-3,0,-1]",
+          "expected": "0"
+        },
+        {
+          "expression": "score [1,2,3]",
+          "expected": "14"
+        }
+      ],
+      "user_functions": [
+        "positive",
+        "square",
+        "squareList",
+        "sumList",
+        "score"
+      ],
+      "function_count": 5
+    },
+    {
+      "id": "08_higher_order_pipeline",
+      "file": "cases/08_higher_order_pipeline.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "164"
+        },
+        {
+          "expression": "pipeline 0 [1,2,3,4]",
+          "expected": "10"
+        },
+        {
+          "expression": "pipeline (-1) [1,3,5]",
+          "expected": "20"
+        }
+      ],
+      "user_functions": [
+        "isOddValue",
+        "shiftBy",
+        "square",
+        "accumulate",
+        "pipeline"
+      ],
+      "function_count": 5
+    },
+    {
+      "id": "09_quicksort_dedup",
+      "file": "cases/09_quicksort_dedup.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "54321"
+        },
+        {
+          "expression": "checksum (dedup (quickSort []))",
+          "expected": "0"
+        },
+        {
+          "expression": "checksum (dedup (quickSort [3,3,1]))",
+          "expected": "31"
+        }
+      ],
+      "user_functions": [
+        "smaller",
+        "notSmaller",
+        "quickSort",
+        "dedup",
+        "checksum"
+      ],
+      "function_count": 5
+    }
+  ],
+  "unsupportedCases": [
+    {
+      "id": "10_binary_search_tree",
+      "file": "cases/10_binary_search_tree.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "(7,3,35)"
+        },
+        {
+          "expression": "summary []",
+          "expected": "(0,0,0)"
+        },
+        {
+          "expression": "summary [3,1,2,3]",
+          "expected": "(3,3,6)"
+        }
+      ],
+      "user_functions": [
+        "insertValue",
+        "fromValues",
+        "treeSize",
+        "treeHeight",
+        "sumTree",
+        "summary"
+      ],
+      "function_count": 6
+    }
+  ]
+}

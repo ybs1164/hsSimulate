@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { reloadApp } from './browser-reload.mjs'
 
 const PORT = 5179
 const DEBUG_PORT = 9479
@@ -32,7 +33,17 @@ let ws
 const pending = new Map()
 const errors = []
 let msgId = 0
-const send = (method, params = {}) => new Promise((r) => { const i = ++msgId; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })) })
+const send = (method, params = {}) => new Promise((resolve, reject) => {
+  if (ws.readyState !== WebSocket.OPEN) return reject(new Error(`Chrome connection closed during ${method}`))
+  const id = ++msgId
+  const timer = setTimeout(() => {
+    pending.delete(id)
+    reject(new Error(`Chrome did not answer ${method} (#${id})`))
+  }, 8000)
+  const settle = (error, response) => { clearTimeout(timer); error ? reject(error) : resolve(response) }
+  pending.set(id, settle)
+  ws.send(JSON.stringify({ id, method, params }))
+})
 async function js(expr) {
   const m = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })
   if (m.result?.exceptionDetails) throw new Error(m.result.exceptionDetails.exception?.description || 'evaluation failed')
@@ -44,6 +55,7 @@ async function key(k, code, vk, modifiers = 0) {
   await sleep(80)
 }
 async function check(name, fn) {
+  console.log(`  … ${name}`)
   try {
     const note = await fn()
     console.log(`  ✓ ${name}${note ? ` — ${note}` : ''}`)
@@ -165,7 +177,7 @@ async function toOutput(nodeId) {
   await drag(await outPort(nodeId), await portCenter('.in-port'))
   expect((await activeGraph()).graph.output.source === nodeId, `${nodeId} did not connect to Output`)
 }
-// Learning panels reduce the canvas width. A newly added call can also
+// A narrow viewport or wider Workspace can reduce canvas space. A call can
 // widen after it is connected, putting its out-port beyond the canvas.
 // Use the editor's Fit control before dragging an offscreen port, as a user
 // would; keep the same real-pointer interaction and connection assertions.
@@ -187,15 +199,28 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await new Promise((r) => ws.addEventListener('open', r))
   ws.addEventListener('message', (e) => {
     const m = JSON.parse(e.data)
-    if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
+    if (m.id && pending.has(m.id)) {
+      pending.get(m.id)(m.error && new Error(m.error.message), m)
+      pending.delete(m.id)
+    }
     if (m.method === 'Runtime.exceptionThrown') errors.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text)
+    if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') {
+      errors.push(m.params.args.map(arg => arg.description || arg.value).join(' '))
+    }
+  })
+  ws.addEventListener('close', event => {
+    const error = new Error(`Chrome connection closed (${event.code} ${event.reason})`)
+    for (const settle of pending.values()) settle(error)
+    pending.clear()
   })
   await send('Runtime.enable'); await send('Page.enable')
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
   for (let i = 0; i < 60; i++) { try { await fetch(`http://127.0.0.1:${PORT}/`); break } catch { await sleep(250) } }
+  // Seed only this disposable browser profile; old progress must survive UI removal.
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: `if (localStorage.getItem('hs-simulate:exercises') === null) localStorage.setItem('hs-simulate:exercises', '{"arith-double":true}')` })
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` })
   // A cold Vite start can take a while to serve the app: wait for it to render.
-  for (let i = 0; i < 480 && !(await js(`!!document.querySelector('.exercise-item')`).catch(() => false)); i++) await sleep(250)
+  for (let i = 0; i < 480 && !(await js(`!!document.querySelector('.workspace-resizer')`).catch(() => false)); i++) await sleep(250)
   await sleep(500)
   await check('a fresh project opens exactly one protected main with an empty Output', async () => {
     const p = await project()
@@ -206,7 +231,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('#run').click()`); await sleep(100)
     expect((await js(`document.querySelector('#toast').textContent`)).includes('main의 Output'), 'missing empty-main guidance')
     expect(Object.keys((await project()).functionBodies.main).length === 1, 'an empty run changed main')
-    await send('Page.reload'); await sleep(700)
+    await reloadApp(js)
     expect(Object.values((await project()).nodes).filter((n) => n.programEntry).length === 1, 'reload duplicated main')
   })
   await back() // fresh main is checked above; subsequent editor tests start at top level
@@ -264,7 +289,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       expect((await project()).types.Box.constructors[0].fields[0].name === 'item', 'undo did not restore field name')
       await js(`document.querySelector('#redo').click()`)
       expect((await project()).types.Box.constructors[0].fields[0].name === 'payload', 'redo did not restore field name')
-      await send('Page.reload')
+      await reloadApp(js)
       for (let i = 0; i < 100 && !(await js(`!!document.querySelector('.add-type-call[data-type-name="Box"]')`).catch(() => false)); i++) await sleep(100)
       p = await project()
       expect(p.types.Box.constructors[0].fields[0].key === key && Object.values(p.functionBodies[fn.id]).some((n) => n.match), 'reload lost the pattern or field identity')
@@ -307,38 +332,38 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     cleanup(failures || errors.length ? 1 : 0)
     await new Promise(() => {})
   }
-  console.log('Learning panels:')
-  await check('the learning panel: collapsing keeps the graph, search and exercise selection', async () => {
-    await js(`document.querySelector('.exercise-item').click()`)
+  console.log('Workspace layout:')
+  await check('only Workspace, Graph and Inspector remain; resizing preserves graph, selection and stored progress', async () => {
+    const removed = () => js(`document.querySelectorAll('.learning-panel, .exercise-panel, .syntax-panel, .syntax-dialog, .learning-toggle, .exercise-grade, .mobile-tabs [data-view="examples"], .mobile-tabs [data-view="syntax"]').length`)
+    expect(await removed() === 0, 'removed learning UI still mounted')
     await setField('.search input', 'identity', 'input')
     const before = JSON.stringify(await project())
-    const snapshot = () => js(`JSON.stringify({
-      ports: document.querySelector('#port-editor').innerHTML,
-      inspector: document.querySelector('#inspector-content').innerHTML,
-      zoom: document.querySelector('#zoom-level').textContent,
-      search: document.querySelector('.search input').value,
-      example: document.querySelector('.exercise-detail h3').textContent
-    })`)
+    const snapshot = () => js(`JSON.stringify({ inspector: document.querySelector('#inspector-content').innerHTML, zoom: document.querySelector('#zoom-level').textContent, search: document.querySelector('.search input').value })`)
     const initial = await snapshot()
-    const widths = []
-    for (const action of [null, '.examples-panel', '.syntax-panel', '.examples-panel', '.syntax-panel']) {
-      if (action) { await js(`document.querySelector('${action} .learning-toggle').click()`); await sleep(150) }
-      const layout = await js(`[...document.querySelector('.workspace').children].map((e) => ({
-        name: e.className, x: e.getBoundingClientRect().x, right: e.getBoundingClientRect().right, width: e.getBoundingClientRect().width
-      }))`)
-      expect(['examples-panel', 'syntax-panel', 'sidebar', 'canvas-panel', 'inspector'].every((name, i) => layout[i].name.includes(name)), 'panel order changed')
-      expect(layout.slice(1).every((r, i) => Math.abs(r.x - layout[i].right) < 1), 'panels overlap or leave gaps')
-      expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'the toggle changed the graph or selection')
-      widths.push(layout[3].width)
-    }
-    // Collapsing the panel widens the canvas; expanding restores it.
-    expect(widths[1] > widths[0] && widths[2] > widths[1] && widths[3] > widths[0] && widths[4] === widths[0], `canvas widths: ${widths}`)
-    await setField('.search input', '', 'input')
-    // Use the compact learning rail for the large game below.
-    await js(`document.querySelector('.examples-panel .learning-toggle').click()`)
-    await js(`document.querySelector('.syntax-panel .learning-toggle').click()`)
-    await sleep(200)
-    return `canvas widths ${widths.join(' → ')}`
+    const layout = () => js(`[...document.querySelector('.workspace').children].map((e) => ({ name: e.className, x: e.getBoundingClientRect().x, right: e.getBoundingClientRect().right, width: e.getBoundingClientRect().width }))`)
+    const first = await layout()
+    expect(['sidebar', 'canvas-panel', 'inspector'].every((name, i) => first[i]?.name.includes(name)) && first.length === 3, 'expected exactly three panels')
+    expect(first[0].x === 0 && first.slice(1).every((r, i) => Math.abs(r.x - first[i].right) < 1) && Math.abs(first[2].right - 1600) < 1, 'empty space or overlap remains')
+    const handle = await portCenter('.workspace-resizer')
+    await drag(handle, { x: handle.x + 100, y: handle.y })
+    const wider = await layout()
+    expect(Math.abs(wider[0].width - first[0].width - 100) < 2 && Math.abs(first[1].width - wider[1].width - 100) < 2, 'resize did not redistribute width')
+    expect(await snapshot() === initial && JSON.stringify(await project()) === before, 'resize changed graph or selection')
+    const h = await portCenter('.workspace-resizer')
+    await mouse('mousePressed', h.x, h.y)
+    await mouse('mouseMoved', h.x - 50, h.y + 60)
+    await mouse('mouseReleased', h.x - 50, h.y + 60)
+    await sleep(100)
+    const ended = (await layout())[0].width
+    await mouse('mouseMoved', h.x + 200, h.y + 100, { buttons: 0 })
+    expect((await layout())[0].width === ended, 'resize continued after pointer release')
+    expect(await js(`localStorage.getItem('hs-simulate:exercises')`) === '{"arith-double":true}', 'old progress changed')
+    await reloadApp(js)
+    expect(await removed() === 0 && JSON.stringify(await project()) === before, 'reload changed project or restored learning panels')
+    expect(Math.abs((await layout())[0].width - ended) < 1, 'saved Workspace width not restored')
+    expect(await js(`localStorage.getItem('hs-simulate:exercises')`) === '{"arith-double":true}', 'reload removed progress')
+    writeFileSync(join(tmpdir(), 'hs-workspace-only.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+    return 'three adjacent panels; pointer resize, release and reload; progress preserved'
   })
 
   await check('UI controls: explicit run target, inspector toggle, platform shortcuts, help and project menu', async () => {
@@ -384,7 +409,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(await js(`document.querySelectorAll('.te-ftype').length === 1`), 'cancel added a field')
     await js(`document.querySelector('[data-te="delete"]').click()`)
   })
-  console.log('Building a game through the UI only (learning panels collapsed):')
+  console.log('Building a game through the UI only:')
   await back() // new projects open main; the following helpers start at top level
 
   await check('declare Model and Msg in the type editor', async () => {
@@ -927,7 +952,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       await js(`document.querySelector('#run').click()`); await sleep(500)
       expect(listItems((await lastListResult())?.data).join('') === expected, 'main result mismatch')
       const before = JSON.stringify(await project())
-      await send('Page.reload'); await sleep(800)
+      await reloadApp(js)
       expect(JSON.stringify(await project()) === before, 'reload changed saved graph')
       expect(await js(`document.querySelectorAll('.execution-mark').length === 0`), 'old animation restored')
       if (await js(`document.querySelector('#back-graph').hidden`)) await openBody('main')
@@ -962,7 +987,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await editInput(repeat,0,'3'); await js(`document.querySelector('#run').click()`); await sleep(1500)
     expect(await scalarResult()==='6','repeatN failed to recover')
     expect(!(await js(`!!document.querySelector('.execution-mark[data-state="error"]')`)),'stale error mark')
-    const before=JSON.stringify(await project()); await send('Page.reload'); await sleep(800)
+    const before=JSON.stringify(await project()); await reloadApp(js)
     expect(JSON.stringify(await project())===before,'repeatN graph not restored')
     expect(await js(`document.querySelectorAll('.execution-mark').length===0`),'reloaded repeatN trace')
     return '3×(+2): 6; 4×: 8; 101 rejected; corrected: 6'
@@ -980,7 +1005,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       await editInput(fn==='any'?p:list,changedIndex,changedValue)
       await js(`document.querySelector('#run').click()`);await sleep(400)
       expect(await scalarResult()==='false',`${fn} changed result`)
-      const before=JSON.stringify(await project());await send('Page.reload');await sleep(800)
+      const before=JSON.stringify(await project());await reloadApp(js)
       expect(JSON.stringify(await project())===before,`${fn} graph not restored`)
       expect(await js(`document.querySelectorAll('.execution-mark').length===0`),'reloaded predicate trace')
       return 'True → False after a literal edit; saved graph restored'
@@ -1008,45 +1033,70 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect(await js(`[...document.querySelectorAll('#inspector-content details')].every(el => !el.open)`), 'advanced details should be collapsed by default')
     writeFileSync(join(tmpdir(), 'hs-ui-body.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
   })
-  await check('practice: a type answer and a build exercise solved through the UI are graded', async () => {
-    await js(`(() => { const p = document.querySelector('.exercise-panel'); if (p.classList.contains('is-collapsed')) p.querySelector('.learning-toggle').click() })()`)
-    await js(`document.querySelector('.exercise-back')?.click()`)
-    const result = () => js(`document.querySelector('.exercise-result').innerText`)
-    const failing = () => js(`[...document.querySelectorAll('.exercise-checks li.bad code')].map((e) => e.textContent).join(' | ')`)
-    // A type answer, compared as a type: renamed variables are the same answer.
-    await js(`document.querySelector('.exercise-item[data-id="logic-eq-type"]').click()`)
-    await setField('.exercise-answer', 'Eq t => t -> t -> t', 'input')
-    await js(`document.querySelector('.exercise-grade').click()`)
-    expect(/모양/.test(await result()), `wrong answer: ${await result()}`)
-    await setField('.exercise-answer', 'Eq t => t -> t -> Bool', 'input')
-    await js(`document.querySelector('.exercise-grade').click()`)
-    expect(/정답/.test(await result()), `right answer: ${await result()}`)
-    // double :: Int -> Int, built on the canvas.
-    await js(`document.querySelector('.exercise-back').click()`)
-    await js(`document.querySelector('.exercise-item[data-id="arith-double"]').click()`)
-    await js(`document.querySelector('.exercise-open-fn').click()`); await sleep(600)
-    const fnId = Object.values((await project()).nodes).find((n) => n.custom && n.label === 'double').id
-    // Inside the exercise's body, Run grades it: an empty body stops at the
-    // body check, and its tests are skipped.
-    expect(await js(`document.querySelector('#run').textContent.includes('채점 double')`), 'Run should grade inside the exercise body')
-    await js(`document.querySelector('#run').click()`)
-    const unsolved = await failing()
-    expect(unsolved === '본체 연결' && await js(`!!document.querySelector('.exercise-checks li.skipped')`), `an empty body should fail the body check and skip the tests: ${unsolved}`)
-    const seg = (i) => `document.querySelectorAll('#signature-bar .type-chain > .tc-seg.editable')[${i}]`
-    await dragType('data-con="Int"', seg(0)); await sleep(200)
-    await dragType('data-con="Int"', seg(1)); await sleep(200)
-    const times = await add('main', '(*)')
-    await plug(`input-${fnId}-0`, times, 0)
-    await fill(times, 1, '2')
-    await toOutput(times)
-    await js(`document.querySelector('.exercise-grade').click()`)
-    expect(!(await failing()) && /모든 검사를 통과/.test(await result()), `double: ${await failing()} / ${await result()}`)
-    expect(await js(`JSON.parse(localStorage.getItem('hs-simulate:exercises'))['arith-double'] === true`), 'progress not saved')
-    await back()
-    return 'logic-eq-type, arith-double'
+  await check('existing project JSON import and click-counter template still run without learning UI', async () => {
+    const saved = JSON.stringify(await project())
+    await js(`document.querySelector('#reset').click()`); await sleep(500)
+    await js(`(() => { const file = new File([${JSON.stringify(saved)}], 'existing-project.json', { type: 'application/json' }); const transfer = new DataTransfer(); transfer.items.add(file); const input = document.querySelector('#import-file'); input.files = transfer.files; input.dispatchEvent(new Event('change')) })()`)
+    await sleep(700)
+    expect(JSON.stringify(await project()) === saved, 'JSON import changed existing graph')
+    expect(!(await js(`document.querySelector('#run').textContent.includes('채점')`)), 'Run still routed to grading')
+    const label = () => js(`document.querySelector('.play-view').textContent`)
+    const logLength = () => js(`document.querySelectorAll('.play-log li').length`)
+    const close = () => js(`document.querySelector('[data-play="close"]').click()`)
+    const start = async template => {
+      if (template) { await setField('#template', template); await sleep(500) }
+      await js(`document.querySelector('#run').click()`); await sleep(500)
+      expect(await js(`!document.querySelector('#play-panel').hidden`), 'game did not open: ' + (template || 'current'))
+      await js(`document.querySelector('[data-play="toggle"]').click()`)
+    }
+    const press = async () => {
+      const button = await portCenter('.play-view button')
+      await mouse('mousePressed', button.x, button.y); await mouse('mouseReleased', button.x, button.y); await sleep(200)
+    }
+    await start('blankGame')
+    expect((await label()).includes('Count: 0'), 'blank game picked up a different project Model')
+    await press(); await press()
+    expect((await label()).includes('Count: 2') && await logLength() === 2, 'blank game did not record two clicks')
+    await close()
+    await start('clickCounter')
+    const before = await label()
+    expect(before.includes('Clicks: 0') && await logLength() === 0, 'counter restored the blank game Model')
+    await press()
+    const after = await label()
+    expect(after !== before && await logLength() === 1, 'one click did not update game exactly once')
+    await close()
+    await start()
+    expect(await label() === after && await logLength() === 1, 'same game restart lost its snapshot')
+    await close()
+    await reloadApp(js)
+    await start()
+    expect(await label() === after && await logLength() === 1, 'reload lost the counter snapshot')
+    await js(`document.querySelector('[data-play="reset"]').click()`); await sleep(250)
+    expect(await label() === before && await logLength() === 0, 'Reset game did not restore initial state')
+    await close()
+    await start('blankGame')
+    expect((await label()).includes('Count: 2') && await logLength() === 2, 'switching back lost the blank game snapshot')
+    await close()
+    // Recreate the old autosave format using the model the real game saved.
+    const legacy = await js(`(() => {
+      const project = JSON.parse(localStorage.getItem('hs-simulate:project'))
+      const key = 'hs-simulate:game:v2:' + encodeURIComponent(project.projectId) + ':main'
+      const { model, log, time, savedAt } = JSON.parse(localStorage.getItem(key))
+      const old = JSON.stringify({ model, log, time, savedAt, entry:'main', modelType:'Model' })
+      delete project.projectId
+      localStorage.setItem('hs-simulate:project', JSON.stringify(project))
+      localStorage.setItem('hs-simulate:game', old)
+      return old
+    })()`)
+    await reloadApp(js)
+    await start()
+    expect((await label()).includes('Count: 2') && await logLength() === 2, 'compatible legacy save was not restored')
+    expect(await js(`localStorage.getItem('hs-simulate:game')`) === legacy, 'legacy snapshot was overwritten')
+    await close()
+    return 'JSON import, separate game slots, rerun, reload, Reset and compatible legacy migration'
   })
   await check('narrow layouts keep project and run controls accessible; inspector remains reopenable', async () => {
-    for (const width of [900, 560]) {
+    for (const width of [900, 700, 560]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false })
       await sleep(200)
       await js(`document.querySelector('.close-inspector').click()`)
@@ -1056,11 +1106,13 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       expect(await js(`getComputedStyle(document.querySelector('.inspector')).display !== 'none'`), 'inspector cannot reopen')
       if (width <= 680) {
         // A phone width shows one column at a time, picked from the bottom tabs.
-        for (const [view, panel] of [['examples', '.examples-panel'], ['sidebar', '.sidebar'], ['canvas', '.canvas-panel']]) {
+        for (const [view, panel] of [['sidebar', '.sidebar'], ['canvas', '.canvas-panel'], ['inspector', '.inspector']]) {
           await js(`document.querySelector('.mobile-tabs [data-view="${view}"]').click()`); await sleep(100)
           expect(await js(`(() => { const r = document.querySelector('${panel}').getBoundingClientRect(); return r.x === 0 && Math.round(r.width) === innerWidth })()`), `${view} should fill the screen`)
         }
       }
+      expect(await js(`document.documentElement.scrollWidth <= innerWidth && document.querySelector('.workspace').scrollWidth <= document.querySelector('.workspace').clientWidth`), 'horizontal layout overflow')
+      expect(await js(`document.querySelectorAll('.mobile-tabs button').length === 3`), 'removed mobile entry remains')
       const shot = join(tmpdir(), `hs-ui-${width}.png`)
       writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
     }

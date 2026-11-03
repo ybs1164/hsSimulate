@@ -9,8 +9,8 @@ export function createExecutionTrace(graph) {
       if (event.graph !== graph) return
       frame ??= event.frame
       if (event.frame !== frame) return
-      const { phase, nodeId, message, origin } = event
-      events.push({ phase, nodeId, message, origin })
+      const { phase, nodeId, message, origin, callId, parentCallId, functionId } = event
+      events.push({ phase, nodeId, message, origin, callId, parentCallId, functionId })
     },
     fail(nodeId, error) {
       // Serialization/elaboration can fail outside a node's compute callback.

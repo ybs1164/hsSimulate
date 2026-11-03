@@ -28,11 +28,15 @@ export function initWorkspaceResize({ workspace, sidebar, onResizeStart }) {
   handle.title = 'Workspace 너비 조절 · 드래그 또는 ←/→ · Home/End'
   sidebar.append(handle)
 
-  let preferredWidth = null
-  try { preferredWidth = storedWorkspaceWidth(localStorage.getItem(STORAGE_KEY)) } catch { /* storage may be unavailable */ }
+  const keys = [STORAGE_KEY, STORAGE_KEY + ':code']
+  const preferences = keys.map(key => {
+    try { return storedWorkspaceWidth(localStorage.getItem(key)) }
+    catch { return null }
+  })
+  let mode = 0
   let drag = null
   const clamp = (width, { min, max }) => Math.max(min, Math.min(max, width))
-  const siblings = [...workspace.querySelectorAll('.learning-panel, .inspector')]
+  const siblings = [...workspace.querySelectorAll('.inspector')]
 
   function sizes() {
     const css = getComputedStyle(workspace)
@@ -43,8 +47,8 @@ export function initWorkspaceResize({ workspace, sidebar, onResizeStart }) {
   }
   function refresh() {
     const { defaultWidth, range } = sizes()
-    const width = clamp(preferredWidth ?? defaultWidth, range)
-    if (preferredWidth === null) workspace.style.removeProperty('--workspace-width')
+    const width = clamp(preferences[mode] ?? defaultWidth, range)
+    if (preferences[mode] === null) workspace.style.removeProperty('--workspace-width')
     else workspace.style.setProperty('--workspace-width', `${width}px`)
     handle.setAttribute('aria-valuemin', String(range.min))
     handle.setAttribute('aria-valuemax', String(range.max))
@@ -52,21 +56,21 @@ export function initWorkspaceResize({ workspace, sidebar, onResizeStart }) {
     handle.setAttribute('aria-valuetext', `${Math.round(width)}px`)
   }
   function save() {
-    try { localStorage.setItem(STORAGE_KEY, String(preferredWidth)) } catch { /* resizing still works without storage */ }
+    try { localStorage.setItem(keys[mode], String(preferences[mode])) } catch { /* resizing still works without storage */ }
   }
   function finish(commit) {
     if (!drag) return
     const ended = drag
     drag = null // releasing capture can synchronously dispatch lostpointercapture
     workspace.classList.remove('is-workspace-resizing')
-    if (!commit) preferredWidth = ended.preference
+    if (!commit) preferences[mode] = ended.preference
     else save()
     if (handle.hasPointerCapture(ended.id)) handle.releasePointerCapture(ended.id)
     refresh()
   }
   function move(event) {
     const { range } = sizes()
-    preferredWidth = clamp(drag.width + event.clientX - drag.x, range)
+    preferences[mode] = clamp(drag.width + event.clientX - drag.x, range)
     refresh()
   }
 
@@ -75,9 +79,9 @@ export function initWorkspaceResize({ workspace, sidebar, onResizeStart }) {
     event.preventDefault()
     event.stopPropagation()
     onResizeStart()
-    drag = { id: event.pointerId, x: event.clientX, width: sidebar.getBoundingClientRect().width, preference: preferredWidth }
+    drag = { id: event.pointerId, x: event.clientX, width: sidebar.getBoundingClientRect().width, preference: preferences[mode] }
     // Save the effective width even if the user only clicks the handle.
-    preferredWidth = drag.width
+    preferences[mode] = drag.width
     handle.setPointerCapture(event.pointerId)
     handle.focus({ preventScroll: true })
     workspace.classList.add('is-workspace-resizing')
@@ -109,15 +113,20 @@ export function initWorkspaceResize({ workspace, sidebar, onResizeStart }) {
     const { range } = sizes()
     const step = event.shiftKey ? 32 : 16
     const width = sidebar.getBoundingClientRect().width
-    preferredWidth = event.key === 'Home' ? range.min : event.key === 'End' ? range.max
+    preferences[mode] = event.key === 'Home' ? range.min : event.key === 'End' ? range.max
       : clamp(width + (event.key === 'ArrowRight' ? step : -step), range)
     refresh()
     save()
   })
-  // Re-clamp after window changes and independent panel collapse/Inspector close.
+  // Re-clamp after window changes and Inspector close.
   // Keep the user's preference so a temporarily smaller window can grow back.
   window.addEventListener('resize', refresh)
   const observer = new ResizeObserver(refresh)
   ;[workspace, ...siblings].forEach((panel) => observer.observe(panel))
   refresh()
+  return codeMode => {
+    finish(false)
+    mode = Number(codeMode)
+    refresh()
+  }
 }

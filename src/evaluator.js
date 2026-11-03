@@ -47,6 +47,21 @@ class Thunk {
 const delay = (compute) => new Thunk(compute)
 const now = (value) => Object.assign(new Thunk(null), { done: true, value })
 
+// A passive observer of a thunk, used only by the source debugger.
+export function observeThunk(thunk, onSettle) {
+  if (!(thunk instanceof Thunk)) return false
+  if (thunk.done) onSettle(thunk.value)
+  else thunk.onSettle = onSettle
+  return true
+}
+
+function notifyThunk(thunk, value, failed = false) {
+  if (!thunk.onSettle) return
+  const notify = thunk.onSettle
+  thunk.onSettle = null
+  try { notify(value, failed) } catch { /* Diagnostics cannot affect evaluation. */ }
+}
+
 function forceOne(t) {
   if (t.done) return t.value
   if (t.running) throw new EvalError('A value depends on itself (infinite loop)')
@@ -55,6 +70,10 @@ function forceOne(t) {
     t.value = t.compute()
     t.done = true
     t.compute = null
+    notifyThunk(t, t.value)
+  } catch (error) {
+    notifyThunk(t, undefined, true)
+    throw error
   } finally {
     t.running = false
   }
@@ -158,7 +177,7 @@ function asFraction(q) {
 const paren = (yes, s) => (yes ? `(${s})` : s)
 
 // A closure over a function that takes dictionaries carries them (plain data).
-const closure = (callee, args, dicts) => (dicts?.length ? { kind: 'closure', callee, args, dicts } : { kind: 'closure', callee, args })
+const closure = (callee, args, dicts, context) => ({kind:'closure',callee,args,...(dicts?.length?{dicts}:{}),...(context?{context}:{})})
 
 /** Fully force a value into JSON-safe data (closure args included). */
 function serializeValue(v) {
@@ -347,8 +366,18 @@ export function createEvaluator(registry) {
       return l.ctorIndex === 0 ? nothing : just(now(pair(l.args[0], l.args[1])))
     }],
     null: [1, (t, [d]) => list(listVia(d, t)).ctorIndex === 0],
-    // foldl, strict in the accumulator (Data.List's foldl'): same result on total functions, no thunk chain.
+    // Manual graphs retain their historical strict fold. Imported Haskell
+    // requests the actual lazy foldl; each accumulator captures the previous thunk.
     foldl: [3, (f, z, xs) => {
+      if (registry.sourceEvaluation) {
+        const caller = activeEnv
+        let acc=z
+        for(let l=list(xs);l.ctorIndex===1;l=list(l.args[1])) {
+          const previous=acc,element=l.args[0]
+          acc=delay(()=>applyValue(f,[previous,element],caller))
+        }
+        return force(acc)
+      }
       let acc = z
       for (let l = list(xs); l.ctorIndex === 1; l = list(l.args[1])) acc = now(applyValue(f, [acc, l.args[0]]))
       return force(acc)
@@ -549,9 +578,10 @@ export function createEvaluator(registry) {
   const listVia = (d, t) => (!d || d.key === 'Foldable@List' ? t : delay(() => invoke(d, 'foldMap', [now(fn('singleton')), t], [LIST_MONOID])))
 
   function mapList(f, xs) {
+    const caller = registry.onSourceCall ? activeEnv : null
     const go = (t) => {
       const l = list(t)
-      return l.ctorIndex === 0 ? nil : cons(delay(() => applyValue(f, [l.args[0]])), delay(() => go(l.args[1])))
+      return l.ctorIndex === 0 ? nil : cons(delay(() => applyValue(f, [l.args[0]], caller)), delay(() => go(l.args[1])))
     }
     return go(xs)
   }
@@ -614,12 +644,13 @@ export function createEvaluator(registry) {
   // mutable arrays. Filtering skips a rejected prefix iteratively; accepted
   // tails are delayed. take 0 does not even inspect xs or its elements.
   function filterList(p, xs) {
+    const caller = registry.onSourceCall ? activeEnv : null
     const go = (t) => {
       let rest = t
       for (;;) {
         const l = listStep(rest)
         if (l.ctorIndex === 0) return nil
-        if (bool(applyValue(p, [l.args[0]]))) return cons(l.args[0], delay(() => go(l.args[1])))
+        if (bool(applyValue(p, [l.args[0]], caller))) return cons(l.args[0], delay(() => go(l.args[1])))
         rest = l.args[1]
       }
     }
@@ -678,6 +709,7 @@ export function createEvaluator(registry) {
   }
 
   function list(t) {
+    if(registry.executionLimits){listSteps++;budget()}
     const v = force(t)
     if (!isData(v) || v.type !== 'List') throw new EvalError(`Expected a list, got ${show(v)}`)
     return v
@@ -978,8 +1010,8 @@ export function createEvaluator(registry) {
     plus: ([x, y]) => num(x) + num(y), times: ([x, y]) => num(x) * num(y), negate: ([x]) => -num(x) + 0,
     addZero: () => 0, mulOne: () => 1, divide: ([x, y]) => num(x) / num(y), sqrt: ([x]) => Math.sqrt(num(x)),
     toRational: ([x]) => num(x), toInteger: ([x]) => num(x),
-    div: ([x, y]) => Math.floor(num(x) / nonZero(num(y))) + 0,
-    mod: ([x, y]) => { const a = num(x); const b = nonZero(num(y)); return a - b * Math.floor(a / b) + 0 },
+    div: ([x, y]) => { const a = num(x), b = nonZero(num(y)); return registry.integerDivision ? registry.integerDivision(a, b, false) : Math.floor(a / b) + 0 },
+    mod: ([x, y]) => { const a = num(x); const b = nonZero(num(y)); return registry.integerDivision ? registry.integerDivision(a, b, true) : a - b * Math.floor(a / b) + 0 },
     properFraction: ([x], _d, _i, [b]) => { const v = num(x); const n = Math.trunc(v) + 0; return pair(now(fromIntegerVia(b, n)), now(v - n)) },
     eq: ([x, y]) => force(x) === force(y), compare: ([x, y]) => ordering(cmp(force(x), force(y))),
     leq: ([x, y]) => num(x) <= num(y), join: ([x, y]) => Math.max(num(x), num(y)), meet: ([x, y]) => Math.min(num(x), num(y)),
@@ -1071,7 +1103,7 @@ export function createEvaluator(registry) {
 
   function arityOf(callee) {
     const def = definition(callee)
-    if (def.method) return def.params.length
+    if (def.method || def.sourceEquations) return def.params.length
     if (def.derived) return def.derived.arity
     if (def.builtin) {
       const impl = builtins[def.builtin]
@@ -1082,9 +1114,36 @@ export function createEvaluator(registry) {
     return body ? Object.values(body).filter((n) => n.type === 'parameter').length : 0
   }
 
-  function call(callee, args, dicts = []) {
+  let callDepth = 0, demandDepth = 0, applyDepth = 0, callSerial = 0, calls = 0, demands = 0, listSteps = 0, started = 0, activeEnv = null
+  function budget() {
+    const limits = registry.executionLimits
+    if (limits && (calls > limits.calls || demands > limits.nodes || listSteps > (limits.listSteps ?? 6000) || Date.now() - started > limits.milliseconds)) {
+      throw new EvalError('코드 실행 제한을 초과했습니다 (호출·노드·시간). 계산을 중단했습니다.')
+    }
+  }
+  // Only the source compiler produces this finite, typed equation table.
+  // Match constructors left-to-right without forcing variable/wildcard fields.
+  function matchSourcePattern(pattern,arg,bindings) {
+    if(pattern.kind==='wildcard')return true
+    if(pattern.kind==='variable'){bindings.set(pattern.name,arg);return true}
+    const cell=list(arg)
+    if(pattern.kind==='nil')return cell.ctorIndex===0
+    return cell.ctorIndex===1&&matchSourcePattern(pattern.head,cell.args[0],bindings)&&matchSourcePattern(pattern.tail,cell.args[1],bindings)
+  }
+  function call(callee, args, dicts = [], caller = null) {
+    calls++; budget()
     if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
     const def = definition(callee)
+    if(def.sourceEquations && registry.sourceEvaluation) {
+      for(const row of def.sourceEquations) {
+        const bindings=new Map()
+        if(row.patterns.every((p,i)=>matchSourcePattern(p,args[i],bindings))) {
+          reportCall({ kind: 'equation', callId: caller?.callId, functionId: caller?.functionId, nodeId: caller?.nodeId, equationId: row.branchId })
+          return call(row.branchId, row.binders.map(name => bindings.get(name)), dicts, caller)
+        }
+      }
+      throw new EvalError(`${def.label}: 일치하는 함수 방정식/패턴이 없습니다. 호출 인자와 패턴을 확인하세요.`)
+    }
     if (def.method) {
       if (!dicts?.length) throw new EvalError(`${def.method.name}: a method of class ${def.method.cls} needs to know its type — run it from a graph (the type pass picks the instance)`)
       return invoke(dicts[0], def.method.name, args, dicts.slice(1))
@@ -1093,12 +1152,32 @@ export function createEvaluator(registry) {
     if (def.builtin) {
       const through = customizedVia(def.builtin)
       if (through) return call(through.id, through.args ? through.args(args) : args)
-      return def.builtin === 'listOf' ? builtins.listOf[1](...args) : builtins[def.builtin][1](...args, dicts)
+      const value=def.builtin === 'listOf' ? builtins.listOf[1](...args) : builtins[def.builtin][1](...args, dicts)
+      registry.validateRuntimeValue?.(value,activeEnv||caller||{})
+      return value
     }
     const body = registry.functionBodies[callee]
     const output = body?.output
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)
-    return force(nodeValue(body, output.source, { args, memo: new Map(), dicts, elab: elab?.forFunction(callee) || {} }))
+    if (registry.executionLimits && callDepth >= registry.executionLimits.depth) throw new EvalError('재귀 호출 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
+    callDepth++
+    const frame = { args, memo: new Map(), dicts, elab: elab?.forFunction(callee) || {},
+      callId: ++callSerial, parentCallId: caller?.callId ?? 0, functionId: callee }
+    const location = { callId: frame.callId, parentCallId: frame.parentCallId, functionId: callee, nodeId: output.source }
+    if (registry.onSourceCall) reportCall({ kind: 'enter', ...location, args,
+      site: caller?.nodeId ? { nodeId: caller.nodeId, functionId: caller.functionId, callId: caller.callId } : null })
+    try {
+      const value = force(nodeValue(body, output.source, frame))
+      if (registry.onSourceCall) reportCall({ kind: 'return', ...location, value })
+      return value
+    } catch (error) {
+      if (registry.onSourceCall) reportCall({ kind: 'call-error', ...location, message: error.message })
+      throw error
+    } finally { callDepth-- }
+  }
+
+  function reportCall(event) {
+    try { registry.onSourceCall?.(event) } catch { /* Diagnostics cannot affect evaluation. */ }
   }
 
   /** The morphisms derived from a type declaration (see typeDecls.js). */
@@ -1135,33 +1214,50 @@ export function createEvaluator(registry) {
   }
 
   /** Apply a function value to argument thunks, filling its open slots left to right. */
-  function applyValue(f, argThunks) {
-    let v = f
-    for (const arg of argThunks) {
-      v = force(v)
-      if (!isClosure(v)) throw new EvalError(`Cannot apply ${show(v)} — it is not a function`)
-      const args = v.args.slice()
-      args[args.indexOf(null)] = arg
-      v = args.includes(null) ? closure(v.callee, args, v.dicts) : call(v.callee, args, v.dicts)
-    }
-    return force(v)
+  function applyValue(f, argThunks, caller = null) {
+    if(registry.executionLimits && applyDepth>=registry.executionLimits.demandDepth)throw new EvalError('함수 적용 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
+    applyDepth++
+    try {
+      let v = f
+      for (const arg of argThunks) {
+        v = force(v)
+        if (!isClosure(v)) throw new EvalError(`Cannot apply ${show(v)} — it is not a function`)
+        const args = v.args.slice()
+        args[args.indexOf(null)] = arg
+        v = args.includes(null) ? closure(v.callee, args, v.dicts, v.context) : call(v.callee, args, v.dicts, caller || activeEnv || v.context)
+      }
+      return force(v)
+    } finally { applyDepth-- }
   }
 
   /** A node's value as a memoized thunk, within one call frame (`env`). */
   function nodeValue(graph, id, env) {
     if (env.memo.has(id)) return env.memo.get(id)
+    // Optional client policy for already-computed values. Does not force thunks
+    // or alter ordinary editor evaluation; the source subset uses it for Int bounds.
+    const checked = () => {
+      demands++; budget()
+      if (registry.executionLimits && demandDepth >= registry.executionLimits.demandDepth) throw new EvalError('표현식 평가 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
+      demandDepth++
+      const previousEnv=activeEnv;activeEnv={...env,graph,nodeId:id}
+      try {
+        const value = computeNode(graph, id, env)
+        registry.validateNodeValue?.(value, { graph, nodeId: id })
+        return value
+      } finally { demandDepth--;activeEnv=previousEnv }
+    }
     const t = delay(() => {
       const observer = trace
-      if (!observer) return computeNode(graph, id, env)
+      if (!observer) return checked()
       // Observe demand, not construction of a thunk. Do not force or inspect
       // the returned value here: doing so would change lazy branch behavior.
       const emit = (phase, extra = {}) => {
-        try { observer.onNode({ phase, nodeId: id, graph, frame: env.memo, ...extra }) } catch { /* diagnostics must not change evaluation */ }
+        try { observer.onNode({ phase, nodeId: id, graph, frame: env.memo, callId: env.callId ?? 0, parentCallId: env.parentCallId ?? null, functionId: env.functionId ?? null, ...extra }) } catch { /* diagnostics must not change evaluation */ }
       }
       emit('start')
       try {
-        const value = computeNode(graph, id, env)
-        emit('done')
+        const value = checked()
+        emit('done', registry.onSourceCall ? { value } : {})
         return value
       } catch (error) {
         const origin = !observer.errors.has(error)
@@ -1237,8 +1333,8 @@ export function createEvaluator(registry) {
       args[i] = arg
     })
     const dicts = dictsOf(env, node.id)
-    if (!args.includes(null)) return call(callee, args, dicts)
-    return closure(callee, args, dicts)
+    if (!args.includes(null)) return call(callee, args, dicts, activeEnv || env)
+    return closure(callee, args, dicts, registry.sourceEvaluation?{callId:env.callId??0,functionId:env.functionId??null,nodeId:node.id}:undefined)
   }
 
   /** The dictionaries `evidence` (a list, closed: no parameters) describes. */
@@ -1247,7 +1343,7 @@ export function createEvaluator(registry) {
   return {
     /** Evaluate node `nodeId` of `graph` to JSON-safe data: a number, a boolean, a data value, or a closure. */
     run(graph, nodeId, { onNode } = {}) {
-      return guarded(() => serializeValue(nodeValue(graph, nodeId, { args: null, memo: new Map(), elab: elab?.forGraph(graph) || {} })), graph, onNode)
+      return guarded(() => {const value=nodeValue(graph,nodeId,{args:null,memo:new Map(),elab:elab?.forGraph(graph)||{}});return registry.serializeResult?registry.serializeResult(value,{force:v=>{listSteps++;budget();return force(v)}}):serializeValue(value)},graph,onNode)
     },
     /** Apply builtin `name` to values, with the dictionaries `evidence` describes (closed evidence: see classEnv.js) — used by the law checker. */
     invoke(name, values, evidence = []) {
@@ -1271,7 +1367,7 @@ export function createEvaluator(registry) {
   function guarded(run, graph = null, onNode = null) {
     const previousTrace = trace
     trace = typeof onNode === 'function' ? { onNode, errors: new Set() } : null
-    steps = 0
+    steps = 0; callDepth = 0; demandDepth = 0; applyDepth = 0; listSteps = 0; activeEnv = null; callSerial = 0; calls = 0; demands = 0; started = Date.now()
     try {
       elab = registry.elaboration?.(graph) || null
       return run()
