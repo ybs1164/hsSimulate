@@ -1,0 +1,113 @@
+{
+  "entry": "result",
+  "cases": [
+    {
+      "id": "01_price_pipeline",
+      "file": "cases/01_price_pipeline.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "575"
+        },
+        {
+          "expression": "finalBill 1 0 0 1",
+          "expected": "160"
+        },
+        {
+          "expression": "finalBill 0 2 1 0",
+          "expected": "45"
+        }
+      ]
+    },
+    {
+      "id": "02_nested_calls",
+      "file": "cases/02_nested_calls.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "348"
+        },
+        {
+          "expression": "combine 1 2",
+          "expected": "94"
+        },
+        {
+          "expression": "combine 0 0",
+          "expected": "16"
+        }
+      ]
+    },
+    {
+      "id": "03_recursive_combinations",
+      "file": "cases/03_recursive_combinations.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "63"
+        },
+        {
+          "expression": "adjusted 0 4",
+          "expected": "-2"
+        },
+        {
+          "expression": "adjusted 2 2",
+          "expected": "8"
+        }
+      ]
+    },
+    {
+      "id": "04_euclidean_recursion",
+      "file": "cases/04_euclidean_recursion.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "105"
+        },
+        {
+          "expression": "combinedScore 0 5 8 12",
+          "expected": "33"
+        },
+        {
+          "expression": "combinedScore 0 0 1 1",
+          "expected": "1"
+        }
+      ]
+    },
+    {
+      "id": "05_fibonacci_window",
+      "file": "cases/05_fibonacci_window.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "104"
+        },
+        {
+          "expression": "weighted 0 5 1",
+          "expected": "12"
+        },
+        {
+          "expression": "weighted 4 4 3",
+          "expected": "9"
+        }
+      ]
+    },
+    {
+      "id": "06_mutual_recursion",
+      "file": "cases/06_mutual_recursion.hs",
+      "checks": [
+        {
+          "expression": "result",
+          "expected": "60"
+        },
+        {
+          "expression": "sumWeights 0",
+          "expected": "0"
+        },
+        {
+          "expression": "sumWeights 5",
+          "expected": "12"
+        }
+      ]
+    }
+  ]
+}

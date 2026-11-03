@@ -1,5 +1,6 @@
 import './style.css'
 import { initWorkspaceResize } from './workspaceResize.js'
+import { initSourcePanel } from './sourcePanel.js'
 import { createExecutionTrace, createExecutionPlayback } from './executionTrace.js'
 import { createBlankProject, isManagedMain, managedMain, MAIN_GUIDANCE, MAIN_PROTECTION, programRunTarget, returnsProgram } from './programEntry.js'
 import { applySubst, classShown, constructorArity, constructorKind, showKind, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
@@ -90,6 +91,7 @@ app.innerHTML = `
 `
 
 const disclosureState = new Map()
+let codeAnalysis = null
 function restoreDisclosureState(root) {
   root.querySelectorAll('details').forEach((el) => {
     const key = el.dataset.disclosure || `${root.id}:${el.querySelector('summary')?.textContent}`
@@ -3976,6 +3978,7 @@ function setupBackButton() {
 // Plays the entry function (always in `main`), falling back to whichever
 // function is selected when no entry has been set.
 function updateRunLabel() {
+  if (codeAnalysis?.active) return codeAnalysis.refreshRunLabel()
   const button = document.querySelector('#run')
   const entry = entryId && nodes[entryId]
   const selected = activeNodes()[state.selected]
@@ -3987,6 +3990,7 @@ function updateRunLabel() {
   document.querySelector('#run-shortcut-label').textContent = label
 }
 function runEntry() {
+  if (codeAnalysis?.active) return codeAnalysis.evaluate()
   resetExecution()
   const target = programRunTarget({ nodes, functionBodies, entry: entryId })
   if (target && isManagedMain(target.fn)) {
@@ -4416,6 +4420,7 @@ function pasteClipboard() {
 // --- Keyboard ---------------------------------------------------------------
 function setupKeyboard() {
   window.addEventListener('keydown', (event) => {
+    if (codeAnalysis?.active) return
     const typing = event.target.closest?.('input, select, textarea, [contenteditable]')
     const mod = event.ctrlKey || event.metaKey
     if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
@@ -4568,5 +4573,9 @@ function main() {
   setupInspectorButtons()
   setupMobileTabs()
   restoreSavedProject()
+  codeAnalysis = initSourcePanel({
+    onEnter() { resetExecution(); endDrag(); endWire(); stopGame(); if (typeDrag) endTypeDrag(null); state.pan = null; canvas.classList.remove('panning') },
+    onLeave() { updateRunLabel(); resize() },
+  })
 }
 main()

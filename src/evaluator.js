@@ -978,8 +978,8 @@ export function createEvaluator(registry) {
     plus: ([x, y]) => num(x) + num(y), times: ([x, y]) => num(x) * num(y), negate: ([x]) => -num(x) + 0,
     addZero: () => 0, mulOne: () => 1, divide: ([x, y]) => num(x) / num(y), sqrt: ([x]) => Math.sqrt(num(x)),
     toRational: ([x]) => num(x), toInteger: ([x]) => num(x),
-    div: ([x, y]) => Math.floor(num(x) / nonZero(num(y))) + 0,
-    mod: ([x, y]) => { const a = num(x); const b = nonZero(num(y)); return a - b * Math.floor(a / b) + 0 },
+    div: ([x, y]) => { const a = num(x), b = nonZero(num(y)); return registry.integerDivision ? registry.integerDivision(a, b, false) : Math.floor(a / b) + 0 },
+    mod: ([x, y]) => { const a = num(x); const b = nonZero(num(y)); return registry.integerDivision ? registry.integerDivision(a, b, true) : a - b * Math.floor(a / b) + 0 },
     properFraction: ([x], _d, _i, [b]) => { const v = num(x); const n = Math.trunc(v) + 0; return pair(now(fromIntegerVia(b, n)), now(v - n)) },
     eq: ([x, y]) => force(x) === force(y), compare: ([x, y]) => ordering(cmp(force(x), force(y))),
     leq: ([x, y]) => num(x) <= num(y), join: ([x, y]) => Math.max(num(x), num(y)), meet: ([x, y]) => Math.min(num(x), num(y)),
@@ -1082,7 +1082,15 @@ export function createEvaluator(registry) {
     return body ? Object.values(body).filter((n) => n.type === 'parameter').length : 0
   }
 
-  function call(callee, args, dicts = []) {
+  let callDepth = 0, demandDepth = 0, callSerial = 0, calls = 0, demands = 0, started = 0
+  function budget() {
+    const limits = registry.executionLimits
+    if (limits && (calls > limits.calls || demands > limits.nodes || Date.now() - started > limits.milliseconds)) {
+      throw new EvalError('코드 실행 제한을 초과했습니다 (호출·노드·시간). 계산을 중단했습니다.')
+    }
+  }
+  function call(callee, args, dicts = [], caller = null) {
+    calls++; budget()
     if (++steps > MAX_STEPS) throw new EvalError('Evaluation took too many steps (infinite recursion?)')
     const def = definition(callee)
     if (def.method) {
@@ -1098,7 +1106,11 @@ export function createEvaluator(registry) {
     const body = registry.functionBodies[callee]
     const output = body?.output
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)
-    return force(nodeValue(body, output.source, { args, memo: new Map(), dicts, elab: elab?.forFunction(callee) || {} }))
+    if (registry.executionLimits && callDepth >= registry.executionLimits.depth) throw new EvalError('재귀 호출 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
+    callDepth++
+    try {
+      return force(nodeValue(body, output.source, { args, memo: new Map(), dicts, elab: elab?.forFunction(callee) || {}, callId: ++callSerial, parentCallId: caller?.callId ?? 0, functionId: callee }))
+    } finally { callDepth-- }
   }
 
   /** The morphisms derived from a type declaration (see typeDecls.js). */
@@ -1150,17 +1162,29 @@ export function createEvaluator(registry) {
   /** A node's value as a memoized thunk, within one call frame (`env`). */
   function nodeValue(graph, id, env) {
     if (env.memo.has(id)) return env.memo.get(id)
+    // Optional client policy for already-computed values. Does not force thunks
+    // or alter ordinary editor evaluation; the source subset uses it for Int bounds.
+    const checked = () => {
+      demands++; budget()
+      if (registry.executionLimits && demandDepth >= registry.executionLimits.demandDepth) throw new EvalError('표현식 평가 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
+      demandDepth++
+      try {
+        const value = computeNode(graph, id, env)
+        registry.validateNodeValue?.(value, { graph, nodeId: id })
+        return value
+      } finally { demandDepth-- }
+    }
     const t = delay(() => {
       const observer = trace
-      if (!observer) return computeNode(graph, id, env)
+      if (!observer) return checked()
       // Observe demand, not construction of a thunk. Do not force or inspect
       // the returned value here: doing so would change lazy branch behavior.
       const emit = (phase, extra = {}) => {
-        try { observer.onNode({ phase, nodeId: id, graph, frame: env.memo, ...extra }) } catch { /* diagnostics must not change evaluation */ }
+        try { observer.onNode({ phase, nodeId: id, graph, frame: env.memo, callId: env.callId ?? 0, parentCallId: env.parentCallId ?? null, functionId: env.functionId ?? null, ...extra }) } catch { /* diagnostics must not change evaluation */ }
       }
       emit('start')
       try {
-        const value = computeNode(graph, id, env)
+        const value = checked()
         emit('done')
         return value
       } catch (error) {
@@ -1237,7 +1261,7 @@ export function createEvaluator(registry) {
       args[i] = arg
     })
     const dicts = dictsOf(env, node.id)
-    if (!args.includes(null)) return call(callee, args, dicts)
+    if (!args.includes(null)) return call(callee, args, dicts, env)
     return closure(callee, args, dicts)
   }
 
@@ -1271,7 +1295,7 @@ export function createEvaluator(registry) {
   function guarded(run, graph = null, onNode = null) {
     const previousTrace = trace
     trace = typeof onNode === 'function' ? { onNode, errors: new Set() } : null
-    steps = 0
+    steps = 0; callDepth = 0; demandDepth = 0; callSerial = 0; calls = 0; demands = 0; started = Date.now()
     try {
       elab = registry.elaboration?.(graph) || null
       return run()
