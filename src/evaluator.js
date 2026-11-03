@@ -47,6 +47,21 @@ class Thunk {
 const delay = (compute) => new Thunk(compute)
 const now = (value) => Object.assign(new Thunk(null), { done: true, value })
 
+// A passive observer of a thunk, used only by the source debugger.
+export function observeThunk(thunk, onSettle) {
+  if (!(thunk instanceof Thunk)) return false
+  if (thunk.done) onSettle(thunk.value)
+  else thunk.onSettle = onSettle
+  return true
+}
+
+function notifyThunk(thunk, value, failed = false) {
+  if (!thunk.onSettle) return
+  const notify = thunk.onSettle
+  thunk.onSettle = null
+  try { notify(value, failed) } catch { /* Diagnostics cannot affect evaluation. */ }
+}
+
 function forceOne(t) {
   if (t.done) return t.value
   if (t.running) throw new EvalError('A value depends on itself (infinite loop)')
@@ -55,6 +70,10 @@ function forceOne(t) {
     t.value = t.compute()
     t.done = true
     t.compute = null
+    notifyThunk(t, t.value)
+  } catch (error) {
+    notifyThunk(t, undefined, true)
+    throw error
   } finally {
     t.running = false
   }
@@ -351,10 +370,11 @@ export function createEvaluator(registry) {
     // requests the actual lazy foldl; each accumulator captures the previous thunk.
     foldl: [3, (f, z, xs) => {
       if (registry.sourceEvaluation) {
+        const caller = activeEnv
         let acc=z
         for(let l=list(xs);l.ctorIndex===1;l=list(l.args[1])) {
           const previous=acc,element=l.args[0]
-          acc=delay(()=>applyValue(f,[previous,element]))
+          acc=delay(()=>applyValue(f,[previous,element],caller))
         }
         return force(acc)
       }
@@ -558,9 +578,10 @@ export function createEvaluator(registry) {
   const listVia = (d, t) => (!d || d.key === 'Foldable@List' ? t : delay(() => invoke(d, 'foldMap', [now(fn('singleton')), t], [LIST_MONOID])))
 
   function mapList(f, xs) {
+    const caller = registry.onSourceCall ? activeEnv : null
     const go = (t) => {
       const l = list(t)
-      return l.ctorIndex === 0 ? nil : cons(delay(() => applyValue(f, [l.args[0]])), delay(() => go(l.args[1])))
+      return l.ctorIndex === 0 ? nil : cons(delay(() => applyValue(f, [l.args[0]], caller)), delay(() => go(l.args[1])))
     }
     return go(xs)
   }
@@ -623,12 +644,13 @@ export function createEvaluator(registry) {
   // mutable arrays. Filtering skips a rejected prefix iteratively; accepted
   // tails are delayed. take 0 does not even inspect xs or its elements.
   function filterList(p, xs) {
+    const caller = registry.onSourceCall ? activeEnv : null
     const go = (t) => {
       let rest = t
       for (;;) {
         const l = listStep(rest)
         if (l.ctorIndex === 0) return nil
-        if (bool(applyValue(p, [l.args[0]]))) return cons(l.args[0], delay(() => go(l.args[1])))
+        if (bool(applyValue(p, [l.args[0]], caller))) return cons(l.args[0], delay(() => go(l.args[1])))
         rest = l.args[1]
       }
     }
@@ -1115,7 +1137,10 @@ export function createEvaluator(registry) {
     if(def.sourceEquations && registry.sourceEvaluation) {
       for(const row of def.sourceEquations) {
         const bindings=new Map()
-        if(row.patterns.every((p,i)=>matchSourcePattern(p,args[i],bindings)))return call(row.branchId,row.binders.map(name=>bindings.get(name)),dicts,caller)
+        if(row.patterns.every((p,i)=>matchSourcePattern(p,args[i],bindings))) {
+          reportCall({ kind: 'equation', callId: caller?.callId, functionId: caller?.functionId, nodeId: caller?.nodeId, equationId: row.branchId })
+          return call(row.branchId, row.binders.map(name => bindings.get(name)), dicts, caller)
+        }
       }
       throw new EvalError(`${def.label}: 일치하는 함수 방정식/패턴이 없습니다. 호출 인자와 패턴을 확인하세요.`)
     }
@@ -1136,9 +1161,23 @@ export function createEvaluator(registry) {
     if (!output?.source || !body[output.source]) throw new EvalError(`${def.label}: Output is not connected`)
     if (registry.executionLimits && callDepth >= registry.executionLimits.depth) throw new EvalError('재귀 호출 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
     callDepth++
+    const frame = { args, memo: new Map(), dicts, elab: elab?.forFunction(callee) || {},
+      callId: ++callSerial, parentCallId: caller?.callId ?? 0, functionId: callee }
+    const location = { callId: frame.callId, parentCallId: frame.parentCallId, functionId: callee, nodeId: output.source }
+    if (registry.onSourceCall) reportCall({ kind: 'enter', ...location, args,
+      site: caller?.nodeId ? { nodeId: caller.nodeId, functionId: caller.functionId, callId: caller.callId } : null })
     try {
-      return force(nodeValue(body, output.source, { args, memo: new Map(), dicts, elab: elab?.forFunction(callee) || {}, callId: ++callSerial, parentCallId: caller?.callId ?? 0, functionId: callee }))
+      const value = force(nodeValue(body, output.source, frame))
+      if (registry.onSourceCall) reportCall({ kind: 'return', ...location, value })
+      return value
+    } catch (error) {
+      if (registry.onSourceCall) reportCall({ kind: 'call-error', ...location, message: error.message })
+      throw error
     } finally { callDepth-- }
+  }
+
+  function reportCall(event) {
+    try { registry.onSourceCall?.(event) } catch { /* Diagnostics cannot affect evaluation. */ }
   }
 
   /** The morphisms derived from a type declaration (see typeDecls.js). */
@@ -1175,7 +1214,7 @@ export function createEvaluator(registry) {
   }
 
   /** Apply a function value to argument thunks, filling its open slots left to right. */
-  function applyValue(f, argThunks) {
+  function applyValue(f, argThunks, caller = null) {
     if(registry.executionLimits && applyDepth>=registry.executionLimits.demandDepth)throw new EvalError('함수 적용 깊이 제한을 초과했습니다. 계산을 중단했습니다.')
     applyDepth++
     try {
@@ -1185,7 +1224,7 @@ export function createEvaluator(registry) {
         if (!isClosure(v)) throw new EvalError(`Cannot apply ${show(v)} — it is not a function`)
         const args = v.args.slice()
         args[args.indexOf(null)] = arg
-        v = args.includes(null) ? closure(v.callee, args, v.dicts, v.context) : call(v.callee, args, v.dicts, activeEnv || v.context)
+        v = args.includes(null) ? closure(v.callee, args, v.dicts, v.context) : call(v.callee, args, v.dicts, caller || activeEnv || v.context)
       }
       return force(v)
     } finally { applyDepth-- }
@@ -1218,7 +1257,7 @@ export function createEvaluator(registry) {
       emit('start')
       try {
         const value = checked()
-        emit('done')
+        emit('done', registry.onSourceCall ? { value } : {})
         return value
       } catch (error) {
         const origin = !observer.errors.has(error)
@@ -1294,7 +1333,7 @@ export function createEvaluator(registry) {
       args[i] = arg
     })
     const dicts = dictsOf(env, node.id)
-    if (!args.includes(null)) return call(callee, args, dicts, env)
+    if (!args.includes(null)) return call(callee, args, dicts, activeEnv || env)
     return closure(callee, args, dicts, registry.sourceEvaluation?{callId:env.callId??0,functionId:env.functionId??null,nodeId:node.id}:undefined)
   }
 

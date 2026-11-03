@@ -2,7 +2,8 @@ import { formatSourceValue, sourceValueTruncated } from './sourceValue.js'
 import { SourceDocument, SOURCE_STORAGE_KEY } from './sourceDocument.js'
 import { createSourceRunner } from './sourceRunner.js'
 import { sourceLocation } from './sourceParser.js'
-import { createExecutionPlayback } from './executionTrace.js'
+import { createSourceHistory, describeTraceValue } from './sourceHistory.js'
+import { addTraceInspector } from './sourceDebuggerPanel.js'
 
 // Read-only analysis uses the existing Graph area, never loadProject/autosave.
 export function initSourcePanel({ onEnter, onLeave }) {
@@ -22,9 +23,9 @@ export function initSourcePanel({ onEnter, onLeave }) {
   pane.className = 'code-pane'; pane.id = 'code-pane'; pane.hidden = true; pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-labelledby', 'code-tab')
   pane.innerHTML = `<label for="code-input">Haskell 코드 · 첫 버전</label><textarea id="code-input" spellcheck="false" aria-describedby="code-support"></textarea>
     <button type="button" id="code-convert" class="tool-button primary">그래프로 변환</button>
-    <div class="code-run-controls"><button type="button" class="tool-button" id="code-stop" disabled>계산 중단</button><button type="button" class="tool-button" id="code-stop-playback" disabled>재생 중단</button></div>
+    <div class="code-run-controls"><button type="button" class="tool-button" id="code-stop" disabled>계산 중단</button></div>
     <p id="code-status" role="status" aria-live="polite"></p>
-    <details id="code-support"><summary>지원 범위와 제한</summary><p>정의는 한 줄씩, 모든 정의에 구체적인 Int/Bool·리스트·함수 시그니처가 필요합니다. 정수·True/False·+ − *·비교·&amp;&amp;·||·if then else·abs/div/mod·백틱 호출·괄호·변수·자기/상호 재귀·빈 줄·-- 주석을 지원합니다. 리스트([Int]·[Bool], 중첩 가능), :·++, 순서 있는 []·[x]·(x:xs)·변수·_ 패턴, 함수 값·부분 적용, map/filter/지연 foldl, 오른쪽 연산자 섹션(< pivot)을 지원합니다. 정의의 인자는 전부 명시합니다. 음수 인자는 (-2)처럼 괄호로 감싸세요.</p><p>import·IO·튜플·가드·let/where·사용자 data·사용자 다형 시그니처는 미지원입니다. 모든 중간 계산은 ±9007199254740991 이내여야 합니다. Graph JS 실행이며 GHC 실행이 아닙니다. 호출 깊이 48·평가 깊이 128, 함수/노드/리스트 검사 각 6,000회, 계산 1.5초(Worker 강제 종료 4초), 기록 20,000개가 상한입니다. 리스트 표시는 앞 100개·총 300개·중첩 8단계까지만 요구하며, 나머지는 강제로 계산하지 않고 …로 표시합니다. 제한 초과는 오류로 중단합니다. 계산 중단과 기록 재생 중단은 별개입니다.</p><p>분석 문서는 수동 프로젝트와 별도 저장됩니다. 생성 그래프는 읽기 전용이며 원문으로의 역변환은 없습니다.</p></details>
+    <details id="code-support"><summary>지원 범위와 제한</summary><p>정의는 한 줄씩, 모든 정의에 구체적인 Int/Bool·리스트·함수 시그니처가 필요합니다. 정수·True/False·+ − *·비교·&amp;&amp;·||·if then else·abs/div/mod·백틱 호출·괄호·변수·자기/상호 재귀·빈 줄·-- 주석을 지원합니다. 리스트([Int]·[Bool], 중첩 가능), :·++, 순서 있는 []·[x]·(x:xs)·변수·_ 패턴, 함수 값·부분 적용, map/filter/지연 foldl, 오른쪽 연산자 섹션(< pivot)을 지원합니다. 정의의 인자는 전부 명시합니다. 음수 인자는 (-2)처럼 괄호로 감싸세요.</p><p>import·IO·튜플·가드·let/where·사용자 data·사용자 다형 시그니처는 미지원입니다. 모든 중간 계산은 ±9007199254740991 이내여야 합니다. Graph JS 실행이며 GHC 실행이 아닙니다. 호출 깊이 48·평가 깊이 128, 함수/노드/리스트 검사 각 6,000회, 계산 1.5초(Worker 강제 종료 4초), 노드 기록 20,000개가 상한입니다. 탐색 기록은 최대 4,000단계와 값 참조 10,000개까지 보관하며 초과분은 생략합니다. 리스트 표시는 앞 100개·총 300개·중첩 8단계까지만 요구하며, 나머지는 강제로 계산하지 않고 …로 표시합니다. 계산 한도를 넘으면 오류로 중단합니다. 계산 중단과 기록 재생 중단은 별개입니다.</p><p>분석 문서는 수동 프로젝트와 별도 저장됩니다. 생성 그래프는 읽기 전용이며 원문으로의 역변환은 없습니다.</p></details>
     <h2>분석 함수 / 값</h2><ul id="code-functions"></ul>
     <label for="code-source-preview">변환된 원문 · 노드를 눌러 위치 확인</label><pre id="code-source-preview" tabindex="0"></pre>`
   sidebar.querySelector('.side-heading').after(tabs, manual, pane)
@@ -40,17 +41,84 @@ export function initSourcePanel({ onEnter, onLeave }) {
   document.querySelector('.canvas-footer').append(summary)
   const crumb = document.createElement('b'); crumb.className = 'code-crumb'; crumb.hidden = true
   document.querySelector('.breadcrumbs').append(crumb)
-  const playback = createExecutionPlayback({ onChange: renderPlayback })
-  const savedDisabled = new Map()
+  const controls = document.createElement('div')
+  controls.className = 'code-history'
+  controls.hidden = true
+  controls.setAttribute('role', 'group')
+  controls.setAttribute('aria-label', '실행 기록 탐색')
+  controls.innerHTML = `<div class="code-history-buttons">
+    <button type="button" class="tool-button" id="code-history-first">처음</button>
+    <button type="button" class="tool-button" id="code-history-prev">이전</button>
+    <button type="button" class="tool-button" id="code-history-next">다음</button>
+    <button type="button" class="tool-button" id="code-stop-playback">자동 재생</button>
+    <button type="button" class="tool-button" id="code-history-find">현재 노드 찾기</button>
+    </div><output id="code-history-position"></output>`
+  document.querySelector('.canvas-wrap').before(controls)
+  const history = createSourceHistory(showStep)
+  const savedDisabled = new Map(), viewPositions = new Map()
   const commands = [...document.querySelectorAll('#undo, #redo, #back-graph, .project-menu button, .project-menu select')]
+  let frameId = null, selectedCallId = null, graphOwner = null, renderedOwner = null, stepNode = null
   const current = () => model.document?.functions.find(f => f.id === model.selected)
-  const clear = () => { generation++; runner.cancel(); calculating=false; playback.cancel(); selectedNode = null }
-  pane.querySelector('#code-stop').onclick=()=>{clear();model.result={error:{message:'사용자가 계산을 중단했습니다.'},events:[]};render()}
-  pane.querySelector('#code-stop-playback').onclick=()=>playback.cancel()
+  const viewFunction = () => model.document?.functions.find(f => f.id === (graphOwner || model.selected))
+  const clear = () => {
+    generation++
+    runner.cancel()
+    calculating = false
+    history.load([])
+    selectedNode = frameId = selectedCallId = graphOwner = stepNode = null
+    viewPositions.clear()
+  }
+  pane.querySelector('#code-stop').onclick = () => {
+    clear()
+    model.result = { error: { message: '사용자가 계산을 중단했습니다.' }, events: [] }
+    render()
+  }
+  const control = id => controls.querySelector('#' + id)
+  control('code-history-first').onclick = () => history.seek(0)
+  control('code-history-prev').onclick = () => history.seek(history.position - 1)
+  control('code-history-next').onclick = () => history.seek(history.position + 1)
+  control('code-stop-playback').onclick = () => history.playing ? history.pause() : history.play()
+  control('code-history-find').onclick = findNode
+
+  function findNode() {
+    if (!stepNode) return
+    const node = surface.querySelector('[data-code-node="' + CSS.escape(stepNode) + '"]')
+    node?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    node?.focus({ preventScroll: true })
+  }
+  function showPosition(owner, callId, nodeId, range) {
+    const previousOwner = viewFunction()?.id
+    graphOwner = model.document.nodes[owner]?.sourceOwner || owner || null
+    frameId = callId
+    selectedNode = null
+    stepNode = nodeId || null
+    model.highlight = range ? { ...range, version: model.document.version } : null
+    if (viewFunction()?.id !== previousOwner) renderGraph()
+    renderSource(); renderInspector(); renderPlayback()
+  }
+  function showStep() {
+    if (!active || !model.document) return
+    const step = history.event
+    const root = [...history.calls.values()].find(call => call.parentCallId === 0)
+    selectedCallId = step?.callId || (step?.kind === 'finish' ? root?.callId : null)
+    const owner = step?.functionId || model.selected
+    const locationId = step?.equationId || step?.nodeId || (step?.kind === 'finish' ? owner : '')
+    const range = step?.span || model.document.locations[locationId]
+    showPosition(owner, step?.callId || (step?.kind === 'finish' ? root?.callId : null), step?.nodeId, range)
+  }
+  function showCall(call, atSite = false) {
+    if (!call) return
+    history.pause(false)
+    selectedCallId = call.callId
+    const site = atSite ? call.site : null
+    showPosition(site?.functionId || call.functionId, site?.callId || call.callId, site?.nodeId || call.nodeId,
+      model.document.locations[site?.nodeId || call.functionId])
+  }
 
   function mode(value) {
     if (active === value) return
     clear(); model.result = model.highlight = null
+    controls.hidden = true
     active = value
     if (active) onEnter()
     workspace.classList.toggle('code-mode', active)
@@ -118,7 +186,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
     inspector.replaceChildren()
     const heading = document.createElement('h2')
     // All user source is inserted as text, never HTML.
-    heading.textContent = selectedNode ? `노드 · ${selectedNode.label}` : current()?.name || '코드 분석'; inspector.append(heading)
+    heading.textContent = selectedNode ? `노드 · ${selectedNode.label}` : viewFunction()?.name || '코드 분석'; inspector.append(heading)
     const text = value => { const p = document.createElement('p'); p.textContent = value; inspector.append(p); return p }
     text(model.stale ? '이전 변환 그래프입니다. 최신 코드는 재변환해야 평가할 수 있습니다.' : current()?.arity ? '매개변수가 있는 함수입니다. 인자가 없는 값에서 호출해 평가하세요.' : '상단 평가 버튼으로 선택한 값을 실행합니다.')
     if (model.highlight && !model.stale) {
@@ -131,13 +199,24 @@ export function initSourcePanel({ onEnter, onLeave }) {
       }
     }
     if (model.result) {
-      const result = text(model.result.error ? model.result.error.message : `Graph JS 결과: ${show(model.result.value)}`)
+      const node = history.nodes.get(frameId + ':' + (selectedNode?.id || stepNode))
+      if (node?.phase === 'done') {
+        text('이 단계의 노드 값 · ' + describeTraceValue(node.value, history.values, id => model.document.nodes[id]?.label || id))
+      } else if (node?.phase === 'error') {
+        text('이 단계의 오류 · ' + node.message)
+      }
+      const result = text(model.result.error ? '최종 오류 · ' + model.result.error.message : `최종 Graph JS 결과: ${show(model.result.value)}`)
       if(sourceValueTruncated(model.result.value))result.append(' · 표시 일부 생략 (전체 값의 계산 완료를 뜻하지 않음)')
       result.dataset.truncated=String(sourceValueTruncated(model.result.value))
       result.className = 'code-result'; result.dataset.result = model.result.error ? 'error' : show(model.result.value)
       result.setAttribute('role', 'status')
+      addTraceInspector(inspector, model.document, history, selectedCallId, {
+        pause() { history.pause(false); renderPlayback() },
+        select(id) { showCall(history.calls.get(id)); inspector.querySelector('#code-trace-call')?.focus() },
+        definition: call => showCall(call), site: call => showCall(call, true),
+      })
       const equations=new Map((model.document?.functions||[]).flatMap(fn=>(fn.equations||[]).map((eq,i)=>[eq.id,{name:fn.name,index:i+1,calls:new Set()}])))
-      for(const event of model.result.allEvents||[])if(event.phase==='start')equations.get(event.functionId)?.calls.add(event.callId)
+      for(const call of history.calls.values())equations.get(call.functionId)?.calls.add(call.callId)
       const entered=[...equations.values()].filter(eq=>eq.calls.size)
       if(entered.length){
         const details=document.createElement('details');details.className='code-equation-trace'
@@ -154,14 +233,17 @@ export function initSourcePanel({ onEnter, onLeave }) {
   }
   function renderGraph() {
     const sheet = surface.querySelector('.code-graph-sheet'), heading = surface.querySelector('.code-graph-heading')
+    if (renderedOwner) viewPositions.set(renderedOwner, [surface.scrollLeft, surface.scrollTop])
+    const viewed = viewFunction()
+    renderedOwner = viewed?.id
+    const graph = model.document?.functionBodies[viewed?.id]
     sheet.replaceChildren()
-    const graph = model.document?.functionBodies[model.selected]
-    heading.textContent = graph ? `${current().name} :: ${current().signature} · v${model.document.version}${model.stale ? ' · 재변환 필요' : ''}` : '코드를 변환하면 이곳에 읽기 전용 그래프가 표시됩니다.'
+    heading.textContent = graph ? `${viewed.name} :: ${viewed.signature} · v${model.document.version}${model.stale ? ' · 재변환 필요' : ''}` : '코드를 변환하면 이곳에 읽기 전용 그래프가 표시됩니다.'
     surface.classList.toggle('code-stale', model.stale)
     if (!graph) return
     surface.style.scrollPaddingTop=`${heading.offsetHeight+12}px`
     surface.style.scrollPaddingBottom='16px'
-    const bodies=[{id:model.selected,graph},...(current().equations||[]).map(eq=>({...eq,graph:model.document.functionBodies[eq.id]}))]
+    const bodies=[{id:viewed.id,graph},...(viewed.equations||[]).map(eq=>({...eq,graph:model.document.functionBodies[eq.id]}))]
     for(const [ordinal,body] of bodies.entries()) {
     const graph=body.graph
     if(ordinal){
@@ -176,8 +258,8 @@ export function initSourcePanel({ onEnter, onLeave }) {
     const ns = 'http://www.w3.org/2000/svg'
     const svg = document.createElementNS(ns, 'svg')
     const width = Math.max(...Object.values(graph).map(n => n.x)) + 185, height = Math.max(...Object.values(graph).map(n => n.y)) + 100
-    if(current().equations?.length)svg.style.maxWidth=`${width}px`
-    svg.setAttribute('viewBox', `0 0 ${width} ${height}`); svg.setAttribute('aria-label', `${current().name} 함수 그래프`)
+    if(viewed.equations?.length)svg.style.maxWidth=`${width}px`
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`); svg.setAttribute('aria-label', `${viewed.name} 함수 그래프`)
     const el = (name, attrs) => { const element = document.createElementNS(ns, name); Object.entries(attrs).forEach(([k, v]) => element.setAttribute(k, v)); return element }
     for (const n of Object.values(graph)) {
       const sources = n.mounted || (n.target ? [n.target] : n.source ? [n.source] : [])
@@ -197,7 +279,10 @@ export function initSourcePanel({ onEnter, onLeave }) {
       if(type.textContent.length>23)type.textContent=type.textContent.slice(0,21)+'…'
       group.append(label, type, tooltip, el('text', { x: 0, y: -7, class: 'code-node-state' }))
       const select = () => {
-        selectedNode = node; model.selectNode(node.id); renderSource()
+        history.pause(false)
+        selectedNode = node
+        model.highlight = model.stale ? null : model.document.locations[node.id === 'output' ? viewed.id + ':output' : node.id]
+        renderSource()
         // Keep the actual SVG/focus/scroll position when choosing a node.
         surface.querySelectorAll('.code-node').forEach(n=>n.classList.toggle('code-selected',n.dataset.codeNode===node.id))
         renderInspector(); renderPlayback()
@@ -208,17 +293,36 @@ export function initSourcePanel({ onEnter, onLeave }) {
     }
     sheet.append(svg)
     }
+    const [left, top] = viewPositions.get(viewed.id) || [0, 0]
+    surface.scrollTo(left, top)
   }
   function renderPlayback() {
     for (const node of surface.querySelectorAll('[data-code-node]')) {
-      node.dataset.state = playback.states.get(node.dataset.codeNode)?.state || 'idle'
+      const phase = history.nodes.get(frameId + ':' + node.dataset.codeNode)?.phase
+      node.dataset.state = phase === 'start' ? 'running' : phase || 'idle'
+      node.classList.toggle('code-step-node', node.dataset.codeNode === stepNode)
       node.querySelector('.code-node-state').textContent = ({ running: '계산 중', done: '완료', error: '오류' })[node.dataset.state] || ''
     }
     if (!active) return
     pane.querySelector('#code-stop').disabled=!calculating
-    pane.querySelector('#code-stop-playback').disabled=!playback.playing
+    controls.hidden = !history.length
+    const { position, length, playing } = history
+    control('code-history-first').disabled = position === 0
+    control('code-history-prev').disabled = position === 0
+    control('code-history-next').disabled = position === length
+    control('code-history-find').disabled = !stepNode || !surface.querySelector(`[data-code-node="${CSS.escape(stepNode || '')}"]`)
+    control('code-stop-playback').disabled = position === length
+    control('code-stop-playback').textContent = playing ? '일시정지' : '자동 재생'
+    control('code-stop-playback').setAttribute('aria-pressed', String(playing))
+    const omitted = model.result?.debug?.omitted || 0
+    const clipped = omitted ? ` · 기록 ${omitted}단계 생략` : ''
+    const valuesClipped = model.result?.debug?.valuesOmitted ? ' · 일부 값 생략' : ''
+    const phase = { start: '노드 진입', done: '노드 평가됨', error: '노드 오류' }[history.event?.phase]
+      || { enter: '호출 진입', return: '호출 반환', equation: '방정식 선택', 'call-error': '호출 오류', finish: '실행 종료' }[history.event?.kind]
+      || '실행 전'
+    control('code-history-position').textContent = `기록 ${position}/${length}${omitted ? ` (전체 ${length + omitted})` : ''} · ${phase}${clipped}${valuesClipped}`
     surface.dataset.calculating=String(calculating)
-    summary.textContent = calculating ? 'Graph JS 계산 중 · 계산 중단 가능' : model.stale ? '재변환 필요 · 이전 결과 표시 안 함' : playback.playing ? '실행 기록 재생 중 · 계산은 한 번만 실행' : model.result?.error ? `Graph JS 오류: ${model.result.error.message}` : model.result ? `Graph JS 결과: ${show(model.result.value)}${sourceValueTruncated(model.result.value)?' · 표시 일부 생략':''}` : '읽기 전용 코드 그래프 · Graph JS'
+    summary.textContent = calculating ? 'Graph JS 계산 중 · 계산 중단 가능' : model.stale ? '재변환 필요 · 이전 결과 표시 안 함' : history.playing ? '실행 기록 재생 중 · 계산은 한 번만 실행' : model.result?.error ? `Graph JS 오류: ${model.result.error.message}` : model.result ? `Graph JS 결과: ${show(model.result.value)}${sourceValueTruncated(model.result.value)?' · 표시 일부 생략':''}` : '읽기 전용 코드 그래프 · Graph JS'
   }
   async function evaluate() {
     if (!active || model.stale || current()?.arity) return
@@ -228,8 +332,11 @@ export function initSourcePanel({ onEnter, onLeave }) {
     const result=await model.evaluateWith((doc,id)=>runner.run(doc,id))
     if(token!==generation)return
     calculating=false
-    if (result) playback.play(result.events, { rootId: model.selected })
+    history.load(result?.debug?.steps || [])
     render()
+    if (result?.error) {
+      if (history.length && !result.debug.omitted) history.seek(history.length)
+    } else history.play()
   }
   return { get active() { return active }, refreshRunLabel, evaluate }
 }

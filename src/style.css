@@ -74,6 +74,17 @@ body{margin:0;min-width:1040px;min-width:0!important}
 .code-mode #inspector-content,.code-mode .breadcrumbs > :not(.code-crumb),.code-mode .canvas-footer > :not(.code-runtime-status){display:none}
 .code-mode .breadcrumbs{min-width:0;flex-shrink:1}.code-crumb{overflow:hidden;text-overflow:ellipsis}
 .code-surface{position:absolute;inset:0;overflow:auto;background-image:radial-gradient(var(--accent-soft-2) 1px,transparent 1px);background-size:22px 22px}
+.code-history{flex:none;padding:5px 10px;border-bottom:1px solid var(--line);background:var(--panel);font-size:11px}
+.code-history[hidden]{display:none}
+.code-history-buttons,.code-trace-nav{display:flex;flex-wrap:wrap;gap:4px}
+.code-history .tool-button,.code-trace-nav .tool-button{min-height:28px;padding:3px 8px}
+.code-history output{display:block;margin-top:3px;overflow-wrap:anywhere}
+.code-node.code-step-node rect{stroke-width:4;stroke:var(--accent)}
+.code-trace-inspector{min-width:0;margin:12px 0}
+.code-trace-inspector select{display:block;width:100%;max-width:100%;margin:4px 0 8px}
+.code-trace-inspector dl{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:2px 8px}
+.code-trace-inspector dd{margin:0;overflow-wrap:anywhere}
+.code-trace-inspector dt{font-weight:600;overflow-wrap:anywhere}
 .code-graph-heading{position:sticky;left:0;top:0;z-index:1;padding:16px;background:#ffffffed;border-bottom:1px solid var(--line);font:12px/1.6 'DM Mono';overflow-wrap:anywhere}
 .code-graph-sheet{padding:16px}.code-graph-sheet svg{display:block;width:100%;min-width:500px;height:auto}
 .code-edge{fill:none;stroke:#a79bcf;stroke-width:2}

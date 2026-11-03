@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { reloadApp } from './browser-reload.mjs'
 
 const PORT = 5179
 const DEBUG_PORT = 9479
@@ -32,7 +33,17 @@ let ws
 const pending = new Map()
 const errors = []
 let msgId = 0
-const send = (method, params = {}) => new Promise((r) => { const i = ++msgId; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })) })
+const send = (method, params = {}) => new Promise((resolve, reject) => {
+  if (ws.readyState !== WebSocket.OPEN) return reject(new Error(`Chrome connection closed during ${method}`))
+  const id = ++msgId
+  const timer = setTimeout(() => {
+    pending.delete(id)
+    reject(new Error(`Chrome did not answer ${method} (#${id})`))
+  }, 8000)
+  const settle = (error, response) => { clearTimeout(timer); error ? reject(error) : resolve(response) }
+  pending.set(id, settle)
+  ws.send(JSON.stringify({ id, method, params }))
+})
 async function js(expr) {
   const m = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })
   if (m.result?.exceptionDetails) throw new Error(m.result.exceptionDetails.exception?.description || 'evaluation failed')
@@ -44,6 +55,7 @@ async function key(k, code, vk, modifiers = 0) {
   await sleep(80)
 }
 async function check(name, fn) {
+  console.log(`  … ${name}`)
   try {
     const note = await fn()
     console.log(`  ✓ ${name}${note ? ` — ${note}` : ''}`)
@@ -187,8 +199,19 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await new Promise((r) => ws.addEventListener('open', r))
   ws.addEventListener('message', (e) => {
     const m = JSON.parse(e.data)
-    if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
+    if (m.id && pending.has(m.id)) {
+      pending.get(m.id)(m.error && new Error(m.error.message), m)
+      pending.delete(m.id)
+    }
     if (m.method === 'Runtime.exceptionThrown') errors.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text)
+    if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') {
+      errors.push(m.params.args.map(arg => arg.description || arg.value).join(' '))
+    }
+  })
+  ws.addEventListener('close', event => {
+    const error = new Error(`Chrome connection closed (${event.code} ${event.reason})`)
+    for (const settle of pending.values()) settle(error)
+    pending.clear()
   })
   await send('Runtime.enable'); await send('Page.enable')
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
@@ -208,7 +231,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await js(`document.querySelector('#run').click()`); await sleep(100)
     expect((await js(`document.querySelector('#toast').textContent`)).includes('main의 Output'), 'missing empty-main guidance')
     expect(Object.keys((await project()).functionBodies.main).length === 1, 'an empty run changed main')
-    await send('Page.reload'); await sleep(700)
+    await reloadApp(js)
     expect(Object.values((await project()).nodes).filter((n) => n.programEntry).length === 1, 'reload duplicated main')
   })
   await back() // fresh main is checked above; subsequent editor tests start at top level
@@ -266,7 +289,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       expect((await project()).types.Box.constructors[0].fields[0].name === 'item', 'undo did not restore field name')
       await js(`document.querySelector('#redo').click()`)
       expect((await project()).types.Box.constructors[0].fields[0].name === 'payload', 'redo did not restore field name')
-      await send('Page.reload')
+      await reloadApp(js)
       for (let i = 0; i < 100 && !(await js(`!!document.querySelector('.add-type-call[data-type-name="Box"]')`).catch(() => false)); i++) await sleep(100)
       p = await project()
       expect(p.types.Box.constructors[0].fields[0].key === key && Object.values(p.functionBodies[fn.id]).some((n) => n.match), 'reload lost the pattern or field identity')
@@ -335,7 +358,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await mouse('mouseMoved', h.x + 200, h.y + 100, { buttons: 0 })
     expect((await layout())[0].width === ended, 'resize continued after pointer release')
     expect(await js(`localStorage.getItem('hs-simulate:exercises')`) === '{"arith-double":true}', 'old progress changed')
-    await send('Page.reload'); await sleep(800)
+    await reloadApp(js)
     expect(await removed() === 0 && JSON.stringify(await project()) === before, 'reload changed project or restored learning panels')
     expect(Math.abs((await layout())[0].width - ended) < 1, 'saved Workspace width not restored')
     expect(await js(`localStorage.getItem('hs-simulate:exercises')`) === '{"arith-double":true}', 'reload removed progress')
@@ -929,7 +952,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       await js(`document.querySelector('#run').click()`); await sleep(500)
       expect(listItems((await lastListResult())?.data).join('') === expected, 'main result mismatch')
       const before = JSON.stringify(await project())
-      await send('Page.reload'); await sleep(800)
+      await reloadApp(js)
       expect(JSON.stringify(await project()) === before, 'reload changed saved graph')
       expect(await js(`document.querySelectorAll('.execution-mark').length === 0`), 'old animation restored')
       if (await js(`document.querySelector('#back-graph').hidden`)) await openBody('main')
@@ -964,7 +987,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await editInput(repeat,0,'3'); await js(`document.querySelector('#run').click()`); await sleep(1500)
     expect(await scalarResult()==='6','repeatN failed to recover')
     expect(!(await js(`!!document.querySelector('.execution-mark[data-state="error"]')`)),'stale error mark')
-    const before=JSON.stringify(await project()); await send('Page.reload'); await sleep(800)
+    const before=JSON.stringify(await project()); await reloadApp(js)
     expect(JSON.stringify(await project())===before,'repeatN graph not restored')
     expect(await js(`document.querySelectorAll('.execution-mark').length===0`),'reloaded repeatN trace')
     return '3×(+2): 6; 4×: 8; 101 rejected; corrected: 6'
@@ -982,7 +1005,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       await editInput(fn==='any'?p:list,changedIndex,changedValue)
       await js(`document.querySelector('#run').click()`);await sleep(400)
       expect(await scalarResult()==='false',`${fn} changed result`)
-      const before=JSON.stringify(await project());await send('Page.reload');await sleep(800)
+      const before=JSON.stringify(await project());await reloadApp(js)
       expect(JSON.stringify(await project())===before,`${fn} graph not restored`)
       expect(await js(`document.querySelectorAll('.execution-mark').length===0`),'reloaded predicate trace')
       return 'True → False after a literal edit; saved graph restored'

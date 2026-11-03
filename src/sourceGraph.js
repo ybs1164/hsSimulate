@@ -7,6 +7,7 @@ import { createTypedEvaluator } from './typedEvaluator.js'
 import { createExecutionTrace } from './executionTrace.js'
 import { withDynamicClasses, withDynamicInstances } from './prelude.js'
 import { serializeSourceValue } from './sourceValue.js'
+import { createSourceTrace } from './sourceTrace.js'
 
 const isolated=fn=>withDynamicClasses([],()=>withDynamicInstances([],fn))
 export const SOURCE_LIMITS=Object.freeze({depth:48,demandDepth:128,calls:6000,nodes:6000,listSteps:6000,milliseconds:1500,events:20000})
@@ -106,6 +107,7 @@ export function evaluateSource(document, functionId, limits = SOURCE_LIMITS) {
   const fn = document.functions.find(f => f.id === functionId)
   if (!fn || fn.arity) throw new SourceError('evaluation', '인자가 없는 최상위 값을 선택하세요. 함수 직접 테스트는 후속 기능입니다.', document.source, document.locations[functionId])
   const graph = document.functionBodies[functionId], trace = createExecutionTrace(graph), events = []
+  const history = createSourceTrace(limits.debugSteps)
   let exceededTrace=false
   function validateValue(value,context) {
     if(typeof value==='number'&&!Number.isSafeInteger(value)) {
@@ -115,15 +117,18 @@ export function evaluateSource(document, functionId, limits = SOURCE_LIMITS) {
     }
   }
   const ev = createTypedEvaluator({ ...document, types: {}, classes: {}, instances: {}, executionLimits:limits, integerDivision:sourceIntegerDivision, sourceEvaluation:true, serializeResult:serializeSourceValue,
-    validateNodeValue:validateValue, validateRuntimeValue:validateValue,
+    validateNodeValue:validateValue, validateRuntimeValue:validateValue, onSourceCall:history.record,
   })
   try {
-    const value = isolated(() => ev.run(document.nodes, functionId, { onNode(event) {
+    const value = isolated(() => ev.run(document.nodes, functionId, { onNode({ value, ...event }) {
+      const {graph, frame, ...step}=event
+      history.record({kind:'node', ...step, value})
       if(events.length>=limits.events){exceededTrace=true;return}
       events.push(event);trace.record(event)
     } }))
     if(exceededTrace)throw new SourceError('limit','실행 기록 제한을 초과했습니다. 결과로 처리하지 않습니다.',document.source,document.locations[functionId])
-    return { value, events: trace.events, allEvents: events }
+    history.record({kind:'finish', functionId})
+    return { value, events: trace.events, allEvents: events, debug:history.finish() }
   } catch (error) {
     const origin=events.find(e=>e.phase==='error'&&e.origin)
     if(!(error instanceof SourceError)) {
@@ -139,6 +144,8 @@ export function evaluateSource(document, functionId, limits = SOURCE_LIMITS) {
       error.message+=` (호출: ${at.line}행 ${at.column}열)`
     }
     trace.fail(graph.output.source, error)
-    return { error, events: trace.events, allEvents: events }
+    history.record({kind:'finish', functionId:origin?.functionId || functionId,
+      callId:origin?.callId, nodeId:origin?.nodeId, span:error.span})
+    return { error, events: trace.events, allEvents: events, debug:history.finish() }
   }
 }

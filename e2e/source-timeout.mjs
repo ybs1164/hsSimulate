@@ -74,7 +74,7 @@ try {
   for(let i=0;i<60&&!(await js(`!!document.querySelector('.code-result')`));i++)await sleep(50)
   expect(await js(`document.querySelector('.code-result')?.dataset.result==='42'`),'normal calculation did not recover')
   await click('#code-stop-playback')
-  expect(await js(`document.querySelector('.code-result')?.dataset.result==='42'&&!document.querySelector('.code-node[data-state="running"]')`),'replay stop changed actual result')
+  expect(await js(`document.querySelector('.code-result')?.dataset.result==='42'&&document.querySelector('#code-stop-playback').getAttribute('aria-pressed')==='false'`),'replay stop changed actual result')
   await sleep(1000) // beyond the dead worker's scheduled result
   await js(`window.lastControlledWorker.dispatchEvent(new MessageEvent('message',{data:{value:999,events:[],allEvents:[]}}))`)
   expect(await js(`document.querySelector('.code-result')?.dataset.result==='42'`),'stale completion overwrote the new result')

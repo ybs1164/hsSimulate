@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { reloadApp } from './browser-reload.mjs'
 const port = 5184, debug = 9484
 const chromePath = [process.env.CHROME, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => p && existsSync(p))
 if (!chromePath) throw new Error('Chrome/Chromium required (set CHROME)')
@@ -112,8 +113,7 @@ try {
   })
   await check('forward calls, renamed function, precedence and changed numbers; rapid run/switch/reconvert clears playback', async () => {
     await source('result :: Int\nresult = combine (2 + 3) 4\ncombine :: Int -> Int -> Int\ncombine a b = a * b - 2')
-    await click('#run'); await sleep(1500)
-    expect(await js(`document.querySelector('.code-result')?.dataset.result === '18'`), 'expected 18')
+    await click('#run'); await waitResult('18')
     await click('#run'); await click('#run'); await select('combine'); await sleep(1000)
     expect(await js(`!document.querySelector('.code-result') && !document.querySelector('.code-node[data-state="done"], .code-node[data-state="running"]')`), 'old run contaminated another function')
     await source('main :: Int\nmain = 6 * 7')
@@ -128,7 +128,7 @@ try {
     await source(example); await click('#run'); await waitResult('8');await waitPlayback()
     expect(await js(`document.querySelector('.code-result')?.dataset.result === '8' && !document.querySelector('.code-node[data-state="error"]')`), 'correction did not clear error')
     const saved = await savedCode()
-    await send('Page.reload'); await sleep(900)
+    await reloadApp(js)
     expect(await snapshot() === manual && await savedCode() === saved, 'reload modified project/source storage')
     await click('#code-tab')
     expect(await js(`document.querySelectorAll('#code-functions button').length === 2 && !document.querySelector('.code-result, #code-source-preview mark, .code-node[data-state="done"]')`), 'restored transient result or lost source')
@@ -162,7 +162,7 @@ try {
     await js(`document.querySelector('#run').click();document.querySelector('#code-stop').click()`);await sleep(250)
     expect(await js(`document.querySelector('.code-result')?.textContent.includes('사용자가 계산을 중단')`),'Worker stop failed')
     await click('#run');await waitResult('11');await click('#code-stop-playback')
-    expect(await js(`document.querySelector('.code-result')?.dataset.result==='11'&&!document.querySelector('.code-node[data-state="running"]')`),'replay stop changed calculation')
+    expect(await js(`document.querySelector('.code-result')?.dataset.result==='11'&&document.querySelector('#code-stop-playback').getAttribute('aria-pressed')==='false'`),'replay stop changed calculation')
     await click('#run');await click('#manual-tab');await sleep(300);await click('#code-tab')
     expect(await js(`!document.querySelector('.code-result')&&!document.querySelector('.code-node[data-state="done"],.code-node[data-state="running"]')`),'Worker reply leaked after mode switch')
     await click('#manual-tab')
@@ -187,7 +187,7 @@ try {
     await sleep(1400)
     const after = await snapshot(), p = JSON.parse(after)
     expect(Object.values(p.functionBodies.main).some(n => n.label === 'result' && n.value === '8'), 'manual result not 8')
-    await send('Page.reload'); await sleep(900)
+    await reloadApp(js)
     expect(await snapshot() === after, 'manual autosave did not restore')
     expect(await js(`document.querySelectorAll('.execution-mark').length === 0`), 'manual transient animation restored')
     await click('#code-tab')
