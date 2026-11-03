@@ -1040,19 +1040,60 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await sleep(700)
     expect(JSON.stringify(await project()) === saved, 'JSON import changed existing graph')
     expect(!(await js(`document.querySelector('#run').textContent.includes('채점')`)), 'Run still routed to grading')
-    await setField('#template', 'clickCounter'); await sleep(600)
-    await js(`document.querySelector('#run').click()`); await sleep(500)
-    expect(await js(`!document.querySelector('#play-panel').hidden`), 'click counter did not open')
-    await js(`document.querySelector('[data-play="toggle"]').click()`)
     const label = () => js(`document.querySelector('.play-view').textContent`)
+    const logLength = () => js(`document.querySelectorAll('.play-log li').length`)
+    const close = () => js(`document.querySelector('[data-play="close"]').click()`)
+    const start = async template => {
+      if (template) { await setField('#template', template); await sleep(500) }
+      await js(`document.querySelector('#run').click()`); await sleep(500)
+      expect(await js(`!document.querySelector('#play-panel').hidden`), 'game did not open: ' + (template || 'current'))
+      await js(`document.querySelector('[data-play="toggle"]').click()`)
+    }
+    const press = async () => {
+      const button = await portCenter('.play-view button')
+      await mouse('mousePressed', button.x, button.y); await mouse('mouseReleased', button.x, button.y); await sleep(200)
+    }
+    await start('blankGame')
+    expect((await label()).includes('Count: 0'), 'blank game picked up a different project Model')
+    await press(); await press()
+    expect((await label()).includes('Count: 2') && await logLength() === 2, 'blank game did not record two clicks')
+    await close()
+    await start('clickCounter')
     const before = await label()
-    const button = await portCenter('.play-view button')
-    await mouse('mousePressed', button.x, button.y); await mouse('mouseReleased', button.x, button.y); await sleep(250)
-    expect(await label() !== before && await js(`document.querySelectorAll('.play-log li').length === 1`), 'one click did not update game exactly once')
+    expect(before.includes('Clicks: 0') && await logLength() === 0, 'counter restored the blank game Model')
+    await press()
+    const after = await label()
+    expect(after !== before && await logLength() === 1, 'one click did not update game exactly once')
+    await close()
+    await start()
+    expect(await label() === after && await logLength() === 1, 'same game restart lost its snapshot')
+    await close()
+    await reloadApp(js)
+    await start()
+    expect(await label() === after && await logLength() === 1, 'reload lost the counter snapshot')
     await js(`document.querySelector('[data-play="reset"]').click()`); await sleep(250)
-    expect(await label() === before && await js(`document.querySelectorAll('.play-log li').length === 0`), 'Reset game did not restore initial state')
-    await js(`document.querySelector('[data-play="close"]').click()`)
-    return 'JSON import preserved; click once → one message; Reset game restored'
+    expect(await label() === before && await logLength() === 0, 'Reset game did not restore initial state')
+    await close()
+    await start('blankGame')
+    expect((await label()).includes('Count: 2') && await logLength() === 2, 'switching back lost the blank game snapshot')
+    await close()
+    // Recreate the old autosave format using the model the real game saved.
+    const legacy = await js(`(() => {
+      const project = JSON.parse(localStorage.getItem('hs-simulate:project'))
+      const key = 'hs-simulate:game:v2:' + encodeURIComponent(project.projectId) + ':main'
+      const { model, log, time, savedAt } = JSON.parse(localStorage.getItem(key))
+      const old = JSON.stringify({ model, log, time, savedAt, entry:'main', modelType:'Model' })
+      delete project.projectId
+      localStorage.setItem('hs-simulate:project', JSON.stringify(project))
+      localStorage.setItem('hs-simulate:game', old)
+      return old
+    })()`)
+    await reloadApp(js)
+    await start()
+    expect((await label()).includes('Count: 2') && await logLength() === 2, 'compatible legacy save was not restored')
+    expect(await js(`localStorage.getItem('hs-simulate:game')`) === legacy, 'legacy snapshot was overwritten')
+    await close()
+    return 'JSON import, separate game slots, rerun, reload, Reset and compatible legacy migration'
   })
   await check('narrow layouts keep project and run controls accessible; inspector remains reopenable', async () => {
     for (const width of [900, 700, 560]) {

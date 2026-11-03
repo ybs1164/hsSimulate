@@ -74,11 +74,11 @@ export class SourceDocument {
   defaultFunction(functions) {
     return functions.find(f => f.name === 'result' && !f.arity) || functions.find(f => !f.arity) || functions[0]
   }
-  convert(version = (this.document?.version || 0) + 1, persist = true) {
+  convert(version = (this.document?.version || 0) + 1, persist = true, preferredModule = this.moduleName) {
     try {
       const next = this.files ? compileSourceFiles(this.files, version) : compileSource(this.draft, version)
       const old = this.document?.functions.find(fn => fn.id === this.selected)
-      const module = next.files.find(file => file.moduleName === this.moduleName) || next.files.find(file => file.id === this.fileId) || next.files[0]
+      const module = next.files.find(file => file.moduleName === preferredModule) || next.files.find(file => file.id === this.fileId) || next.files[0]
       const functions = next.functions.filter(fn => fn.moduleName === module.moduleName)
       const target = (this.files && functions.find(fn => fn.name === old?.name)) || this.defaultFunction(functions)
       this.document = next; this.convertedRevision = this.revision

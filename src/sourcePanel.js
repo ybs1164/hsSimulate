@@ -7,12 +7,14 @@ import { createSourceHistory, describeTraceValue } from './sourceHistory.js'
 import { addTraceInspector } from './sourceDebuggerPanel.js'
 
 // Read-only analysis uses the existing Graph area, never loadProject/autosave.
-export function initSourcePanel({ onEnter, onLeave }) {
+export function initSourcePanel({ onEnter, onLeave, onLayoutChange, onShowGraph }) {
   const workspace = document.querySelector('.workspace'), sidebar = workspace.querySelector('.sidebar')
+  const heading = sidebar.querySelector('.side-heading h1')
+  const manualTitle = heading.textContent
   const pasted = new SourceDocument({ save: data => localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(data)) })
   const imported = new SourceDocument({ fileMode: true, save: data => localStorage.setItem(SOURCE_FILES_STORAGE_KEY, JSON.stringify(data)) })
   const modeKey = 'hs-simulate:code-source-mode'
-  let model = pasted, fileRequest = 0
+  let model = pasted, fileRequest = 0, draftTarget = null
   let active = false, selectedNode = null, calculating = false, generation = 0
   const runner=createSourceRunner()
   const show=formatSourceValue
@@ -21,35 +23,52 @@ export function initSourcePanel({ onEnter, onLeave }) {
   ;[...sidebar.children].filter(el => !el.matches('.side-heading, .workspace-resizer')).forEach(el => manual.append(el))
   const tabs = document.createElement('div')
   tabs.className = 'code-mode-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Workspace 모드')
-  tabs.innerHTML = '<button id="code-tab" type="button" role="tab" aria-controls="code-pane" aria-selected="false">코드</button><button id="manual-tab" type="button" role="tab" aria-controls="manual-tools" aria-selected="true">함수</button>'
+  tabs.innerHTML = '<button id="code-tab" type="button" role="tab" aria-controls="code-pane" aria-selected="false">코드</button><button id="manual-tab" type="button" role="tab" aria-controls="manual-tools" aria-selected="true">수동 그래프</button>'
   manual.id = 'manual-tools'; manual.setAttribute('role', 'tabpanel'); manual.setAttribute('aria-labelledby', 'manual-tab')
   const pane = document.createElement('section')
   pane.className = 'code-pane'; pane.id = 'code-pane'; pane.hidden = true; pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-labelledby', 'code-tab')
   pane.innerHTML = `<div class="code-file-controls">
+      <button type="button" class="tool-button" id="code-open-files">.hs 파일 열기</button>
       <button type="button" class="tool-button" id="code-paste-mode">붙여넣기</button>
       <button type="button" class="tool-button" id="code-files-mode">파일 작업</button>
-      <button type="button" class="tool-button" id="code-open-files">.hs 파일 열기</button>
       <input type="file" id="code-file-input" aria-label=".hs 파일 선택" accept=".hs" multiple hidden>
     </div>
     <div id="code-file-controls" hidden>
-      <label for="code-file-view">원문 파일</label>
+      <label for="code-file-view">현재 보고 있는 파일</label>
       <select id="code-file-view"></select>
       <button type="button" class="tool-button" id="code-remove-file">현재 파일 제거</button>
     </div>
     <p id="code-file-status" role="status" hidden></p>
-    <label id="code-input-label" for="code-input">Haskell 코드</label><textarea id="code-input" spellcheck="false" aria-describedby="code-support"></textarea>
+    <div id="code-module-controls" hidden><label for="code-module">평가 대상 모듈</label><select id="code-module"></select></div>
+    <label id="code-input-label" for="code-input">편집 원문</label><textarea id="code-input" wrap="off" spellcheck="false" aria-describedby="code-support"></textarea>
     <button type="button" id="code-convert" class="tool-button primary">그래프로 변환</button>
-    <div class="code-run-controls"><button type="button" class="tool-button" id="code-stop" disabled>계산 중단</button></div>
     <p id="code-status" role="status" aria-live="polite"></p>
+    <button type="button" id="code-error-location" class="tool-button" hidden>편집 원문의 오류 위치 열기</button>
+    <section class="code-target" aria-labelledby="code-target-heading">
+      <h2 id="code-target-heading">평가 대상</h2>
+      <p id="code-target-name"></p>
+      <ul id="code-functions" aria-label="분석 함수와 값"></ul>
+    </section>
+    <details id="code-preview-details"><summary id="code-preview-version">변환된 원문 · 아직 변환되지 않음</summary>
+      <pre id="code-source-preview" tabindex="0" aria-label="변환된 원문"></pre>
+    </details>
     <details id="code-support"><summary>지원 범위와 제한</summary><p>정의는 한 줄씩, 모든 정의에 구체적인 Int/Bool·리스트·함수 시그니처가 필요합니다. 정수·True/False·+ − *·비교·&amp;&amp;·||·if then else·abs/div/mod·백틱 호출·괄호·변수·자기/상호 재귀·빈 줄·-- 주석을 지원합니다. 리스트([Int]·[Bool], 중첩 가능), :·++, 순서 있는 []·[x]·(x:xs)·변수·_ 패턴, 함수 값·부분 적용, map/filter/지연 foldl, 오른쪽 연산자 섹션(< pivot)을 지원합니다. 정의의 인자는 전부 명시합니다. 음수 인자는 (-2)처럼 괄호로 감싸세요.</p><p>사용자가 선택한 UTF-8 .hs 파일만 불러옵니다. 파일당 40,000자, 전체 120,000자, 파일 12개까지 지원합니다. 로컬 module·export·import·qualified·as와 함수/값 목록을 지원합니다. 명시적 Prelude import·hiding·재내보내기·순환 모듈·외부 라이브러리·IO·튜플·가드·let/where·사용자 data·사용자 다형 시그니처는 미지원입니다. 모든 중간 계산은 ±9007199254740991 이내여야 합니다. Graph JS 실행이며 GHC 실행이 아닙니다. 호출 깊이 48·평가 깊이 128, 함수/노드/리스트 검사 각 6,000회, 계산 1.5초(Worker 강제 종료 4초), 노드 기록 20,000개가 상한입니다. 탐색 기록은 최대 4,000단계와 값 참조 10,000개까지 보관하며 초과분은 생략합니다. 리스트 표시는 앞 100개·총 300개·중첩 8단계까지만 요구하며, 나머지는 강제로 계산하지 않고 …로 표시합니다. 계산 한도를 넘으면 오류로 중단합니다. 계산 중단과 기록 재생 중단은 별개입니다.</p><p>분석 문서는 수동 프로젝트와 별도 저장됩니다. 생성 그래프는 읽기 전용이며 원문으로의 역변환은 없습니다.</p></details>
-    <div id="code-module-controls" hidden><label for="code-module">분석 대상 모듈</label><select id="code-module"></select></div>
-    <h2>분석 함수 / 값</h2><ul id="code-functions"></ul>
-    <label for="code-source-preview">변환된 원문 · 노드를 눌러 위치 확인</label><pre id="code-source-preview" tabindex="0"></pre>`
+    `
   sidebar.querySelector('.side-heading').after(tabs, manual, pane)
   const input = pane.querySelector('textarea'), status = pane.querySelector('#code-status'), preview = pane.querySelector('pre')
   const fileInput = pane.querySelector('#code-file-input'), fileView = pane.querySelector('#code-file-view')
   const moduleSelect = pane.querySelector('#code-module'), fileStatus = pane.querySelector('#code-file-status')
   const fileButton = pane.querySelector('#code-open-files'), removeButton = pane.querySelector('#code-remove-file')
+  const previewDetails = pane.querySelector('#code-preview-details'), previewVersion = pane.querySelector('#code-preview-version')
+  const errorLocation = pane.querySelector('#code-error-location')
+  const stopButton = document.createElement('button')
+  stopButton.type = 'button'
+  stopButton.id = 'code-stop'
+  stopButton.className = 'tool-button'
+  stopButton.textContent = '계산 중단'
+  stopButton.hidden = true
+  stopButton.disabled = true
+  document.querySelector('#run').after(stopButton)
   const surface = document.createElement('div')
   surface.className = 'code-surface'; surface.hidden = true
   surface.innerHTML = '<div class="code-graph-heading"></div><div class="code-graph-sheet"></div>'
@@ -87,15 +106,15 @@ export function initSourcePanel({ onEnter, onLeave }) {
     selectedNode = frameId = selectedCallId = graphOwner = stepNode = null
     viewPositions.clear()
   }
-  pane.querySelector('#code-stop').onclick = () => {
+  stopButton.onclick = () => {
     clear()
     model.result = { error: { message: '사용자가 계산을 중단했습니다.' }, events: [] }
     render()
   }
   const control = id => controls.querySelector('#' + id)
   control('code-history-first').onclick = () => history.seek(0)
-  control('code-history-prev').onclick = () => history.seek(history.position - 1)
-  control('code-history-next').onclick = () => history.seek(history.position + 1)
+  control('code-history-prev').onclick = () => { previewDetails.open = true; history.seek(history.position - 1) }
+  control('code-history-next').onclick = () => { previewDetails.open = true; history.seek(history.position + 1) }
   control('code-stop-playback').onclick = () => history.playing ? history.pause() : history.play()
   control('code-history-find').onclick = findNode
 
@@ -129,6 +148,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
   function showCall(call, atSite = false) {
     if (!call) return
     history.pause(false)
+    previewDetails.open = true
     selectedCallId = call.callId
     const site = atSite ? call.site : null
     showPosition(site?.functionId || call.functionId, site?.callId || call.callId, site?.nodeId || call.nodeId,
@@ -139,7 +159,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
     input.value = model.draft
     fileView.value = model.fileId || ''
     const filename = model.files?.find(file => file.id === model.fileId)?.name
-    pane.querySelector('#code-input-label').textContent = filename || 'Haskell 코드'
+    pane.querySelector('#code-input-label').textContent = filename ? `편집 원문 · ${filename}` : '편집 원문 · Haskell'
   }
   function highlight(range) {
     model.highlight = range && !model.stale ? { ...range, version: model.document.version } : null
@@ -203,12 +223,25 @@ export function initSourcePanel({ onEnter, onLeave }) {
     render()
   }
   moduleSelect.onchange = () => {
+    if (model.stale) {
+      draftTarget = moduleSelect.value
+      render()
+      return
+    }
     clear()
     model.selectModule(moduleSelect.value)
     const file = model.document.files.find(file => file.moduleName === model.moduleName)
     if (model.viewFile(file?.id, true)) syncFileView()
     render()
   }
+  errorLocation.onclick = () => {
+    const error = model.error
+    if (!error?.span) return
+    if (model.viewFile(error.fileId)) syncFileView()
+    input.focus()
+    input.setSelectionRange(error.span.start, error.span.end)
+  }
+  previewDetails.addEventListener('toggle', () => { if (previewDetails.open) scrollPreview() })
 
   function mode(value) {
     if (active === value) return
@@ -217,6 +250,11 @@ export function initSourcePanel({ onEnter, onLeave }) {
     active = value
     if (active) onEnter()
     workspace.classList.toggle('code-mode', active)
+    heading.textContent = active ? 'Haskell 코드 분석' : manualTitle
+    stopButton.hidden = !active
+    document.querySelector('.project-menu').open = false
+    document.querySelector('.mobile-tabs [data-view="sidebar"]').textContent = active ? '코드' : '블록'
+    onLayoutChange(active)
     manual.hidden = active; pane.hidden = !active; surface.hidden = !active; inspector.hidden = !active; summary.hidden = !active; crumb.hidden = !active
     tabs.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String((b.id === 'code-tab') === active)))
     for (const button of commands) {
@@ -240,8 +278,11 @@ export function initSourcePanel({ onEnter, onLeave }) {
   input.addEventListener('input', () => { clear(); model.edit(input.value); render() })
   pane.querySelector('#code-convert').onclick = () => {
     clear()
-    if (model.convert() && model.files && !model.storageError) {
-      try { localStorage.setItem(modeKey, 'files') } catch { /* file data is already saved */ }
+    if (model.convert(undefined, true, model.files ? (moduleSelect.value || model.moduleName) : undefined) && model.files) {
+      draftTarget = null
+      if (!model.storageError) {
+        try { localStorage.setItem(modeKey, 'files') } catch { /* file data is already saved */ }
+      }
     }
     reportFiles('')
     render()
@@ -264,12 +305,14 @@ export function initSourcePanel({ onEnter, onLeave }) {
   }
   const functionName = fn => model.files ? `${fn.moduleName}.${fn.name}` : fn.name
   function renderStatus() {
-    status.textContent = model.error ? (model.document ? `재변환 필요 · ${model.error.message}` : model.error.message)
+    const errorLabel = { syntax: '구문 오류', names: '이름 오류', types: '타입 오류', support: '미지원', dependency: '모듈 의존성 오류', range: '범위 오류' }[model.error?.stage]
+    status.textContent = model.error ? [model.document && '재변환 필요', errorLabel, model.error.message].filter(Boolean).join(' · ')
       : model.stale ? (model.document ? `재변환 필요 · 아래 그래프는 이전 v${model.document.version}입니다` : model.files ? '.hs 파일을 선택하고 변환하세요.' : '코드를 붙여 넣고 변환하세요')
         : `v${model.document.version} 변환 완료 · 그래프는 읽기 전용`
     if (model.storageError) status.append(' · 브라우저 저장 실패. 현재 편집은 이 탭에 남아 있습니다.')
     status.dataset.state = model.error ? 'error' : model.stale ? 'stale' : 'ready'
     status.dataset.stage = model.error?.stage || ''
+    errorLocation.hidden = !model.error?.span || !model.error.fileId
   }
   function render() {
     refreshRunLabel()
@@ -278,24 +321,33 @@ export function initSourcePanel({ onEnter, onLeave }) {
     pane.querySelector('#code-paste-mode').setAttribute('aria-pressed', String(!fileMode))
     pane.querySelector('#code-files-mode').setAttribute('aria-pressed', String(fileMode))
     pane.querySelector('#code-file-controls').hidden = !fileMode
-    pane.querySelector('#code-module-controls').hidden = !fileMode || !model.document
     fileView.replaceChildren(...(model.files || []).map(file => {
       const name = model.sourceFile(file.id)?.moduleName || file.moduleName || '모듈 미확인'
-      return new Option(`${file.name} · ${name}`, file.id)
+      const option = new Option(`${file.name} · ${name}`, file.id)
+      option.title = option.textContent
+      return option
     }))
     fileView.value = model.fileId || ''
-    moduleSelect.replaceChildren(...(model.document?.files || []).map(file => new Option(`${file.moduleName} · ${file.name}`, file.moduleName)))
-    moduleSelect.value = model.moduleName || ''
+    const modules = fileMode ? (model.stale ? model.files.filter(file => file.moduleName) : model.document.files) : []
+    pane.querySelector('#code-module-controls').hidden = modules.length === 0
+    moduleSelect.replaceChildren(...modules.map(file => new Option(`${file.moduleName} · ${file.name}`, file.moduleName)))
+    const wanted = model.stale ? (draftTarget || model.moduleName) : model.moduleName
+    moduleSelect.value = modules.find(file => file.moduleName === wanted)?.moduleName ||
+      modules.find(file => file.id === model.fileId)?.moduleName || modules[0]?.moduleName || ''
+    moduleSelect.title = moduleSelect.selectedOptions[0]?.textContent || ''
     input.disabled = fileMode && !model.fileId
     removeButton.disabled = input.disabled
     pane.querySelector('#code-convert').disabled = input.disabled
+    pane.querySelector('#code-target-name').textContent = model.stale && moduleSelect.value
+      ? `${moduleSelect.value} · 변환 후 값을 선택하세요.`
+      : current() ? functionName(current()) : '변환 후 함수나 값을 선택하세요.'
     const list = pane.querySelector('ul'); list.replaceChildren()
     for (const fn of model.document?.functions || []) {
       if (fileMode && fn.moduleName !== model.moduleName) continue
       const li = document.createElement('li'), button = document.createElement('button')
       button.type = 'button'; button.dataset.codeFunction = fn.id; button.textContent = `${fn.name} :: ${fn.signature}`
       button.setAttribute('aria-pressed', String(model.selected === fn.id))
-      button.onclick = () => { clear(); model.selectFunction(fn.id); highlight(model.highlight); render() }
+      button.onclick = () => { clear(); model.selectFunction(fn.id); highlight(model.highlight); render(); onShowGraph() }
       li.append(button); list.append(li)
     }
     crumb.textContent = `코드 / ${current() ? functionName(current()) : '미변환'}`
@@ -306,13 +358,23 @@ export function initSourcePanel({ onEnter, onLeave }) {
     const file = model.sourceFile(), source = file?.source || '', range = model.highlight
     preview.dataset.fileId = file?.id || ''
     preview.dataset.filename = file?.name || ''
+    fileView.title = fileView.selectedOptions[0]?.textContent || ''
+    previewVersion.textContent = file ? `변환된 원문 v${model.document.version}${file.name ? ' · ' + file.name : ''}` : '변환된 원문 · 아직 변환되지 않음'
     if (!range || model.stale || range.fileId !== file?.id) { preview.textContent = source; return }
     const mark = document.createElement('mark'); mark.textContent = source.slice(range.start, range.end)
     mark.dataset.start = range.start; mark.dataset.end = range.end; mark.dataset.version = range.version
     mark.dataset.fileId = file.id
     preview.append(source.slice(0, range.start), mark, source.slice(range.end))
     input.setSelectionRange(range.start, range.end)
-    mark.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    scrollPreview()
+  }
+  function scrollPreview() {
+    const mark = preview.querySelector('mark')
+    if (!mark || !previewDetails.open) return
+    const top = mark.offsetTop
+    if (top < preview.scrollTop || top + mark.offsetHeight > preview.scrollTop + preview.clientHeight) {
+      preview.scrollTop = Math.max(0, top - preview.clientHeight / 3)
+    }
   }
   function renderInspector() {
     inspector.replaceChildren()
@@ -329,6 +391,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       if (range.targetDefinition) {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'tool-button'; button.textContent = '호출한 함수 정의로 이동'
         button.onclick = () => {
+          previewDetails.open = true
           if (!model.files) {
             clear()
             model.selectFunction(range.targetDefinition)
@@ -370,7 +433,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       }
       if(model.result.error?.callSpan){
         const button=document.createElement('button');button.type='button';button.className='tool-button';button.textContent='오류가 전달된 호출 위치'
-        button.onclick=()=>{const range=model.result.error.callSpan;history.pause(false);showPosition(range.owner,null,null,range)};inspector.append(button)
+        button.onclick=()=>{const range=model.result.error.callSpan;history.pause(false);previewDetails.open=true;showPosition(range.owner,null,null,range)};inspector.append(button)
       }
     }
   }
@@ -423,6 +486,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       group.append(label, type, tooltip, el('text', { x: 0, y: -7, class: 'code-node-state' }))
       const select = () => {
         history.pause(false)
+        previewDetails.open = true
         selectedNode = node
         highlight(model.document.locations[node.id === 'output' ? viewed.id + ':output' : node.id])
         renderSource()
@@ -447,7 +511,7 @@ export function initSourcePanel({ onEnter, onLeave }) {
       node.querySelector('.code-node-state').textContent = ({ running: '계산 중', done: '완료', error: '오류' })[node.dataset.state] || ''
     }
     if (!active) return
-    pane.querySelector('#code-stop').disabled=!calculating
+    stopButton.disabled=!calculating
     controls.hidden = !history.length
     const { position, length, playing } = history
     control('code-history-first').disabled = position === 0

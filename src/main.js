@@ -18,6 +18,7 @@ import { TAKEABLE_TYPES, customizeDerived, isPristineOverride, libraryTypeProble
 import { BUILTIN_CLASSES, METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
 import { createGame, isProgram } from './runtime.js'
+import { gameStorageSlot, migrateLegacyGame, readGameSave, writeGameSave } from './gameStorage.js'
 import { asciiType, printDefinitionTokens, printNodeText } from './haskellPrint.js'
 import { buildDefinitionView, isEditableView, restoreDefinition, takeOverDefinition, viewIdOf } from './definitionViews.js'
 import { addParameter, hasVariadicSlots, moveParameter, removeParameter, renameFunction, renameParameter } from './signature.js'
@@ -49,7 +50,7 @@ const app = document.querySelector('#app')
 app.innerHTML = `
   <main class="shell">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">λ</span><span>hs / simulate</span><span class="beta">BETA</span></div>
+      <div class="brand"><span class="brand-mark">λ</span><span>hs / simulate</span><span class="beta">v1</span></div>
       <div class="top-actions"><button class="tool-button" id="help">도움말</button><button class="tool-button" id="toggle-inspector" aria-controls="inspector-panel" aria-expanded="true">속성 패널</button></div>
     </header>
     <section class="workspace">
@@ -4028,9 +4029,8 @@ function setupRunButton() {
 // and time runs through `step` in fixed slices. The game state is saved
 // with a timestamp; reopening it applies the time away — in one call if
 // `step` passes the monoid-action law, otherwise slice by slice.
-const GAME_KEY = 'hs-simulate:game'
 const playPanel = document.querySelector('#play-panel')
-let play = null // { game, entry, modelType, speed, running, last, acc, frame, saveTimer, law }
+let play = null // { game, slot, entry, modelType, speed, running, last, acc, frame, saveTimer, law }
 
 // The Program the function `id` evaluates to (or null), its model type, and
 // whether its `step` is an action of (ℝ≥0, +) — then any span of time is one call.
@@ -4045,24 +4045,25 @@ function programInfo(id) {
     throw error
   }
   if (!isProgram(program)) return null
-  const modelType = programType?.kind === 'app' && programType.fn.kind === 'app' ? programType.fn.arg : null
+  const modelType = programType.fn.arg
   const law = modelType && !ftv(modelType).size
     ? checkFunctionLaw('action', program.args[3], tfun(tcon('Double'), tfun(modelType, modelType)), { ev: evaluator, types })
     : { ok: false, counterexample: 'the model type is not concrete' }
-  return { program, modelType, law }
+  return { program, modelType, messageType: programType.arg, law }
 }
 
 function startGameIfProgram(id) {
   const info = programInfo(id)
   if (!info) return false
-  const { program, modelType, law } = info
+  const { program, modelType, messageType, law } = info
   stopGame()
   const game = createGame(evaluator, program, { exactTime: law.ok })
-  play = { game, entry: id, modelTypeObj: modelType, modelType: modelType ? showQual([], modelType) : '?', speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
+  const slot = gameStorageSlot(projectId, id, modelType, messageType, types)
+  play = { game, slot, entry: id, modelTypeObj: modelType, modelType: showQual([], modelType), speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
   let offline = null
   try {
-    const saved = JSON.parse(localStorage.getItem(GAME_KEY) || 'null')
-    if (saved && saved.entry === id && saved.modelType === play.modelType) {
+    const saved = readGameSave(localStorage, slot)
+    if (saved) {
       game.restore(saved)
       const away = Math.max(0, (Date.now() - saved.savedAt) / 1000) // capped by the program's maxOffline
       if (away > 1) offline = { away: Math.min(away, game.maxOffline), ...game.advance(away) }
@@ -4112,9 +4113,7 @@ function gameError(error) {
 
 function saveGame() {
   if (!play) return
-  try {
-    localStorage.setItem(GAME_KEY, JSON.stringify({ ...play.game.snapshot(), entry: play.entry, modelType: play.modelType, savedAt: Date.now() }))
-  } catch {}
+  try { writeGameSave(localStorage, play.slot, play.game.snapshot()) } catch { /* storage may be unavailable */ }
 }
 
 function stopGame() {
@@ -4237,12 +4236,13 @@ const TEMPLATES = { clickCounter: ['the click-counter example', buildClickCounte
   vending: ['the vending machine', buildVending], nim: ['the nim game', buildNim], damage: ['the damage pipeline', buildDamage], rps: ['rock, paper, scissors', buildRps], simon: ['the simon game', buildSimon], highLow: ['the high-low game', buildHighLow] }
 function setupTemplates() {
   document.querySelector('#template').onchange = (event) => {
-    const [name, build] = TEMPLATES[event.target.value] || []
+    const template = event.target.value
+    const [name, build] = TEMPLATES[template] || []
     event.target.value = ''
     if (!build) return
-    stopGame()
     state.activeFunction = null
-    loadProject(mergeBuiltins(upgradeProject(parseProject(serializeProject(build()))), builtinNodes, builtinBodies))
+    const project = serializeProject({ ...build(), projectId: 'template:' + template })
+    loadProject(mergeBuiltins(upgradeProject(parseProject(project)), builtinNodes, builtinBodies))
     // Newly loaded templates teach the direct matching workflow. Imported
     // projects retain their original case calls and offer explicit conversion.
     for (const [ownerId, graph] of Object.entries(functionBodies)) for (const n of Object.values(graph)) {
@@ -4283,12 +4283,15 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove('visible'), 3200)
 }
 // --- Project snapshots, autosave, undo/redo ---------------------------------
-function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, instances, layouts, entry: entryId, outputId }) }
+let projectId
+function currentSnapshot() { return serializeProject({ nodes, functionBodies, types, classes, instances, layouts, entry: entryId, outputId, projectId }) }
 // Replaces the live project with `project` (already parsed + merged) in place
 // — `nodes`/`functionBodies` are shared with the evaluator, so they're
 // refilled rather than reassigned.
 function loadProject(project) {
+  stopGame()
   resetExecution()
+  projectId = project.projectId || 'project:' + [...crypto.getRandomValues(new Uint32Array(4))].map(part => part.toString(16).padStart(8, '0')).join('')
   Object.keys(nodes).forEach((id) => delete nodes[id])
   Object.assign(nodes, project.nodes)
   Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
@@ -4308,7 +4311,7 @@ function loadProject(project) {
   renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
 }
 function restoreSnapshot(snapshot) { loadProject(parseProject(snapshot)) }
-const defaultSnapshot = serializeProject(createBlankProject(builtinNodes, builtinBodies))
+const defaultSnapshot = serializeProject(mergeBuiltins(createBlankProject(builtinNodes, builtinBodies), builtinNodes, builtinBodies))
 let checkpointTimer = null
 function scheduleCheckpoint() {
   clearTimeout(checkpointTimer)
@@ -4480,7 +4483,7 @@ function setupSidebarButtons() {
 }
 function setupWorkspaceResize() {
   const workspace = document.querySelector('.workspace')
-  initWorkspaceResize({ workspace, sidebar: workspace.querySelector('.sidebar'), onResizeStart: () => {
+  return initWorkspaceResize({ workspace, sidebar: workspace.querySelector('.sidebar'), onResizeStart: () => {
     endDrag(); endWire()
     if (typeDrag) endTypeDrag(null)
     state.pan = null
@@ -4531,10 +4534,13 @@ function setupMobileTabs() {
 // is on screen.
 function restoreSavedProject() {
   let restoredProject = false
+  let needsProjectId = false
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) {
-      loadProject(mergeBuiltins(upgradeProject(parseProject(saved)), builtinNodes, builtinBodies))
+      const project = parseProject(saved)
+      needsProjectId = !project.projectId
+      loadProject(mergeBuiltins(upgradeProject(project), builtinNodes, builtinBodies))
       restoredProject = true
     }
   } catch (error) {
@@ -4545,7 +4551,16 @@ function restoreSavedProject() {
   if (initialMain) enterFunction(initialMain.id)
   renderPreludeLibrary(); renderFunctionLibrary(); updateInspector(); resize(); fitToView()
   history.reset(currentSnapshot())
-  if (!restoredProject) persist(currentSnapshot())
+  if (needsProjectId && restoredProject && entryId) {
+    try {
+      const type = valueTypeOfEntry(typePass(nodes).perNode.get(entryId))
+      if (returnsProgram(type)) {
+        const model = type.fn.arg, message = type.arg
+        migrateLegacyGame(localStorage, gameStorageSlot(projectId, entryId, model, message, types), { entry: entryId, model, message, types })
+      }
+    } catch { /* The unowned legacy save remains available in storage. */ }
+  }
+  if (!restoredProject || needsProjectId) persist(currentSnapshot())
   updateHistoryButtons()
 }
 
@@ -4569,13 +4584,15 @@ function main() {
   setupKeyboard()
   setupToolbar()
   setupSidebarButtons()
-  setupWorkspaceResize()
+  const setWorkspaceMode = setupWorkspaceResize()
   setupInspectorButtons()
   setupMobileTabs()
   restoreSavedProject()
   codeAnalysis = initSourcePanel({
     onEnter() { resetExecution(); endDrag(); endWire(); stopGame(); if (typeDrag) endTypeDrag(null); state.pan = null; canvas.classList.remove('panning') },
     onLeave() { updateRunLabel(); resize() },
+    onLayoutChange: setWorkspaceMode,
+    onShowGraph() { showMobileView('canvas') },
   })
 }
 main()

@@ -14,7 +14,16 @@ const chrome = spawn(chromePath, ['--headless=new', '--no-first-run', '--no-defa
 const sleep = ms => new Promise(r => setTimeout(r, ms)), expect = (value, why) => { if (!value) throw new Error(why) }
 let ws, serial = 0, failures = 0
 const pending = new Map(), errors = []
-const send = (method, params = {}) => new Promise(r => { const id = ++serial; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })) })
+const send = (method, params = {}) => new Promise((resolve, reject) => {
+  if (ws.readyState !== WebSocket.OPEN) return reject(new Error(`Chrome connection closed during ${method}`))
+  const id = ++serial
+  const timer = setTimeout(() => {
+    pending.delete(id)
+    reject(new Error(`Chrome did not answer ${method} (#${id})`))
+  }, 8000)
+  pending.set(id, (error, response) => { clearTimeout(timer); error ? reject(error) : resolve(response) })
+  ws.send(JSON.stringify({ id, method, params }))
+})
 async function js(expression) {
   const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
   if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || r.result.exceptionDetails.text)
@@ -45,9 +54,17 @@ try {
   await new Promise(r => ws.addEventListener('open', r))
   ws.addEventListener('message', event => {
     const m = JSON.parse(event.data)
-    if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
+    if (m.id && pending.has(m.id)) {
+      pending.get(m.id)(m.error && new Error(m.error.message), m)
+      pending.delete(m.id)
+    }
     if (m.method === 'Runtime.exceptionThrown') errors.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text)
     if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') errors.push(m.params.args.map(a => a.description || a.value).join(' '))
+  })
+  ws.addEventListener('close', event => {
+    const error = new Error(`Chrome connection closed (${event.code} ${event.reason})`)
+    for (const settle of pending.values()) settle(error)
+    pending.clear()
   })
   await send('Runtime.enable'); await send('Page.enable')
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
@@ -80,7 +97,7 @@ try {
     expect(same(await allStorage(),manualBaseline),'manual/progress storage changed')
     return {value:await js(`document.querySelector('.code-result').dataset.result`),text:await js(`document.querySelector('.code-result').textContent`)}
   }
-  async function checkRow(list,row,run){list.push(row);try{await run(row);row.pass=true;console.log('PASS',row.id||row.name,row.value||'')}catch(e){row.pass=false;row.failure=e.stack;failures++;await shot('lists-failure-'+failures+'.png');console.log('FAIL',row.id||row.name,e.message)}saveReport()}
+  async function checkRow(list,row,run){list.push(row);try{await run(row);row.pass=true;console.log('PASS',row.id||row.name,row.value||'')}catch(e){row.pass=false;row.failure=e.stack;failures++;console.log('FAIL',row.id||row.name,e.message);saveReport();if(ws.readyState!==WebSocket.OPEN)throw e;await shot('lists-failure-'+failures+'.png')}saveReport()}
   // A nonempty disposable project; the user's profile is never opened.
   await js(`(()=>{const t=document.querySelector('#template');t.value='blankGame';t.dispatchEvent(new Event('change'));localStorage.setItem('hs-simulate:exercises','{"preserve":true}')})()`);await sleep(300)
   await click('#code-tab');const manualBaseline=await allStorage()

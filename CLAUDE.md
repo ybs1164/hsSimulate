@@ -41,6 +41,8 @@ Haskell 코드의 구조·함수 관계·계산 과정과 오류를 시각적으
 - 과거 학습 UI 모듈(`learningPanel.js`, `exercisePanel.js`)은 제거했다. 학습·과정 데이터와 채점 모듈은 보존하며 기존 localStorage 진행 기록을 삭제하거나 변환하지 않는다.
 - `src/laws.js`: 클래스·함수 법칙 검사기.
 - `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.
+- `src/gameStorage.js`: 편집기의 게임 저장 슬롯을 프로젝트·진입점별로 분리한다. 모델·메시지 구조를 확인해 복원하며 구버전 단일 슬롯은 현재 자동 저장 프로젝트에서 호환 가능한 경우 복사한다. 프로젝트 ID는 JSON·자동 저장·실행 취소로 전달된다.
+- `src/workspaceResize.js`: 코드와 수동 그래프의 너비를 별도 저장한다. 좁은 화면은 기존 하단 탐색을 사용한다.
 - `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력(토큰마다 원래 노드를 가리킴, λ로 이어진 `>>=` 사슬은 `do { x <- m; … }`).
 - `src/definitionViews.js`: 기초·Prelude·유도 함수의 읽기 전용 정의 그래프와, Prelude 함수를 같은 id의 사용자 함수로 넘겨받기(원시 함수는 `f#`에서 시작, 클래스 메서드는 인스턴스로).
 - `src/library.js`: Prelude 함수 표와 하스켈로 선언한 Prelude 타입(생성자·분기 함수, 곱 `(a, b)`와 `uncurry`), 그 원시 함수(`prim:`).
