@@ -97,7 +97,7 @@ export function rpsUnits() {
         tests: [{ args: [], after: ['mine'], expect: 'Nothing' }, { args: [], after: ['score'], expect: '0' }] },
     ]),
     unit('game', 'main', '모두 묶어 가위바위보를 완성해요.', [
-      mainBuild('rps-', { signature: 'Program Model Msg', types: [...all, 'Msg'] }),
+      mainBuild('rps-', { signature: 'IO ()', types: [...all, 'Msg'] }),
     ]),
   ]
 }

@@ -19,7 +19,7 @@ export function locateSourceError(error, file) {
 }
 const reserved = new Set('hiding data newtype type class instance deriving case of let in do infix infixl infixr foreign default'.split(' '))
 const keywords = new Set('if then else module where import qualified as'.split(' '))
-export const SOURCE_OPERATORS = { '||': 2, '&&': 3, '==': 4, '/=': 4, '<': 4, '<=': 4, '>': 4, '>=': 4, ':':5, '++':5, '+': 6, '-': 6, '*': 7 }
+export const SOURCE_OPERATORS = { '$': 0, '>>': 1, '>>=': 1, '||': 2, '&&': 3, '==': 4, '/=': 4, '<': 4, '<=': 4, '>': 4, '>=': 4, ':':5, '++':5, '+': 6, '-': 6, '*': 7 }
 export function tokenizeSource(source) {
   const out = []
   const fail = (message, start, end = start + 1) => { throw new SourceError('syntax', message, source, { start, end }) }
@@ -43,12 +43,28 @@ export function tokenizeSource(source) {
       if (reserved.has(word)) fail(`${word} 구문은 이번 버전에서 지원하지 않습니다.`, start, i)
       push(keywords.has(word) ? word : ['True','False'].includes(word) ? 'boolean' : 'name', start); continue
     }
+    if (ch === '"') {
+      i++
+      while (i < source.length && source[i] !== '"') {
+        if (source[i] === '\n') fail('문자열 리터럴은 한 줄 안에서 닫아야 합니다.', start, i)
+        if (source[i] === '\\') i++
+        i++
+      }
+      if (source[i] !== '"') fail('문자열 리터럴을 닫는 " 가 필요합니다.', start, i)
+      i++; push('string', start); continue
+    }
+    if (ch === "'") {
+      const m = /^'(\\.|[^'\\\n])'/u.exec(source.slice(i))
+      if (!m) fail("문자 리터럴은 'a' 형태로 작성하세요.", start)
+      i += m[0].length; push('char', start); continue
+    }
     if (/[0-9]/.test(ch)) {
       while (/[0-9]/.test(source[i] || '') && i < source.length) i++
       push('integer', start); continue
     }
-    if (['::','->','==','/=','<=','>=','&&','||','++'].includes(source.slice(i,i+2))) { i += 2; push(source.slice(start, i), start); continue }
-    if ('=+-*()<>`[],:'.includes(ch) || (ch === '.' && out.at(-1)?.kind === 'name' && out.at(-1).end === i)) { i++; push(ch, start); continue }
+    if (source.startsWith('>>=', i)) { i += 3; push('>>=', start); continue }
+    if (['::','->','==','/=','<=','>=','&&','||','++','>>'].includes(source.slice(i,i+2))) { i += 2; push(source.slice(start, i), start); continue }
+    if ('=+-*()<>`[],:$'.includes(ch) || (ch === '.' && out.at(-1)?.kind === 'name' && out.at(-1).end === i)) { i++; push(ch, start); continue }
     fail(`지원하지 않는 문자 ${JSON.stringify(ch)}입니다. 튜플·가드·data·let/where 등은 미지원입니다.`, start)
   }
   if (out.length > 8000) fail('코드가 너무 큽니다 (토큰 최대 8,000개).', 0, 0)
@@ -56,6 +72,14 @@ export function tokenizeSource(source) {
   return out
 }
 const span = (a, b = a) => ({ start: a.start, end: b.end })
+const ESCAPES = { n: '\n', t: '\t', '\\': '\\', '"': '"', "'": "'", r: '\r', '0': '\0' }
+/** The text of a string/char literal body with Haskell's simple escapes resolved. */
+function decodeLiteral(body, token) {
+  return body.replace(/\\(.)/gu, (whole, c) => {
+    if (!(c in ESCAPES)) throw new SourceError('syntax', `지원하지 않는 이스케이프 \\${c} 입니다 (\\n \\t \\\\ \\" \\' 지원).`, '', { start: token.start, end: token.end })
+    return ESCAPES[c]
+  })
+}
 const intType = () => ({ kind: 'int' })
 export function parseSource(source) {
   const tokens = tokenizeSource(source)
@@ -101,11 +125,23 @@ export function parseSource(source) {
     while (current().kind === 'newline') i++
   }
   const nested = (fn) => { if (++depth > 100) error('괄호·표현식 중첩은 최대 100단계입니다.'); try { return fn() } finally { depth-- } }
+  function typeAtom() {
+    if (current().kind === '(') {
+      i++
+      if (current().kind === ')') { i++; return { kind: 'unit' } }
+      const inner = nested(type); take(')'); return inner
+    }
+    if(current().kind==='['){i++;const element=nested(type);take(']');return {kind:'list',element}}
+    const token = take('name')
+    if (token.text === 'Int') return intType()
+    if (token.text === 'Bool') return { kind: 'bool' }
+    if (token.text === 'Char') return { kind: 'char' }
+    if (token.text === 'String') return { kind: 'list', element: { kind: 'char' } }
+    if (token.text === 'IO') return { kind: 'io', result: nested(typeAtom) }
+    error('명시적인 Int·Bool·Char·String·()·IO 타입과 이들로 구성한 리스트·함수 타입만 지원합니다.', token)
+  }
   function type() {
-    let left
-    if (current().kind === '(') { i++; left = nested(type); take(')') }
-    else if(current().kind==='['){i++;const element=nested(type);take(']');left={kind:'list',element}}
-    else { const token = take('name'); if (!['Int','Bool'].includes(token.text)) error('명시적인 Int·Bool 타입과 이들로 구성한 리스트·함수 타입만 지원합니다.', token); left = token.text === 'Int' ? intType() : {kind:'bool'} }
+    const left = typeAtom()
     if (current().kind === '->') { i++; return { kind: 'fun', from: left, to: nested(type) } }
     return left
   }
@@ -113,6 +149,8 @@ export function parseSource(source) {
     const token = current()
     if (token.kind === 'integer') { i++; return { kind: 'integer', text: token.text, span: span(token) } }
     if (token.kind === 'boolean') { i++; return { kind: 'boolean', value:token.text==='True', span:span(token) } }
+    if (token.kind === 'string') { i++; return { kind: 'string', value: decodeLiteral(token.text.slice(1, -1), token), text: token.text, span: span(token) } }
+    if (token.kind === 'char') { i++; return { kind: 'char', value: decodeLiteral(token.text.slice(1, -1), token), text: token.text, span: span(token) } }
     if (token.kind === 'name') return reference()
     if (token.kind === '[') {
       i++;const items=[]
@@ -121,6 +159,7 @@ export function parseSource(source) {
     }
     if (token.kind === '(') {
       i++
+      if (current().kind === ')') return { kind: 'unit', span: span(token, take(')')) }
       const op=current()
       if(op.kind in SOURCE_OPERATORS && tokens[i+1].kind===')'){i++;return {kind:'operator',op:op.kind,span:span(token,take(')'))}}
       if(op.kind in SOURCE_OPERATORS && op.kind!=='-'){
@@ -132,7 +171,7 @@ export function parseSource(source) {
   }
   function application() {
     let expr = atom()
-    while (['name', 'integer', 'boolean', '(', '['].includes(current().kind)) {
+    while (['name', 'integer', 'boolean', 'string', 'char', '(', '['].includes(current().kind)) {
       const arg = atom()
       expr = { kind: 'application', fn: expr, arg, span: { start: expr.span.start, end: arg.span.end } }
     }
@@ -155,8 +194,10 @@ export function parseSource(source) {
       if(op.kind==='`'){callee=reference();take('`')}
       if(precedence===4&&left.kind==='binary'&&SOURCE_OPERATORS[left.op]===4)error('비교 연산자는 연속 연결할 수 없습니다. 괄호 또는 &&/||를 사용하세요.',op)
       if (current().kind === '-') error('연산자 뒤 음수는 괄호로 감싸세요. 예: 3 * (-2)')
-      const right = nested(() => expression(precedence + (['&&','||',':','++'].includes(op.kind)?0:1)))
-      left = { kind: 'binary', op: callee?.name||op.kind, callee, left, right, span: { start: left.span.start, end: right.span.end } }
+      const right = nested(() => expression(precedence + (['&&','||',':','++','$'].includes(op.kind)?0:1)))
+      left = op.kind === '$'
+        ? { kind: 'application', fn: left, arg: right, span: { start: left.span.start, end: right.span.end } }
+        : { kind: 'binary', op: callee?.name||op.kind, callee, left, right, span: { start: left.span.start, end: right.span.end } }
     }
     return left
   }

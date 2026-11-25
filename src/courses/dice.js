@@ -63,7 +63,7 @@ export function diceUnits() {
       stepBuild('dc-', { signature: 'Double -> Model -> Model', types, test: { args: ['0.5', 'Model 4 (mkStdGen 1)'], after: ['face'], expect: '4' } }),
     ]),
     unit('game', 'main', '모두 묶어 주사위를 완성해요.', [
-      mainBuild('dc-', { signature: 'Program Model Msg', types: ['Model', 'Msg'] }),
+      mainBuild('dc-', { signature: 'IO ()', types: ['Model', 'Msg'] }),
     ]),
   ]
 }

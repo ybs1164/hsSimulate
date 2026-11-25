@@ -28,6 +28,7 @@ import { parseLiteral } from './literals.js'
 import { matchProblem } from './matchGraph.js'
 import { cons, just, left, nil, nothing, ordering, pair, right, stdGen, unit } from './dataTypes.js'
 import { METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
+import { continueIO, performIO } from './ioRuntime.js'
 
 export class EvalError extends Error {}
 
@@ -457,6 +458,15 @@ export function createEvaluator(registry) {
       const r = runStateOf(m, st)
       return force(runStateOf(delay(() => applyValue(k, [delay(() => force(force(r).args[0]))])), delay(() => force(force(r).args[1]))))
     }],
+    // IO: an action is lazy data — Pure x | Bind m k | PutStr s | GetLine |
+    // Play program — that only the IO runtime (ioRuntime.js) performs.
+    putStr: [1, (str) => ioAction('PutStr', [str])],
+    putStrLn: [1, (str) => ioAction('PutStr', [delay(() => appendList(str, now(fromJsString('\n'))))])],
+    print: [1, (x, [d]) => ioAction('PutStr', [delay(() => fromJsString(`${showAt(d, 0, x)}\n`))])],
+    getLine: [0, () => ioAction('GetLine', [])],
+    play: [1, (p) => ioAction('Play', [p])],
+    ioMapK: [2, (g, x) => ioAction('Pure', [delay(() => applyValue(g, [x]))])],
+    ioApK: [2, (mx, f) => ioAction('Bind', [mx, now(fn('ioMapK', f))])],
     take: [2, (n, xs) => takeList(listCount(n, 'take'), xs)],
     drop: [2, (n, xs) => dropList(listCount(n, 'drop'), xs)],
     splitAt: [2, (n, xs) => pair(delay(() => takeList(listCount(n, 'splitAt'), xs)), delay(() => dropList(listCount(n, 'splitAt'), xs)))],
@@ -571,6 +581,8 @@ export function createEvaluator(registry) {
     if (w.ctor === 'Tinted') return { ...w, args: [w.args[0], delay(() => widgetMap(f, w.args[1]))] }
     return w
   }
+  const IO_CTORS = ['Pure', 'Bind', 'PutStr', 'GetLine', 'Play']
+  const ioAction = (ctor, args) => ({ kind: 'data', type: 'IO', ctor, ctorIndex: IO_CTORS.indexOf(ctor), args })
   // runState m s, as a thunk of the (a, s) pair.
   const runStateOf = (m, st) => delay(() => applyValue(force(m).args[0], [st]))
   // Previously saved list-only closures have no Foldable dictionary. Keep
@@ -1043,6 +1055,12 @@ export function createEvaluator(registry) {
       ap: ([mf, mx]) => wrapped('State', now(fn('stAp', mf, mx))),
       bind: ([m, k]) => wrapped('State', now(fn('stBind', m, k))),
     },
+    IO: {
+      fmap: ([g, m]) => ioAction('Bind', [m, now(fn('ioMapK', g))]),
+      pure: ([x]) => ioAction('Pure', [x]),
+      ap: ([mf, mx]) => ioAction('Bind', [mf, now(fn('ioApK', mx))]),
+      bind: ([m, k]) => ioAction('Bind', [m, k]),
+    },
     Char: { eq: NUM.eq, compare: NUM.compare, showsPrec: STOCK.showsPrec },
     StdGen: { showsPrec: STOCK.showsPrec },
     List: {
@@ -1340,6 +1358,7 @@ export function createEvaluator(registry) {
   /** The dictionaries `evidence` (a list, closed: no parameters) describes. */
   const dictsFrom = (evidence) => evidence.map((e) => dictionary(e, {}))
 
+  const ioOps = { force, apply: (k, x) => delay(() => applyValue(k, [x])), text: (t) => jsString(t), unit: now(unit), show, fail: (message) => { throw new EvalError(message) } }
   return {
     /** Evaluate node `nodeId` of `graph` to JSON-safe data: a number, a boolean, a data value, or a closure. */
     run(graph, nodeId, { onNode } = {}) {
@@ -1362,6 +1381,29 @@ export function createEvaluator(registry) {
     apply(f, values) {
       return guarded(() => serializeValue(applyValue(now(reviveValue(f)), values.map((v) => now(reviveValue(v))))))
     },
+    /**
+     * Perform the IO action node `nodeId` of `graph` evaluates to (ioRuntime.js).
+     * `onEffect` sees each output; a run that waits for input or hands over a
+     * game returns `{ status: 'waiting', effect, program?, resume(input) }` —
+     * `program` serialized as `run` would return it.
+     */
+    runIO(graph, nodeId, { onNode, onEffect, maxActions } = {}) {
+      return guarded(() => ioResult(performIO(ioOps, delay(() => force(nodeValue(graph, nodeId, { args: null, memo: new Map(), elab: elab?.forGraph(graph) || {} }))), { onEffect, maxActions }), graph), graph, onNode)
+    },
+    /** Perform an IO value (from `run`/`apply`, e.g. a closure's result). */
+    performIO(value, { onEffect, maxActions } = {}) {
+      return guarded(() => ioResult(performIO(ioOps, now(reviveValue(value)), { onEffect, maxActions }), null))
+    },
+  }
+
+  /** A result of ioRuntime's loop, with a waiting run's program serialized and a way to go on. */
+  function ioResult(r, graph) {
+    if (r.status === 'done') return { status: 'done', value: serializeValue(r.value), actions: r.actions }
+    const waiting = { status: 'waiting', effect: r.effect, actions: r.actions }
+    if (r.effect === 'play') waiting.program = serializeValue(r.program)
+    waiting.resume = (input = '', { onNode, onEffect, maxActions } = {}) =>
+      guarded(() => ioResult(continueIO(ioOps, r.continuation, now(fromJsString(String(input))), { onEffect, maxActions }), graph), graph, onNode)
+    return waiting
   }
 
   function guarded(run, graph = null, onNode = null) {

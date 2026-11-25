@@ -84,7 +84,7 @@ export function nimUnits() {
       stepBuild('nim-', { signature: 'Double -> Model -> Model', types, test: { args: ['0.5', model(7, 1)], after: ['left'], expect: '7' } }),
     ]),
     unit('game', 'main', '모두 묶어 님을 완성해요. 첫 수로 무엇을 가져가야 CPU를 이길 수 있을까요?', [
-      mainBuild('nim-', { signature: 'Program Model Msg', types: ['Model', 'Msg'] }),
+      mainBuild('nim-', { signature: 'IO ()', types: ['Model', 'Msg'] }),
     ]),
   ]
 }

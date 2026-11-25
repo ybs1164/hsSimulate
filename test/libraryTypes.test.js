@@ -11,7 +11,7 @@ import { declareClasses } from '../src/classDecls.js'
 import { libraryDefs, preludeTypes } from '../src/library.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
-import { createGame } from '../src/runtime.js'
+import { createGame, entryProgram } from '../src/runtime.js'
 import { showType } from '../src/typeSystem.js'
 import { DeclError, declareTypes, declToDraft, derivedDefinitions, derivedInstances, draftToSource } from '../src/typeDecls.js'
 import { TAKEABLE_TYPES, libraryTypeProblem, takeOverType } from '../src/typeEdits.js'
@@ -95,11 +95,11 @@ test('a game plays the same with its Prelude types taken over', () => {
       ...project.nodes,
     }
     const ev = createEvaluator({ nodes, functionBodies: project.functionBodies, types: project.types })
-    const game = createGame(ev, ev.run(nodes, 'main'))
+    const game = createGame(ev, entryProgram(ev, nodes, 'main'))
     setDynamicInstances(derivedInstances(project.types))
     try {
       const pass = inferGraph(nodes, project.functionBodies, project.nodes)
-      assert.equal(showType(valueTypeOfEntry(pass.perNode.get('main'))), 'Program Model Msg')
+      assert.equal(showType(valueTypeOfEntry(pass.perNode.get('main'))), 'IO ()')
       assert.doesNotThrow(() => reduce(pass.preds))
     } finally {
       setDynamicInstances([])

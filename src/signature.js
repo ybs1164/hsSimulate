@@ -127,12 +127,17 @@ export function moveParameter(project, fnId, from, to) {
 
 /**
  * Rename custom function `fnId` to `label`. A call refers to its function
- * by id, so only the labels change: the definition's, and each call's copy.
- * (Main checks the name is free first.)
+ * by id, so the definition and every call keep their bodies and arguments.
+ * Naming a lambda registers it as a named function. Main checks the name
+ * is free and places a newly registered definition on the top-level graph.
  */
 export function renameFunction(project, fnId, label) {
   const def = project.nodes[fnId]
-  if (!def?.custom || def.lambda || def.override || isManagedMain(def)) return false
+  if (!def?.custom || def.readonly || def.matchBranch || def.override || def.library || isManagedMain(def)) return false
+  if (def.lambda) {
+    delete def.lambda
+    def.scope = 'main'
+  }
   def.label = label
   for (const { node } of callsTo(project, fnId)) node.label = label
   return true

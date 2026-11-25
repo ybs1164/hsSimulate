@@ -72,7 +72,8 @@ export class SourceDocument {
     return true
   }
   defaultFunction(functions) {
-    return functions.find(f => f.name === 'result' && !f.arity) || functions.find(f => !f.arity) || functions[0]
+    // A program's main :: IO () first, as GHC would run it; then a `result` value.
+    return functions.find(f => f.name === 'main' && !f.arity && f.signature.startsWith('IO ')) || functions.find(f => f.name === 'result' && !f.arity) || functions.find(f => !f.arity) || functions[0]
   }
   convert(version = (this.document?.version || 0) + 1, persist = true, preferredModule = this.moduleName) {
     try {

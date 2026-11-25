@@ -6,7 +6,7 @@ import { buildDice } from '../src/examples/dice.js'
 import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
-import { createGame } from '../src/runtime.js'
+import { createGame, entryProgram } from '../src/runtime.js'
 import { derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
 import { showType } from '../src/typeSystem.js'
 
@@ -26,7 +26,7 @@ for (const [name, build, firstButton, after] of [['click counter', buildClickCou
     const project = build()
     const nodes = registryOf(project)
     const ev = createEvaluator({ nodes, functionBodies: project.functionBodies, types: project.types })
-    const game = createGame(ev, ev.run(nodes, 'main'))
+    const game = createGame(ev, entryProgram(ev, nodes, 'main'))
     const buttons = []
     const walk = (w) => { if (w.kind === 'button') buttons.push(w); (w.children || []).forEach(walk) }
     walk(game.view())
@@ -42,7 +42,7 @@ for (const [name, build, firstButton, after] of [['click counter', buildClickCou
     setDynamicInstances(derivedInstances(project.types))
     try {
       const pass = inferGraph(nodes, project.functionBodies, project.nodes)
-      assert.equal(showType(valueTypeOfEntry(pass.perNode.get('main'))), 'Program Model Msg')
+      assert.equal(showType(valueTypeOfEntry(pass.perNode.get('main'))), 'IO ()')
       assert.doesNotThrow(() => reduce(pass.preds))
     } finally {
       setDynamicInstances([])

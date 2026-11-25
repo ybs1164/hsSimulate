@@ -11,7 +11,7 @@ import { createSourceTrace } from './sourceTrace.js'
 import { validateSourceFiles } from './sourceFiles.js'
 
 const isolated=fn=>withDynamicClasses([],()=>withDynamicInstances([],fn))
-export const SOURCE_LIMITS=Object.freeze({depth:48,demandDepth:128,calls:6000,nodes:6000,listSteps:6000,milliseconds:1500,events:20000})
+export const SOURCE_LIMITS=Object.freeze({depth:48,demandDepth:128,calls:6000,nodes:6000,listSteps:6000,milliseconds:1500,events:20000,output:100000,actions:20000})
 export function sourceIntegerDivision(a,b,remainder) {
   const x=BigInt(a),y=BigInt(b);let q=x/y
   if(x%y!==0n&&(x<0n)!==(y<0n))q--
@@ -27,7 +27,7 @@ export function compileSourceFiles(files,version=1){
   const definitionId=key=>`code:${version}:${key}`
   const fileFor=def=>analyzed.files.find(file=>file.id===def.fileId)
   const position=(def,span)=>({...span,fileId:def.fileId,version})
-  const calleeId=head=>head.binding==='builtin'?`code:op:${head.name}`:definitionId(head.targetKey)
+  const calleeId=head=>head.binding==='builtin'?`code:op:${sourceOps[head.name][0]}`:definitionId(head.targetKey)
   for(const [builtin,label,arity] of Object.values(sourceOps)){
     const id=`code:op:${builtin}`;nodes[id]={id,type:'function',builtin,label,params:Array(arity).fill(''),mounted:Array(arity).fill(null)}
   }
@@ -63,6 +63,9 @@ export function compileSourceFiles(files,version=1){
       if(expr.kind==='group')return expression(expr.expr)
       if(expr.kind==='integer')return put({type:'number',label:expr.text,value:expr.text,annotation:'Int',typeName:'Int'},expr.span,'literal')
       if(expr.kind==='boolean')return put({type:'boolean',label:expr.value?'True':'False',value:String(expr.value),annotation:'Bool'},expr.span,'literal')
+      if(expr.kind==='string')return put({type:'literal',label:expr.text,value:`"${expr.value}"`,annotation:'String'},expr.span,'literal')
+      if(expr.kind==='char')return put({type:'literal',label:expr.text,value:`'${expr.value}'`,annotation:'Char'},expr.span,'literal')
+      if(expr.kind==='unit')return op('unit',[],expr)
       if(expr.kind==='list')return call(expr.items.length?'code:op:listOf':'code:op:nil',expr.items.length?'[ … ]':'[]',expr.items.map(expression),expr)
       if(expr.kind==='name'){
         if(expr.binding==='parameter')return put({type:'ref',target:params.get(expr.name),label:expr.name,annotation:showSourceType(expr.type)},expr.span,'reference')
@@ -143,16 +146,31 @@ export function evaluateSource(document, functionId, limits = SOURCE_LIMITS) {
   const ev = createTypedEvaluator({ ...document, types: {}, classes: {}, instances: {}, executionLimits:limits, integerDivision:sourceIntegerDivision, sourceEvaluation:true, serializeResult:serializeSourceValue,
     validateNodeValue:validateValue, validateRuntimeValue:validateValue, onSourceCall:recordStep,
   })
+  // main :: IO (): performed by the IO runtime (ioRuntime.js); its standard output is the result.
+  const io = fn.signature.startsWith("IO ")
+  let output = ''
+  function onEffect({ text }) {
+    output += text
+    if (output.length > limits.output) throw errorAt('limit', `표준 출력이 ${limits.output.toLocaleString()}자를 넘었습니다.`, document.locations[functionId])
+  }
   try {
-    const value = isolated(() => ev.run(document.nodes, functionId, { onNode({ value, ...event }) {
+    const onNode = ({ value, ...event }) => {
       const {graph, frame, ...step}=event
       recordStep({kind:'node', ...step, value})
       if(events.length>=limits.events){exceededTrace=true;return}
       events.push(event);trace.record(event)
-    } }))
+    }
+    const value = isolated(() => {
+      if (!io) return ev.run(document.nodes, functionId, { onNode })
+      const performed = ev.runIO(document.nodes, functionId, { onNode, onEffect, maxActions: limits.actions })
+      if (performed.status === 'waiting') throw errorAt('support', performed.effect === 'getLine'
+        ? 'getLine 입력은 코드 분석 실행에서 아직 지원하지 않습니다 (한 번에 끝까지 실행합니다). 수동 그래프의 main :: IO ()에서는 콘솔로 입력할 수 있습니다.'
+        : 'play는 코드 분석 실행에서 지원하지 않습니다.', document.locations[functionId])
+      return { kind: 'source-io', output, actions: performed.actions }
+    })
     if(exceededTrace)throw errorAt('limit','실행 기록 제한을 초과했습니다. 결과로 처리하지 않습니다.',document.locations[functionId])
     history.record({kind:'finish', functionId})
-    return { value, events: trace.events, allEvents: events, debug:history.finish() }
+    return { value, output: io ? output : undefined, events: trace.events, allEvents: events, debug:history.finish() }
   } catch (error) {
     const origin=events.find(e=>e.phase==='error'&&e.origin)
     if(!(error instanceof SourceError)) {
@@ -171,6 +189,6 @@ export function evaluateSource(document, functionId, limits = SOURCE_LIMITS) {
     trace.fail(graph.output.source, error)
     history.record({kind:'finish', functionId:origin?.functionId || functionId,
       callId:origin?.callId, nodeId:origin?.nodeId, span:error.span})
-    return { error, events: trace.events, allEvents: events, debug:history.finish() }
+    return { error, output: io ? output : undefined, events: trace.events, allEvents: events, debug:history.finish() }
   }
 }

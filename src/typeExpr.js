@@ -192,7 +192,7 @@ export function typePalette() {
     { group: 'Numbers', items: ['Int', 'Integer', 'Double', 'Float', 'Rational', 'Natural', 'Word'].map((n) => entry(n, 0)) },
     { group: 'Basics', items: [entry('Bool', 0), entry('Char', 0), entry('String', 0), entry('()', 0), entry('Ordering', 0)] },
     { group: 'Structure', items: [entry('->', 2, '_ ▸ _'), entry('List', 1, '[ _ ]'), entry('(,)', 2, '( _ , _ )'), entry('Maybe', 1, 'Maybe _'), entry('Either', 2, 'Either _ _')] },
-    { group: 'Game', items: [entry('Picture', 0), entry('Color', 0), entry('StdGen', 0), entry('Widget', 1, 'Widget _'), entry('Sub', 1, 'Sub _'), entry('Program', 2, 'Program _ _')] },
+    { group: 'Game', items: [entry('Picture', 0), entry('Color', 0), entry('StdGen', 0), entry('Widget', 1, 'Widget _'), entry('Sub', 1, 'Sub _'), entry('Program', 2, 'Program _ _'), entry('IO', 1, 'IO _')] },
   ]
   // (A Prelude type the project has taken over stays where it is.)
   const listed = new Set(groups.flatMap((g) => g.items.map((it) => it.name)))

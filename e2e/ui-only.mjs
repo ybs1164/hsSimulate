@@ -108,7 +108,8 @@ async function drag(from, to) {
 }
 async function clickNode(nodeId, extra = {}) {
   const { graph } = await activeGraph()
-  const at = (await toScreen(graph))(graph[nodeId])
+  const node = graph[nodeId]
+  const at = (await toScreen(graph))(node.type === 'function' ? { x: node.x + 40, y: node.y + 28 } : node)
   await mouse('mousePressed', at.x, at.y, extra); await mouse('mouseReleased', at.x, at.y, extra); await sleep(200)
 }
 
@@ -140,8 +141,15 @@ async function declareRecordType(name, fields) {
   expect(status.includes('applied'), status)
 }
 async function createFunction(label, params) {
-  await js(`document.querySelector('.add-node').click()`); await sleep(150)
-  await js(`(() => { const f = document.querySelector('#function-dialog form'); f.label.value = ${JSON.stringify(label)}; f.params.value = ${JSON.stringify(params.join(', '))}; f.requestSubmit() })()`); await sleep(250)
+  while (!(await js(`document.querySelector('#back-graph').hidden`))) await back()
+  if (label === 'main' && Object.values((await project()).nodes).some((n) => n.programEntry && n.label === 'main')) return
+  await js(`document.querySelector('.library-item[data-type=lambda]').click()`); await sleep(150)
+  const p = await project()
+  const id = Object.values(p.nodes).findLast((n) => n.lambda).id
+  await setField(`.function-head-name[data-definition-id="${id}"]`, label); await sleep(200)
+  for (let count = 1; count < params.length; count++) await addSlot(id)
+  if (!params.length) { await js(`document.querySelector('.param-slot[data-function-id="${id}"] .param-remove').click()`); await sleep(150) }
+  for (const [i, name] of params.entries()) { await setField(`.param-rename[data-index="${i}"]`, name); await sleep(100) }
 }
 async function openBody(label) {
   await js(`[...document.querySelectorAll('.function-library-item')].find((e) => e.querySelector('b').textContent === ${JSON.stringify(label)}).click()`); await sleep(600)
@@ -177,6 +185,13 @@ async function toOutput(nodeId) {
   await drag(await outPort(nodeId), await portCenter('.in-port'))
   expect((await activeGraph()).graph.output.source === nodeId, `${nodeId} did not connect to Output`)
 }
+// main :: IO (): show a value by printing it — `print node` becomes main's result.
+async function printOutput(nodeId) {
+  const pr = await add('prelude', 'print')
+  await plug(nodeId, pr, 0); await toOutput(pr)
+  return pr
+}
+const consoleText = () => js(`document.querySelector('#console-panel:not([hidden]) .console-output')?.textContent ?? null`)
 // A narrow viewport or wider Workspace can reduce canvas space. A call can
 // widen after it is connected, putting its out-port beyond the canvas.
 // Use the editor's Fit control before dragging an offscreen port, as a user
@@ -229,12 +244,163 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     expect((await js(`document.querySelector('#graph-name').textContent`)) === 'ƒ main', 'fresh main is not open')
     expect(!p.functionBodies[mains[0].id].output.source, 'main must start empty')
     await js(`document.querySelector('#run').click()`); await sleep(100)
-    expect((await js(`document.querySelector('#toast').textContent`)).includes('main의 Output'), 'missing empty-main guidance')
+    expect((await js(`document.querySelector('#toast').textContent`)).includes('IO ()'), 'missing empty-main guidance')
     expect(Object.keys((await project()).functionBodies.main).length === 1, 'an empty run changed main')
     await reloadApp(js)
     expect(Object.values((await project()).nodes).filter((n) => n.programEntry).length === 1, 'reload duplicated main')
   })
   await back() // fresh main is checked above; subsequent editor tests start at top level
+  if (process.argv.includes('--scene-only')) {
+    console.log('Declarations in the main scene:')
+    let functionId, boxId, itemId, moved
+    const chooseField = async (name) => {
+      await js(`document.querySelector('[data-te="add-field"]').click()`)
+      await js(`document.querySelector('.type-picker [data-choice="${name}"]').click(); document.querySelector('.type-picker form').requestSubmit()`)
+      await sleep(150)
+    }
+    await check('a type is created and edited as a node beside existing functions', async () => {
+      await createFunction('identityBox', ['x'])
+      functionId = Object.values((await project()).nodes).find((n) => n.custom && n.label === 'identityBox').id
+      await openBody('main')
+      await add('function', 'identityBox')
+      await js(`document.querySelector('[data-scene-new-type]').click()`); await sleep(200)
+      await rename('.te-ident-type', 'Box')
+      await chooseField('Int'); await rename('.te-ident-field', 'count')
+      const p = await project()
+      boxId = Object.values(p.nodes).find((n) => n.type === 'declaration' && n.declarationName === 'Box').id
+      expect(p.types.Box.constructors[0].record && p.nodes[functionId], 'type creation lost the function or record')
+      expect(await js(`document.querySelector('#type-panel').hidden && document.querySelector('#graph-name').textContent === 'ƒ main'`), 'type editor left the main scene')
+      expect(await js(`!!document.querySelector('.scene-declaration.editing .te-field') && !!document.querySelector('.function-head-name[data-definition-id="${functionId}"]')`), 'function and type are not in the same scene')
+      writeFileSync(join(tmpdir(), 'hs-type-main-scene-edit.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+    })
+    await check('a constructor made in the declaration node runs in the same scene', async () => {
+      await js(`document.querySelector('[data-te="use-ctor"]').click()`); await sleep(250)
+      const ctor = Object.values((await activeGraph()).graph).find((n) => n.sourceFunctionId === 'type:Box:Box')
+      await fill(ctor.id, 0, '8')
+      await js(`document.querySelector('#fit').click()`)
+      await clickNode(ctor.id)
+      await js(`document.querySelector('#evaluate').click()`); await sleep(300)
+      const value = Object.values((await activeGraph()).graph).find((n) => n.type === 'value' && n.data?.type === 'Box')
+      expect(value?.data.args[0] === 8, 'constructor did not return Box 8')
+    })
+    await check('declaration and function-use relations are drawn on the main canvas', async () => {
+      await js(`document.querySelector('[data-scene-new-type]').click()`)
+      await rename('.te-ident-type', 'Item')
+      await chooseField('Box'); await rename('.te-ident-field', 'box')
+      await js(`document.querySelector('[data-te="close"]').click()`)
+      const p = await project()
+      itemId = Object.values(p.nodes).find((n) => n.type === 'declaration' && n.declarationName === 'Item').id
+      expect(await js(`!!document.querySelector('.scene-edge-field[data-from="${boxId}"][data-to="${itemId}"]')`), 'field relation is missing')
+      await openBody('identityBox')
+      expect(await js(`document.querySelector('#declaration-layer').hidden`), 'global declarations overlap the function body')
+      const ctor = await add('derived', 'Box')
+      await fill(ctor, 0, '5'); await toOutput(ctor); await back()
+      await openBody('main')
+      const caller = Object.values((await activeGraph()).graph).find((n) => n.sourceFunctionId === functionId)
+      expect(await js(`!document.querySelector('#declaration-layer').hidden && !!document.querySelector('.scene-edge-function-type[data-from="${boxId}"][data-to="${caller.id}"]')`), 'function/type relation is missing')
+      await js(`document.querySelector('.open-universe').click()`)
+      expect(await js(`document.querySelector('#type-panel').hidden && document.querySelector('#graph-name').textContent === 'ƒ main'`), 'universe still opens a separate scene')
+    })
+    await check('declaration dragging is saved, undoable and survives reload', async () => {
+      const before = (await project()).nodes[boxId]
+      const handle = await portCenter(`.scene-declaration[data-node-id="${boxId}"] .scene-node-handle`)
+      await drag(handle, { x: handle.x + 75, y: handle.y + 45 })
+      moved = (await project()).nodes[boxId]
+      expect(moved.x !== before.x && moved.y !== before.y, 'declaration did not move')
+      await js(`document.querySelector('#undo').click()`)
+      let p = await project()
+      expect(p.nodes[boxId].x === before.x && p.nodes[boxId].y === before.y, 'undo lost the declaration position')
+      await js(`document.querySelector('#redo').click()`)
+      p = await project(); expect(p.nodes[boxId].x === moved.x, 'redo lost the declaration position')
+      await send('Page.reload')
+      for (let i = 0; i < 100 && !(await js(`!!document.querySelector('.scene-declaration[data-node-id="${boxId}"]')`).catch(() => false)); i++) await sleep(100)
+      p = await project(); expect(p.nodes[boxId].x === moved.x && p.types.Box, 'reload lost declaration content or placement')
+      await js(`document.querySelector('#fit').click()`)
+      writeFileSync(join(tmpdir(), 'hs-type-main-scene.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+    })
+    await check('deleting a declaration removes its node and edges; undo restores both', async () => {
+      await js(`document.querySelector('.type-item[data-type-name="Item"]').click()`)
+      await js(`document.querySelector('[data-te="delete"]').click()`)
+      let p = await project()
+      expect(!p.types.Item && !p.nodes[itemId], 'declaration deletion left a stale scene node')
+      expect(await js(`!document.querySelector('.scene-edge[data-to="${itemId}"]')`), 'deleted declaration left stale edges')
+      await js(`document.querySelector('#undo').click()`)
+      p = await project(); expect(p.types.Item && p.nodes[itemId], 'undo lost the declaration')
+    })
+    console.log(errors.length ? `Page errors:\n${errors.join('\n')}` : 'No page errors.')
+    cleanup(failures || errors.length ? 1 : 0)
+    await new Promise(() => {})
+  }
+  if (process.argv.includes('--functions-only')) {
+    const typeName = async (selector, value, confirm = 'Enter') => {
+      await js(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.focus(); el.select() })()`)
+      await send('Input.insertText', { text: value })
+      await key(confirm, confirm, confirm === 'Enter' ? 13 : 27)
+      await sleep(400)
+    }
+    let fnId, callId
+    await check('only lambda creates a function, naming it replaces the unused lambda in place', async () => {
+      expect(await js(`!document.querySelector('.add-node, #function-dialog')`), 'separate function creation still exists')
+      await createFunction('namedLambda', ['value'])
+      const p = await project()
+      const fn = Object.values(p.nodes).find((n) => n.custom && n.label === 'namedLambda')
+      fnId = fn.id
+      expect(!fn.lambda && fn.params[0] === 'value', 'lambda was not registered with its parameter')
+      expect(!Object.values(p.nodes).some((n) => n.sourceFunctionId === fnId), 'unused lambda was duplicated')
+      callId = await add('main', 'namedLambda')
+    })
+    await check('editing a call name updates its definition, all calls and history', async () => {
+      await typeName(`.function-head-name[data-name-location="canvas-${callId}"]`, 'renamedLambda')
+      let p = await project()
+      expect(p.nodes[fnId].label === 'renamedLambda' && p.nodes[callId].label === 'renamedLambda', 'call rename did not propagate')
+      await js(`document.querySelector('#undo').click()`)
+      p = await project()
+      expect(p.nodes[fnId].label === 'namedLambda' && p.nodes[callId].label === 'namedLambda', 'rename undo failed')
+      await js(`document.querySelector('#redo').click()`)
+      expect((await project()).nodes[fnId].label === 'renamedLambda', 'rename redo failed')
+    })
+    await check('invalid and duplicate names are rejected, Escape cancels, builtins stay read-only', async () => {
+      const selector = `.function-head-name[data-definition-id="${fnId}"]`
+      for (const value of ['', 'BadName', 'identity']) {
+        await typeName(selector, value)
+        expect((await project()).nodes[fnId].label === 'renamedLambda', `accepted ${value}`)
+        expect(await js(`document.querySelector(${JSON.stringify(selector)}).value === 'renamedLambda'`), 'rejected name was left in the field')
+      }
+      await typeName(selector, 'cancelledName', 'Escape')
+      expect((await project()).nodes[fnId].label === 'renamedLambda', 'Escape committed a name')
+      const builtinCall = await add('main', 'identity')
+      expect(await js(`document.querySelector('[data-name-location="canvas-${builtinCall}"]').tagName === 'SPAN'`), 'builtin name is editable')
+    })
+    await check('naming a captured lambda in its signature preserves the body, capture and return path', async () => {
+      await openBody('renamedLambda')
+      await js(`document.querySelector('.library-item[data-type=lambda]').click()`)
+      const before = await activeGraph()
+      const lam = Object.values(before.graph).find((n) => n.sourceFunctionId?.startsWith('lambda-'))
+      await addSlot(lam.id)
+      await plug(await paramId('value'), lam.id, 0)
+      await toOutput(lam.id)
+      await clickNode(lam.id)
+      await js(`document.querySelector('#open-body').click()`); await sleep(400)
+      const body = (await activeGraph()).graph
+      const innerId = lam.sourceFunctionId
+      await typeName('#signature-bar .function-name-input', 'capturedFunction')
+      const p = await project()
+      expect(!p.nodes[innerId].lambda && p.nodes[innerId].label === 'capturedFunction', 'signature name did not register the lambda')
+      expect(JSON.stringify(p.functionBodies[innerId]) === JSON.stringify(body), 'body changed during naming')
+      expect(p.functionBodies[fnId][lam.id].mounted[0] && p.functionBodies[fnId].output.source === lam.id, 'capture or output was lost')
+      await back()
+      expect((await js(`document.querySelector('#graph-name').textContent`)) === 'ƒ renamedLambda', 'Back lost the enclosing body')
+      await back()
+      await send('Page.reload'); await sleep(1000)
+      expect((await project()).nodes[innerId].label === 'capturedFunction', 'name did not survive reload')
+    })
+    const shot = join(tmpdir(), 'hs-function-names.png')
+    writeFileSync(shot, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'))
+    console.log(`Screenshot: ${shot}`)
+    console.log(errors.length ? `Page errors:\n${errors.join('\n')}` : 'No page errors.')
+    cleanup(failures || errors.length ? 1 : 0)
+    await new Promise(() => {})
+  }
   if (process.argv.includes('--match-only')) {
     console.log('Types and pattern matching:')
     await check('create a record and use its type directly as a constructor', async () => {
@@ -456,14 +622,15 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const col = await add('prelude', 'column'); await plug(ls, col, 0); await toOutput(col)
     await back()
   })
-  await check('main = program initial view handle step', async () => {
+  await check('main = play (program initial view handle step)', async () => {
     await openBody('main') // reuse the default entry, never create another main
     expect((await js(`document.querySelector('#graph-name').textContent`)) === 'ƒ main', 'breadcrumb should read ƒ main')
     const pr = await add('prelude', 'program')
     for (const [i, f] of ['initial', 'view', 'handle', 'step'].entries()) await plug(await add('main', f), pr, i)
-    await toOutput(pr); await back()
+    const pl = await add('prelude', 'play'); await plug(pr, pl, 0)
+    await toOutput(pl); await back()
     const sig = await js(`[...document.querySelectorAll('.function-library-item')].find((e) => e.querySelector('b').textContent === 'main').querySelector('small .type-chain').title`)
-    expect(sig === 'Program Model Msg', sig)
+    expect(sig === 'IO ()', sig)
     return `main :: ${sig}`
   })
   await check('make main the entry, Run graph, press +1 three times', async () => {
@@ -540,13 +707,14 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     return `${crumb} = count# model`
   })
   await check('renaming a function renames its calls', async () => {
+    while (!(await js(`document.querySelector('#back-graph').hidden`))) await back() // the type editor opens main's scene
     const stepId = Object.values((await project()).nodes).find((n) => n.custom && n.label === 'step').id
     await clickNode(stepId)
-    await setField('#function-rename', 'tick'); await sleep(300)
+    await setField(`.function-head-name[data-definition-id="${stepId}"]`, 'tick'); await sleep(300)
     const p = await project()
     const callLabels = Object.values(p.functionBodies).flatMap((b) => Object.values(b)).filter((n) => n.sourceFunctionId === stepId).map((n) => n.label)
     await clickNode(stepId)
-    await setField('#function-rename', 'step'); await sleep(300)
+    await setField(`.function-head-name[data-definition-id="${stepId}"]`, 'step'); await sleep(300)
     expect(p.nodes[stepId].label === 'tick' && callLabels.length && callLabels.every((l) => l === 'tick'), `${p.nodes[stepId].label} / ${callLabels}`)
     return `step → tick (${callLabels.length} call)`
   })
@@ -691,7 +859,7 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     await createFunction('twice', ['x']); await openBody('twice')
     await js(`document.querySelector('.library-item[data-type=lambda]').click()`); await sleep(400)
     const lam = Object.values((await activeGraph()).graph).find((n) => n.sourceFunctionId?.startsWith('lambda-'))
-    const at = (await toScreen((await activeGraph()).graph))(lam)
+    const at = (await toScreen((await activeGraph()).graph))({ x: lam.x + 40, y: lam.y + 28 })
     await mouse('mousePressed', at.x, at.y); await mouse('mouseReleased', at.x, at.y)
     await mouse('mousePressed', at.x, at.y, { clickCount: 2 }); await mouse('mouseReleased', at.x, at.y, { clickCount: 2 }); await sleep(600)
     const crumb = await js(`document.querySelector('#graph-name').textContent`)
@@ -915,11 +1083,11 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const xs = await add('prelude', '[ , , ]')
     for (let i = 0; i < 4; i++) { await addSlot(xs); await fill(xs, i, ['1', '2', '3', '2'][i]) }
     const filtered = await findListFunction('filter')
-    await plug(predicate, filtered, 0); await plug(xs, filtered, 1); await toOutput(filtered)
+    await plug(predicate, filtered, 0); await plug(xs, filtered, 1); await printOutput(filtered)
     await clickNode(filtered)
     expect((await js(`document.querySelector('#inspector-content').textContent`)).includes('Bool을 반환'), 'missing filter help')
     await js(`document.querySelector('#run').click()`); await sleep(2500)
-    expect(JSON.stringify(listItems((await lastListResult())?.data)) === '[2,2]', 'filter result mismatch')
+    expect((await consoleText()) === '[2,2]\n', 'filter result mismatch: ' + (await consoleText()))
     expect(await js(`document.querySelector('.execution-mark[data-execution-node="${filtered}"]')?.dataset.state === 'done'`), 'filter completion not visualized')
     return 'filter ((==) 2) [1,2,3,2] = [2,2]'
   })
@@ -929,11 +1097,11 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
     const equal = await add('function', '(==)'); await plug(await paramId('x'), equal, 0); await fill(equal, 1, "'a'"); await toOutput(equal)
     await back(); await openBody('main')
     const predicate = await add('function', 'isLetterA'), filtered = await findListFunction('filter')
-    await plug(predicate, filtered, 0); await fill(filtered, 1, '"banana"'); await toOutput(filtered)
+    await plug(predicate, filtered, 0); await fill(filtered, 1, '"banana"'); await printOutput(filtered)
     await clickNode(filtered); await js(`document.querySelector('#evaluate').click()`); await sleep(500)
     expect(listItems((await lastListResult())?.data).join('') === 'aaa', 'individual custom predicate failed')
     await js(`document.querySelector('#run').click()`); await sleep(500)
-    expect(listItems((await lastListResult())?.data).join('') === 'aaa', 'main custom predicate failed')
+    expect((await consoleText()) === '"aaa"\n', 'main custom predicate failed')
     const bad = await add('function', '(*)'); await fill(bad, 0, '2')
     const invalid = await findListFunction('filter')
     await fitConnectionIfClipped(`.out-port[data-node-id="${bad}"]`, `.param-slot[data-function-id="${invalid}"][data-index="0"]`)
@@ -944,13 +1112,13 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   for (const [name, expected] of [['take', 'ab'], ['drop', 'c']]) {
     await check(`${name}: search, creation, input, wiring, individual/main execution and reload`, async () => {
       const id = await findListFunction(name)
-      await fill(id, 0, '2'); await fill(id, 1, '"abc"'); await toOutput(id)
+      await fill(id, 0, '2'); await fill(id, 1, '"abc"'); await printOutput(id)
       await clickNode(id)
       expect((await js(`document.querySelector('#inspector-content').textContent`)).includes('n:'), 'missing count help')
       await js(`document.querySelector('#evaluate').click()`); await sleep(500)
       expect(listItems((await lastListResult())?.data).join('') === expected, 'individual result mismatch')
       await js(`document.querySelector('#run').click()`); await sleep(500)
-      expect(listItems((await lastListResult())?.data).join('') === expected, 'main result mismatch')
+      expect((await consoleText()) === `"${expected}"\n`, 'main result mismatch')
       const before = JSON.stringify(await project())
       await reloadApp(js)
       expect(JSON.stringify(await project()) === before, 'reload changed saved graph')
@@ -971,21 +1139,23 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
   await check('repeatN: UI construction, changed value, pinned individual test, error recovery and reload', async () => {
     await js(`document.querySelector('#reset').click()`); await sleep(400)
     const f=await add('function','(+)'); await fill(f,0,'2')
-    const repeat=await findListFunction('repeatN'); await fill(repeat,0,'3'); await fill(repeat,2,'0'); await plug(f,repeat,1); await toOutput(repeat)
+    const repeat=await findListFunction('repeatN'); await fill(repeat,0,'3'); await fill(repeat,2,'0'); await plug(f,repeat,1)
+    // A value connected straight to main :: IO () is refused at Run with the fix.
+    await toOutput(repeat); await js(`document.querySelector('#run').click()`); await sleep(400)
+    expect((await js(`document.querySelector('#toast').textContent`)).includes('print'),'a non-IO main ran')
+    await printOutput(repeat)
     await js(`document.querySelector('#run').click()`); await sleep(500)
-    expect(await scalarResult()==='6','repeatN main result')
-    await clickNode('output')
-    await dragType('data-con="Int"',`document.querySelector('.canvas-chain > .type-chain > .tc-seg.editable')`)
-    expect((await project()).functionBodies.main.output.annotation==='Int','main result not pinned')
+    expect((await consoleText())==='6\n','repeatN main result')
+    expect((await project()).functionBodies.main.output.annotation==='IO ()','main is not IO ()')
     await clickNode(repeat); await js(`document.querySelector('#evaluate').click()`); await sleep(300)
     expect(await scalarResult()==='6','repeatN individual result')
     await editInput(repeat,0,'4'); await js(`document.querySelector('#run').click()`); await sleep(300)
-    expect(await scalarResult()==='8','repeatN changed input result')
+    expect((await consoleText())==='8'+String.fromCharCode(10),'repeatN changed input result')
     await editInput(repeat,0,'101'); await js(`document.querySelector('#run').click()`); await sleep(1500)
     expect((await js(`document.querySelector('#toast').textContent`)).includes('반복 한도'),'missing repeat limit error')
     expect(await js(`!!document.querySelector('.execution-mark[data-execution-node="${repeat}"][data-state="error"]')`),'missing error mark')
     await editInput(repeat,0,'3'); await js(`document.querySelector('#run').click()`); await sleep(1500)
-    expect(await scalarResult()==='6','repeatN failed to recover')
+    expect((await consoleText())==='6'+String.fromCharCode(10),'repeatN failed to recover')
     expect(!(await js(`!!document.querySelector('.execution-mark[data-state="error"]')`)),'stale error mark')
     const before=JSON.stringify(await project()); await reloadApp(js)
     expect(JSON.stringify(await project())===before,'repeatN graph not restored')
@@ -997,14 +1167,14 @@ if (!ws) { console.error('Chrome did not start'); cleanup(2) } else {
       await js(`document.querySelector('#reset').click()`); await sleep(400)
       const p=await add('function','(==)'); await fill(p,0,'2')
       const list=await add('prelude','[ , , ]'); for(let i=0;i<values.length;i++){await addSlot(list);await fill(list,i,values[i])}
-      const id=await findListFunction(fn); await plug(p,id,0);await plug(list,id,1);await toOutput(id)
+      const id=await findListFunction(fn); await plug(p,id,0);await plug(list,id,1);await printOutput(id)
       await js(`document.querySelector('#run').click()`);await sleep(400)
-      expect(await scalarResult()==='true',`${fn} initial result`)
+      expect((await consoleText())==='True'+String.fromCharCode(10),`${fn} initial result`)
       await clickNode(id);await js(`document.querySelector('#evaluate').click()`);await sleep(300)
       expect(await scalarResult()==='true',`${fn} individual result`)
       await editInput(fn==='any'?p:list,changedIndex,changedValue)
       await js(`document.querySelector('#run').click()`);await sleep(400)
-      expect(await scalarResult()==='false',`${fn} changed result`)
+      expect((await consoleText())==='False'+String.fromCharCode(10),`${fn} changed result`)
       const before=JSON.stringify(await project());await reloadApp(js)
       expect(JSON.stringify(await project())===before,`${fn} graph not restored`)
       expect(await js(`document.querySelectorAll('.execution-mark').length===0`),'reloaded predicate trace')

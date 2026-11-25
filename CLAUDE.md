@@ -2,18 +2,20 @@
 
 ## 프로젝트 방향
 
-Haskell 코드의 구조·함수 관계·계산 과정과 오류를 시각적으로 분석·디버깅하는 도구를 지향한다. 현재는 수동 그래프 편집과 제한된 Int/Bool/리스트·고차 함수 코드 붙여넣기·로컬 .hs 모듈 선택 → 읽기 전용 그래프 → Graph JS 평가·실행 기록을 제공한다. 외부 라이브러리와 완전한 Haskell 분석은 후속 목표다. 연습문제·문법 설명 패널은 제거했으며 기존 프로젝트·실행 UI와 저장 형식은 유지한다.
+Haskell 코드의 구조·함수 관계·계산 과정과 오류를 시각적으로 분석·디버깅하는 도구를 지향한다. main은 Haskell처럼 `main :: IO ()`이며 IO 런타임이 수행한다. 현재는 수동 그래프 편집과 제한된 Int/Bool/Char/String/리스트·고차 함수·`main :: IO ()`(출력) 코드 붙여넣기·로컬 .hs 모듈 선택 → 읽기 전용 그래프 → Graph JS 평가·실행 기록을 제공한다. 외부 라이브러리와 완전한 Haskell 분석은 후속 목표다. 연습문제·문법 설명 패널은 제거했으며 기존 프로젝트·실행 UI와 저장 형식은 유지한다.
 
 ## 아키텍처 개요
-- `src/sourceParser.js`, `sourceAnalysis.js`: 위치를 가진 토큰·AST 파서와 이름 해석·명시적 구체 Int/Bool/리스트/함수 타입 검사(기존 unify/instantiate 재사용)·조건식·자기/상호 재귀 이름 해석. 외부 코드 실행이나 정규식 치환 변환이 아니다.
+- `src/sourceParser.js`, `sourceAnalysis.js`: 위치를 가진 토큰·AST 파서와 이름 해석·명시적 구체 Int/Bool/Char/String/()/IO/리스트/함수 타입 검사(기존 unify/instantiate 재사용)·조건식·자기/상호 재귀 이름 해석·문자열/문자 리터럴·`>>`/`>>=`/`$`·print/show의 Show 검사(Int·Bool·Char·()·리스트만). 외부 코드 실행이나 정규식 치환 변환이 아니다.
 - `src/sourceBuiltins.js`: 코드 입력의 연산/내장 함수와 기존 타입 스킴. 사용자 이름/지역 변수가 우선한다.
 - `src/sourceValue.js`: 제한된 표시 요청. 전체 리스트나 클로저 인자를 추적/직렬화 때문에 강제하지 않는다.
-- `src/sourceGraph.js`: AST → 기존 노드 모델, 기존 타입 엔진의 추가 검사, 분리된 레지스트리의 평가. 패턴 방정식은 유한한 순서 테이블과 타입 검사된 별도 본문 그래프로 내린다. 기존 지연 인자/클로저/리스트로 매칭하고 선택 본문만 실행한다. 코드 경로는 lazy foldl이며 수동 strict fold는 유지한다. 수동 프로젝트의 동적 클래스/인스턴스를 잠시 격리하고 복원한다. evaluator의 선택적 validateNodeValue 훅은 이미 계산된 숫자만 범위 검사하고 지연 값을 강제하지 않는다.
+- `src/sourceGraph.js`: AST → 기존 노드 모델, 기존 타입 엔진의 추가 검사, 분리된 레지스트리의 평가. 패턴 방정식은 유한한 순서 테이블과 타입 검사된 별도 본문 그래프로 내린다. 기존 지연 인자/클로저/리스트로 매칭하고 선택 본문만 실행한다. 코드 경로는 lazy foldl이며 수동 strict fold는 유지한다. 수동 프로젝트의 동적 클래스/인스턴스를 잠시 격리하고 복원한다. evaluator의 선택적 validateNodeValue 훅은 이미 계산된 숫자만 범위 검사하고 지연 값을 강제하지 않는다. `IO …` 시그니처의 값은 runIO로 한 번에 수행하고 표준 출력(최대 100,000자·동작 20,000단계)을 결과로 돌려준다. getLine·play는 코드 경로에서 오류로 멈춘다(그 전 출력은 유지).
 - `src/sourceWorker.js`, `sourceRunner.js`: 기존 평가기를 별도 Worker에서 한 번 실행하고 실제 계산 중단·4초 강제 종료를 담당한다. 기록 재생 중단과 구분하며 오래된 응답은 버린다. 코드 경로의 한도는 sourceGraph의 SOURCE_LIMITS(호출 깊이 48·평가 깊이 128·호출/노드/리스트 검사 각 6,000·1.5초·노드 기록 20,000)이며 수동 그래프 한도는 바꾸지 않는다. div/mod의 안전 정수용 정확한 나눗셈도 이 경로에서만 적용한다. 추적은 인자를 추가 강제하지 않고 호출·부모 ID를 보존한다.
 - `src/sourceTrace.js`, `sourceHistory.js`, `sourceDebuggerPanel.js`: thunk 완료를 수동 관찰해 탐색 기록을 수집한다. 값 참조 10,000개와 4,000단계를 저장하며 재생은 상태 변경을 되돌릴 수 있다. 사용자 함수와 방정식 본문의 호출 관계를 표시하고 값 표시 자체로 thunk를 강제하지 않는다.
 - `src/sourceDocument.js`, `sourcePanel.js`: 성공 때만 교체하는 버전 문서·저장과 Workspace 코드/함수 탭, 기존 Graph/Inspector 안의 읽기 전용 표시·원문 범위 대응·취소 가능한 기록 재생. 수동 프로젝트 상태·기본 main·자동 저장과 분리한다.
 - `src/sourceFiles.js`: 선택된 UTF-8 .hs 파일만 읽고 줄바꿈·크기를 처리한다. 파서는 한 줄 모듈 선언과 import를 구분한다. 분석기는 의존 관계 순서대로 모듈의 공개 이름과 참조를 해석하고 순환을 거부한다. 그래프·추적 위치는 파일 식별자와 버전을 포함한다. 파일 보기와 평가 대상은 독립이며 파일 문서는 붙여넣기 저장소와 분리한다.
-- `src/main.js`: 앱 화면, 그래프 상태, 캔버스 상호작용, 실행 로직, 타입·클래스 선언 그래프 편집(카드의 내용과 편집 → 선언 검사·적용·호출 이전), 타입 우주.
+- `src/ioRuntime.js`: IO 런타임. IO 값은 evaluator가 만드는 지연 데이터 `Pure | Bind | PutStr | GetLine | Play`(효과 함자 위의 자유 모나드, `Monad IO`는 categoryClasses·evaluator PRIM)이고, 평가는 효과를 일으키지 않는다. 자체 연속 스택으로 Bind의 왼쪽만 강제하며 수행하고, getLine·play에서 멈춰 이어서 실행할 연속을 돌려준다(evaluator의 `runIO`/`performIO`/`resume`).
+- `src/programEntry.js`: 새 프로젝트의 기본 `main :: IO ()`(Output 주석 `IO ()`, 결과 타입 고정)와 실행 대상 종류(`io`·예전 `game`·예전 `value`) 판별, IO로 감싸기(`print`/`play`). 예전 저장은 자동 변환하지 않는다. 게임은 `main = play (program …)`이며 저장 슬롯 타입은 `play` 인자의 타입에서 얻는다.
+- `src/main.js`: 앱 화면, 그래프 상태, 캔버스 상호작용, 실행 로직(IO 콘솔·getLine 입력·play로 게임 시작), 타입·클래스 선언 그래프 편집(카드의 내용과 편집 → 선언 검사·적용·호출 이전), 타입 우주.
 - `src/typeSystem.js`: 힌들리-밀너 타입 엔진과 kind(`*`, `k₁ -> k₂`) 검사.
 - `src/typeExpr.js`: 타입을 노드로 다루기(타입 생성자 = 타입 수준 함수, 함수 타입 = 커링된 꺽쇠 사슬 `A ▸ B ▸ C`, 구멍 `_`)와 본체 매개변수·Output의 타입 주석(부분 타입 시그니처) 해석, 클래스 노드(작업 공간의 CLASSES에서 타입 변수로 끌어와 고정하는 제약 `Ord a =>`, Output의 `context`).
 - `src/builtinSchemes.js`: 기초 함수들의 타입 스킴 테이블.
@@ -26,6 +28,7 @@ Haskell 코드의 구조·함수 관계·계산 과정과 오류를 시각적으
 - `src/typeEdits.js`: 유도 함수 커스터마이즈(원시 함수 `f#` 위에 재정의), 타입 편집 시 호출 노드 이전, Prelude 타입 넘겨받기(런타임이 읽는 생성자는 유지).
 - `src/declGraph.js`: 타입·클래스 선언을 그래프로(그리고 다시 선언으로, 손실 없이): 타입 = 생성자(곱)들이 주입되는 쌍대곱(`ιᵢ`, 위→아래가 합의 순서), 매개변수 → 그것을 쓰는 필드, 재귀 필드 ← 타입, 유도 함수(π·set/over·case·fold) → 밖으로; 클래스 = 상위 클래스·메서드·인스턴스(메서드마다 구현 함수를 적용한 사전, 함수 노드가 구현하는 자리로 연결); 타입 우주(모든 타입·클래스, 필드 사용·상위 클래스·인스턴스 간선). 열 배치와 프로젝트에 저장되는 위치(`layouts`).
 - `src/declCanvas.js`: 선언 그래프 캔버스(DOM 카드 + SVG 간선, 이동·확대·카드 끌기, 카드 안의 특정 행으로 가는 간선 포트).
+- `src/sceneDeclarations.js`: 타입·클래스 선언을 최상위 씬과 main 본체가 함께 쓰는 선언 노드(`type: 'declaration'`, 같은 좌표·실행 취소 기록)로 두기. 내용은 types/classes에 있고 노드는 식별과 배치만 하며, 예전 타입 우주 위치(`layouts.universe`)를 옮겨 오고 씬의 관계선(필드 사용·인스턴스·함수의 타입 사용)을 만든다.
 - `src/deriveGraphs.js`: 유도(deriving) 인스턴스를 같은 동작의 그래프(메서드별 커스텀 함수와 λ)로 펼쳐 직접 작성한 인스턴스로 바꾸기.
 - `src/classMethods.js`: 내장 클래스의 선언(메서드와 최소 완전 정의 MINIMAL).
 - `src/classDecls.js`: 사용자 클래스 선언(메서드·기본 구현·상위 클래스·인스턴스)과, 내장 클래스에 직접 작성한 인스턴스(프로젝트의 `instances`, 같은 `{ head, context, methods }` 모양 — Prelude가 선언한 타입이면 내장 인스턴스를 대신함)의 검사와 해석.
@@ -40,7 +43,7 @@ Haskell 코드의 구조·함수 관계·계산 과정과 오류를 시각적으
 - `src/grader.js`: 연습 문제 채점. 타입 답은 문자열이 아니라 타입으로 비교(변수 이름 바꾸기, 제약은 entailment — `Num`과 엔진의 `Ring`이 같음), 만들기 문제는 시그니처 → 본체 타입 검사 → 추론 타입이 요구 타입을 포섭(subsumption) → 테스트 순(테스트 값은 리터럴·리스트·쌍·생성자/함수 적용), 선언 문제는 생성자 순서·필드·deriving.
 - 과거 학습 UI 모듈(`learningPanel.js`, `exercisePanel.js`)은 제거했다. 학습·과정 데이터와 채점 모듈은 보존하며 기존 localStorage 진행 기록을 삭제하거나 변환하지 않는다.
 - `src/laws.js`: 클래스·함수 법칙 검사기.
-- `src/runtime.js`: `Program` 값을 실행하는 게임 런타임.
+- `src/runtime.js`: `Program` 값을 실행하는 게임 런타임. `entryProgram`은 IO main이 `play`에 넘긴 Program(예전 진입점은 그 값)을 얻는다.
 - `src/gameStorage.js`: 편집기의 게임 저장 슬롯을 프로젝트·진입점별로 분리한다. 모델·메시지 구조를 확인해 복원하며 구버전 단일 슬롯은 현재 자동 저장 프로젝트에서 호환 가능한 경우 복사한다. 프로젝트 ID는 JSON·자동 저장·실행 취소로 전달된다.
 - `src/workspaceResize.js`: 코드와 수동 그래프의 너비를 별도 저장한다. 좁은 화면은 기존 하단 탐색을 사용한다.
 - `src/haskellPrint.js`: 함수 본체 그래프를 하스켈 정의로 출력(토큰마다 원래 노드를 가리킴, λ로 이어진 `>>=` 사슬은 `do { x <- m; … }`).

@@ -6,7 +6,7 @@ import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.j
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { checkFunctionLaw } from '../src/laws.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
-import { createGame, isProgram } from '../src/runtime.js'
+import { createGame, isProgram, entryProgram } from '../src/runtime.js'
 import { derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
 import { showType, tcon, tfun } from '../src/typeSystem.js'
 
@@ -21,11 +21,11 @@ const show = (v) => showValue(v, example.types)
 const clicks = (game) => game.model.args[0].args[0]
 
 test('the example entry point evaluates to a Program', () => {
-  assert.ok(isProgram(ev.run(nodes, 'main')))
+  assert.ok(isProgram(entryProgram(ev, nodes, 'main')))
 })
 
 test('the view is a widget tree of texts, buttons and a progress bar', () => {
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   const tree = game.view()
   assert.equal(tree.kind, 'column')
   assert.deepEqual(tree.children.map((w) => w.kind), ['text', 'text', 'text', 'button', 'button', 'button', 'progress'])
@@ -35,7 +35,7 @@ test('the view is a widget tree of texts, buttons and a progress bar', () => {
 })
 
 test('messages run through handle: click, buy, and a purchase you cannot afford', () => {
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   const [click, buy, buyAuto] = game.view().children.slice(3, 6).map((b) => b.msg)
   for (let i = 0; i < 12; i++) game.dispatch(click)
   assert.equal(clicks(game), 12)
@@ -49,7 +49,7 @@ test('messages run through handle: click, buy, and a purchase you cannot afford'
 })
 
 test('time passes through step: whole seconds pay rate, the elapsedeconds short of one are carried', () => {
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   game.restore({ model: { ...game.model, args: [game.model.args[0], 1, 3, 0] } }) // rate 3
   game.tick(0.5)
   assert.equal(clicks(game), 0)
@@ -66,12 +66,12 @@ test('step is a monoid action, so offline progress is one call — and agrees wi
     // the type program gives it (on its own, onTick :: OrderedField a => a → Model → Model):
     // the step the Program holds, with the dictionaries that use picked
     const stepType = tfun(tcon('Double'), tfun(tcon('Model'), tcon('Model')))
-    const step = ev.run(nodes, 'main').args[3]
+    const step = entryProgram(ev, nodes, 'main').args[3]
     const law = checkFunctionLaw('action', step, stepType, { ev, types: example.types })
     assert.ok(law.ok, law.counterexample)
 
-    const exact = createGame(ev, ev.run(nodes, 'main'), { exactTime: true })
-    const sliced = createGame(ev, ev.run(nodes, 'main'), { exactTime: false })
+    const exact = createGame(ev, entryProgram(ev, nodes, 'main'), { exactTime: true })
+    const sliced = createGame(ev, entryProgram(ev, nodes, 'main'), { exactTime: false })
     for (const g of [exact, sliced]) g.restore({ model: { ...g.model, args: [g.model.args[0], 1, 2, 0] } })
     const a = exact.advance(3600)
     const b = sliced.advance(3600)
@@ -87,7 +87,7 @@ test('the example type-checks: main :: Program Model Msg', () => {
   setDynamicInstances(derivedInstances(example.types))
   try {
     const pass = inferGraph(nodes, example.functionBodies, example.nodes)
-    assert.equal(showType(valueTypeOfEntry(pass.perNode.get('main'))), 'Program Model Msg')
+    assert.equal(showType(valueTypeOfEntry(pass.perNode.get('main'))), 'IO ()')
     assert.equal(showType(valueTypeOfEntry(pass.perNode.get('view'))), 'Model → Widget Msg')
     assert.equal(showType(valueTypeOfEntry(pass.perNode.get('purchase'))), 'Wallet → (Model → Model) → Model → Model')
     assert.doesNotThrow(() => reduce(pass.preds))
@@ -97,7 +97,7 @@ test('the example type-checks: main :: Program Model Msg', () => {
 })
 
 test('time travel: rewind to the state right after an earlier message', () => {
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   const [click, buy] = game.view().children.slice(3, 5).map((b) => b.msg)
   for (let i = 0; i < 12; i++) game.dispatch(click)
   game.dispatch(buy)
@@ -112,7 +112,7 @@ test('time travel: rewind to the state right after an earlier message', () => {
 })
 
 test('program settings: the example runs at 20 steps per second and keeps the default offline cap', () => {
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   assert.equal(game.stepsPerSecond, 20)
   assert.equal(game.maxOffline, 7 * 24 * 3600)
   game.restore({ model: { ...game.model, args: [game.model.args[0], 1, 1, 0] } })
@@ -121,7 +121,7 @@ test('program settings: the example runs at 20 steps per second and keeps the de
 })
 
 test('subscriptions: onKey turns Space into Click; other keys do nothing', () => {
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   assert.equal(game.subscriptions().keys.length, 1)
   assert.equal(game.keyPressed(' '), 1)
   assert.equal(game.keyPressed('a'), 0)

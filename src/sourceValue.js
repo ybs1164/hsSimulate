@@ -20,6 +20,7 @@ export function serializeSourceValue(value,{force}) {
   return visit(value)
 }
 export function formatSourceValue(value){
+  if(value?.kind==='source-io')return `IO 실행 완료 · 출력 ${value.output.split('\n').filter(Boolean).length}줄`
   if(value?.kind==='source-list')return `[${value.items.map(formatSourceValue).join(',')}${value.truncated?(value.items.length?',…':'…'):''}]`
   if(value?.kind==='source-function')return '함수 값 (캡처한 인자는 강제하지 않음)'
   if(value?.kind==='source-omitted')return '…'

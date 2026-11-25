@@ -12,7 +12,7 @@
 //                                           <> color white (circleSolid (fromIntegral (face m) * 8))),
 //                          text ("You rolled " ++ show (face m)), button "Roll" Roll]
 //   step dt m    = m
-//   main         = program initial view handle step
+//   main         = play (program initial view handle step)
 import { P, T, buildProject, call, n, ref } from './build.js'
 
 export const DICE_TYPES = `data Model = Model { face :: Int, gen :: StdGen } deriving stock (Show)
@@ -37,7 +37,7 @@ export const DICE_FUNCTIONS = {
     call('list', P('listOf'), '[ , , ]', [n('h'), n('dr'), n('t'), n('b')]), call('out', P('wColumn'), 'column', [n('list')]),
   ], 'out'],
   step: [['dt', 'm'], [], 'm'],
-  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')])], 'out'],
+  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')]), call('io', P('play'), 'play', [n('out')])], 'io'],
 }
 
 export function buildDice() {

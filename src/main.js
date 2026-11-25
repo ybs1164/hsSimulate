@@ -2,8 +2,9 @@ import './style.css'
 import { initWorkspaceResize } from './workspaceResize.js'
 import { initSourcePanel } from './sourcePanel.js'
 import { createExecutionTrace, createExecutionPlayback } from './executionTrace.js'
-import { createBlankProject, isManagedMain, managedMain, MAIN_GUIDANCE, MAIN_PROTECTION, programRunTarget, returnsProgram } from './programEntry.js'
-import { applySubst, classShown, constructorArity, constructorKind, showKind, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
+import { createBlankProject, entryKind, ioWrapperFor, isManagedMain, legacyMainNotice, managedMain, MAIN_GUIDANCE, MAIN_PROTECTION, MAIN_TYPE, MAIN_TYPE_LOCKED, programRunTarget, returnsProgram } from './programEntry.js'
+import { outputLines } from './ioRuntime.js'
+import { applySubst, classShown, constructorArity, constructorKind, showKind, showType, ftv, generalize, setClassLabels, showQual, tcon, tfun, tvar, unify, createNamer, pred, setUserTypeArities, tapp } from './typeSystem.js'
 import { annotationProblem, isInferredVar, chainOf, classPalette, constructorWithHoles, fromTypeNode, headLabel, hole, isHole, namedVariables, occurrenceOf, pinAt, typeAt, typeFromText, typeNode, typePalette, typeText, variableNames } from './typeExpr.js'
 import { inferGraph, subtreeOf, valueTypeOfEntry } from './inferGraph.js'
 import { branchPattern, captureMatchValue, convertCaseToMatch, copyOwnedFunctions, createMatch, deleteMatch, ensureTypeKeys, matchCaseId, matchProblem, nameRecordFields, pasteOwnedFunctions, remapMatchNode, renameMatchBinder, setMatchDefault } from './matchGraph.js'
@@ -12,12 +13,13 @@ import { classArity, reduce, predsOnVar, pickDefault, entails, findInstance, hea
 import { createEvaluator, elaborationIndex, EvalError, isClosure, isData, showValue } from './evaluator.js'
 import { HEAD_NAMES, classEnvironment, classMethodDefinitions, classUsesOf, classesUsingType, declareClasses, instanceEvidence, instanceMethodProblem, renameTypeInClasses, renameTypeInInstances, showHead, writtenEnvironment, writtenMethodProblem, writtenMinimalProblem } from './classDecls.js'
 import { DeclError, declToDraft, declareTypes, derivedDefinitions, derivedInstances, draftToSource, paramKind, renameTypeReferences, typeArities, typeKinds } from './typeDecls.js'
-import { classGraph, layoutGraph, layoutKey, renameLayout, typeGraph, universeGraph } from './declGraph.js'
+import { classGraph, layoutGraph, layoutKey, renameLayout, typeGraph } from './declGraph.js'
+import { declarationMain, declarationNode, declarationSceneEdges, isDeclarationNode, renameDeclarationNode, syncDeclarationBodies, syncDeclarationNodes } from './sceneDeclarations.js'
 import { drawDeclGraph } from './declCanvas.js'
 import { TAKEABLE_TYPES, customizeDerived, isPristineOverride, libraryTypeProblem, migrateTypeEdit, primLabel, primitiveDefinitions, resetDerived, takeOverType } from './typeEdits.js'
 import { BUILTIN_CLASSES, METHOD_CLASS, METHOD_LABEL, METHOD_PARAMS } from './classMethods.js'
 import { FUNCTION_LAWS, checkFunctionLaw } from './laws.js'
-import { createGame, isProgram } from './runtime.js'
+import { createGame, entryProgram, isProgram } from './runtime.js'
 import { gameStorageSlot, migrateLegacyGame, readGameSave, writeGameSave } from './gameStorage.js'
 import { asciiType, printDefinitionTokens, printNodeText } from './haskellPrint.js'
 import { buildDefinitionView, isEditableView, restoreDefinition, takeOverDefinition, viewIdOf } from './definitionViews.js'
@@ -39,7 +41,7 @@ import { PRELUDE, libraryDefs, preludeDefs, preludeTypeDefs, preludeTypes } from
 import { PLAYER_MODULES, buildPlayerHtml } from './exportHtml.js'
 
 // The player modules' source text, for bundling into an exported game (Vite inlines these).
-const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './matchGraph.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
+const playerSources = Object.fromEntries(Object.entries(import.meta.glob(['./typeSystem.js', './classEnv.js', './dataTypes.js', './literals.js', './classMethods.js', './matchGraph.js', './ioRuntime.js', './evaluator.js', './runtime.js', './player.js'], { query: '?raw', import: 'default', eager: true })).map(([path, code]) => [path.slice(2, -3), code]))
 import { STORAGE_KEY, ProjectError, createHistory, mergeBuiltins, parseProject, serializeProject, upgradeProject } from './project.js'
 import { BUILTIN_GROUPS, CLASS_NOTES, classLabel } from './classGroups.js'
 // Classes print under their Haskell names (Ring as Num, …) everywhere the app shows a type.
@@ -67,7 +69,7 @@ app.innerHTML = `
           <button class="library-item" data-type="boolean"><span class="lib-icon bool-icon">◉</span><span><b>Bool</b><small>True · False</small></span></button></div>
           <div class="library-title" id="parameter-title" hidden><span>매개변수</span></div>
           <div id="parameter-library"></div>
-          <div class="library-title"><span>함수 · 열기 / 추가</span><button class="add-node" aria-label="함수 만들기" title="함수 만들기">+</button></div>
+          <div class="library-title"><span>함수 · 열기 / 호출</span></div>
           <div id="function-library"></div>
           <details class="library-section" id="types-section"><summary>타입</summary><div class="library-title types-title"><span>타입 선언</span><button class="open-universe" aria-label="타입 우주" title="타입 우주 — 모든 타입과 클래스를 한 그래프로">◎</button><button class="add-type" aria-label="타입 선언" title="타입 선언 — 생성자 함수로 정의해요">+</button></div>
           <div id="type-palette"></div>
@@ -83,7 +85,7 @@ app.innerHTML = `
       </aside>
       <section class="canvas-panel">
         <div class="canvas-toolbar"><div class="breadcrumbs"><button class="crumb-back" id="back-graph" hidden>← main</button><span>그래프</span><span>/</span><b id="graph-name">main</b><span class="saved" id="saved-status"><i></i> <span>방금 저장됨</span></span></div><div class="toolbar-actions"><button class="tool-button icon-only" id="undo" title="실행 취소" disabled>↶</button><button class="tool-button icon-only" id="redo" title="다시 실행" disabled>↷</button><details class="project-menu"><summary class="tool-button">프로젝트</summary><div class="project-menu-items"><button class="tool-button" id="export" title="프로젝트를 JSON으로 내려받기">⤓ <span>프로젝트 저장 (.json)</span></button><button class="tool-button" id="import" title="프로젝트 JSON 파일 불러오기">⤒ <span>프로젝트 열기</span></button><input type="file" id="import-file" accept="application/json,.json" hidden /><select class="tool-select" id="template" title="템플릿에서 시작 (실행 취소 가능)"><option value="">✦ 템플릿…</option><option value="clickCounter">클릭 카운터</option><option value="blankGame">빈 게임</option><option value="vending">자판기 (함수와 타입)</option><option value="nim">님 (조건)</option><option value="dice">주사위 (난수 · 그림)</option><option value="damage">데미지 (커링과 합성)</option><option value="rps">가위바위보 (데이터 타입)</option><option value="simon">사이먼 (리스트와 재귀)</option><option value="highLow">하이로우 (타입 클래스)</option><option value="blackjack">블랙잭 (리스트)</option></select><button class="tool-button" id="export-game" title="게임을 독립 HTML 파일 하나로 내려받기">⬇ <span>게임 내보내기 (.html)</span></button><button class="tool-button" id="reset">↺ <span>프로젝트 초기화</span></button></div></details><button class="tool-button primary" id="run">▶ <span>실행 add</span></button></div></div>
-        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div class="canvas-empty" hidden><b>빈 그래프예요</b><span>사이드바에서 값·함수를 추가하거나 캔버스로 끌어다 놓으세요.</span><span><kbd data-shortcut="K"></kbd> 블록 검색 · <i>프로젝트 › 템플릿</i>으로 예제 열기</span></div><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="모든 함수 펼치기: 슬롯에 꽂힌 것을 캔버스에 보여요">⤢</button><button id="fold-all" title="모든 함수 접기: 꽂힌 것을 슬롯 안에 넣어요">⤡</button></div></div>
+        <div class="canvas-wrap"><div id="play-panel" hidden></div><div id="console-panel" hidden></div><div id="type-panel" hidden></div><canvas id="graph-canvas"></canvas><div class="canvas-empty" hidden><b>빈 그래프예요</b><span>사이드바에서 값·함수를 추가하거나 캔버스로 끌어다 놓으세요.</span><span><kbd data-shortcut="K"></kbd> 블록 검색 · <i>프로젝트 › 템플릿</i>으로 예제 열기</span></div><div id="port-editor"></div><div class="zoom-control"><button id="zoom-out">−</button><span id="zoom-level">100%</span><button id="zoom-in">+</button><button id="fit">⌗</button><button id="unfold-all" title="모든 함수 펼치기: 슬롯에 꽂힌 것을 캔버스에 보여요">⤢</button><button id="fold-all" title="모든 함수 접기: 꽂힌 것을 슬롯 안에 넣어요">⤡</button></div></div>
         <footer class="canvas-footer"><span>블록 <b id="node-count">2</b>개</span><span>연결 <b id="connection-count">0</b>개</span><span class="footer-spacer"></span><span class="shortcut"><kbd data-shortcut="Enter"></kbd><span id="run-shortcut-label">실행 add</span></span></footer>
       </section>
       <aside class="inspector" id="inspector-panel"><div class="inspector-title"><span>속성</span><button class="close-inspector" aria-label="속성 패널 닫기">×</button></div><div id="inspector-content"></div></aside>
@@ -329,6 +331,8 @@ function applyTypes(next, nextClasses = classes, nextInstances = instances) {
   const env = classEnvironment(resolvedClasses)
   setDynamicClasses(env.classes)
   setDynamicInstances([...derivedInstances(types), ...env.instances])
+  syncDeclarationNodes(nodes, types, classes, instances, layouts)
+  syncDeclarationBodies(nodes, functionBodies)
   elaborationCache = null
   projectPassCache = null
 }
@@ -513,7 +517,7 @@ function createLambda() {
   functionBodies[id] = createFunctionBody(id, ['x'])
   addFunctionCall(id)
   renderFunctionLibrary()
-  showToast('λ를 추가했어요 — 더블클릭(또는 본체 열기)해서 정의하고, 바깥 값을 슬롯에 꽂으면 캡처해요')
+  showToast('λ를 추가했어요 — 이름을 입력하면 함수로 등록하고, 더블클릭하면 본체를 편집해요')
 }
 
 function beginPatternMatch(target) {
@@ -770,6 +774,14 @@ function resetDerivedFunction(id) {
 // adding a field gives every constructor call a new empty slot, adding a
 // constructor gives every case call a new branch (typeEdits.js).
 const typePanel = document.querySelector('#type-panel')
+const declarationLayer = document.createElement('div')
+declarationLayer.id = 'declaration-layer'
+declarationLayer.innerHTML = '<div class="scene-tools"><button class="tool-button" data-scene-new-type>+ 타입 선언</button><button class="tool-button" data-scene-new-class>+ 클래스</button></div>'
+document.querySelector('.canvas-wrap').append(declarationLayer)
+declarationLayer.querySelector('[data-scene-new-type]').onclick = () => openTypeEditor()
+declarationLayer.querySelector('[data-scene-new-class]').onclick = () => openClassEditor()
+const declarationCards = new Map()
+let declarationDrag = null
 let typeEditor = null // { original: name of the declaration being edited (null until first applied), draft, appliedDraft: the draft as last applied }
 function keyed(draft) {
   return ensureTypeKeys(draft)
@@ -790,7 +802,11 @@ function draftKeyMap(before, after) {
 function openTypeEditor(name = null) {
   stopGame()
   classEditor = null
-  universeOpen = false
+  typePanel.hidden = true
+  typePanel.innerHTML = ''
+  state.activeFunction = declarationMain(nodes)?.id || null
+  state.functionStack = []
+  const position = !name ? freeDeclarationPosition() : null
   if (!name) {
     // A new type: one constructor without fields, under a free name — valid at once.
     let n = 1
@@ -800,8 +816,12 @@ function openTypeEditor(name = null) {
     typeEditor = { original: null, draft: keyed(draft), appliedDraft: null }
     applyTypeDraft()
   } else typeEditor = editorFor(name)
-  typePanel.hidden = false
+  const node = declarationNode(nodes, 'type', typeEditor.original)
+  if (position && node) Object.assign(node, position)
+  if (node) state.selected = node.id
+  renderSceneDeclarations()
   renderTypeEditor()
+  renderFunctionLibrary(); updateInspector(); focusDeclaration(node)
 }
 
 // --- Type universe ------------------------------------------------------------
@@ -810,46 +830,157 @@ function openTypeEditor(name = null) {
 // superclass at its subclasses, a type at the classes it has an instance
 // of. A click on a card opens that declaration's own graph; ◎ in its bar
 // comes back here.
-let universeOpen = false
-function universeButtonHtml() { return '<button class="tool-button" data-universe title="All types and classes as one graph">◎ 타입 우주</button>' }
+function universeButtonHtml() { return '<button class="tool-button" data-universe title="main의 계산과 타입 선언을 함께 보기">◎ 씬 전체</button>' }
 function openUniverse() {
   stopGame()
-  typeEditor = null
-  classEditor = null
-  universeOpen = true
-  typePanel.hidden = false
-  renderUniverse()
+  closeTypeEditor()
+  state.activeFunction = declarationMain(nodes)?.id || null
+  state.functionStack = []
+  renderFunctionLibrary(); updateInspector(); fitToView()
 }
 function renderUniverse() {
-  if (!universeOpen) return
-  const graph = universeGraph(types, classes, instances)
-  typePanel.innerHTML = `
-    <div class="play-bar type-bar"><b>타입 우주</b>
-      <span class="te-status ok">${Object.keys(types).length} types · ${Object.keys(classes).length} classes</span>
-      <button class="tool-button" data-u="add-type">+ type</button>
-      <button class="tool-button" data-u="add-class">+ class</button>
-      <button class="tool-button icon-only" data-u="close" title="Back to the canvas">×</button>
-    </div>
-    <p class="te-hint decl-hint">A type points at the types that use it in a field and at the classes it has an instance of; a superclass points at its subclasses. Click a card to open its declaration.</p>
-    <div class="decl-host"></div>`
-  typePanel.querySelector('[data-u="add-type"]').onclick = () => openTypeEditor()
-  typePanel.querySelector('[data-u="add-class"]').onclick = () => openClassEditor()
-  typePanel.querySelector('[data-u="close"]').onclick = closeTypeEditor
-  const host = typePanel.querySelector('.decl-host')
-  if (!graph.nodes.length) { host.innerHTML = '<p class="decl-empty">No types or classes yet — + type or + class to start.</p>'; return }
-  const card = (n) => n.kind === 'type'
-    ? `<div class="decl-kind">${n.library ? 'type · Prelude, yours' : 'type'}</div><div class="decl-head"><span class="lib-icon type-icon">T</span><b>${escapeAttr([n.name, ...n.params].join(' '))}</b></div><small class="decl-sub">${escapeAttr(n.constructors.join(' | '))}</small>`
-    : `<div class="decl-kind">${n.builtin ? 'class · builtin' : 'class'}</div><div class="decl-head"><span class="lib-icon class-icon">C</span><b>${escapeAttr(n.builtin ? n.name : `${n.name} ${n.param}`)}</b></div>`
-  drawDeclGraph(host, {
-    graph, at: layoutGraph(graph, layouts.universe, { universe: true }), fixed: new Set(Object.keys(layouts.universe || {})), viewKey: 'universe', card,
-    className: () => 'decl-openable',
-    onMoved: (_, positions) => { layouts.universe = { ...positions }; draw() },
-    onOpen: (id) => {
-      const [kind, name] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)]
-      if (kind === 'type') openTypeEditor(name)
-      else openClassEditor(name)
-    },
+  renderSceneDeclarations()
+}
+function declarationSize(node) {
+  const card = declarationCards.get(node.id)
+  const width = card?.offsetWidth || 370
+  const height = card?.offsetHeight || 170
+  return { width, height }
+}
+function freeDeclarationPosition() {
+  const width = 470, height = 440
+  const view = { left: -state.offset.x / state.zoom, top: -state.offset.y / state.zoom, right: (canvas.clientWidth - state.offset.x) / state.zoom, bottom: (canvas.clientHeight - state.offset.y) / state.zoom }
+  const center = { x: (view.left + view.right) / 2, y: (view.top + view.bottom) / 2 }
+  // A declaration card is shared by the top-level scene and main's body at the
+  // same coordinates, so it must clear the nodes of both, wherever it was made.
+  const main = declarationMain(nodes)
+  const scenes = new Set([nodes, activeNodes(), main && allBodies[main.id]].filter(Boolean))
+  const obstacles = [...scenes].flatMap((scene) => Object.values(scene)).filter(isVisible)
+  const free = (p) => !obstacles.some((n) => {
+    const halfH = (isDeclarationNode(n) ? declarationSize(n).height : n.type === 'function' ? FN_H : CHIP_H) / 2 + 40
+    const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
+    const right = n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n)
+    return p.x + width / 2 + 30 > left && p.x - width / 2 - 30 < right && Math.abs(p.y - n.y) < height / 2 + halfH
   })
+  const xs = [center.x, view.left + width / 2 + 25, view.right - width / 2 - 25]
+  const ys = [center.y, view.top + height / 2 + 25, view.bottom - height / 2 - 25]
+  for (const x of xs) for (const y of ys) if (x - width / 2 >= view.left && x + width / 2 <= view.right && y - height / 2 >= view.top && y + height / 2 <= view.bottom && free({ x, y })) return { x, y }
+  for (let ring = 1; ring < 30; ring++) for (let dx = -ring; dx <= ring; dx++) for (let dy = -ring; dy <= ring; dy++) {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue
+    const p = { x: center.x + dx * (width + 70), y: center.y + dy * (height + 60) }
+    if (free(p)) return p
+  }
+  return { x: center.x + 1600, y: center.y }
+}
+function focusDeclaration(node) {
+  if (!node || !canvas.clientWidth) return draw()
+  const { width, height } = declarationSize(node)
+  state.zoom = Math.min(1, (canvas.clientWidth - 70) / width, (canvas.clientHeight - 70) / height)
+  state.offset = { x: canvas.clientWidth / 2 - node.x * state.zoom, y: canvas.clientHeight / 2 - node.y * state.zoom }
+  document.querySelector('#zoom-level').textContent = `${Math.round(state.zoom * 100)}%`
+  draw()
+}
+function declarationEditorHost() {
+  const node = typeEditor && declarationNode(nodes, 'type', typeEditor.original)
+  return node && declarationCards.get(node.id)?.querySelector('.scene-node-body')
+}
+function renderSceneDeclarations() {
+  const visible = !state.activeFunction || state.activeFunction === declarationMain(nodes)?.id
+  declarationLayer.hidden = !visible
+  if (!visible) return
+  declarationLayer.querySelector('.scene-tools').style.top = state.activeFunction ? `${(document.querySelector('#signature-bar')?.offsetHeight || 52) + 24}px` : '12px'
+  const wanted = new Set(Object.values(nodes).filter(isDeclarationNode).map((n) => n.id))
+  for (const [id, el] of declarationCards) if (!wanted.has(id)) { el.remove(); declarationCards.delete(id) }
+  for (const node of Object.values(nodes).filter(isDeclarationNode)) {
+    const name = node.declarationName
+    let card = declarationCards.get(node.id)
+    if (!card) {
+      card = document.createElement('section')
+      card.className = 'scene-declaration'
+      card.dataset.nodeId = node.id
+      card.innerHTML = '<div class="scene-node-handle" title="드래그해서 이동"><span></span><span aria-hidden="true">⠿</span></div><div class="scene-node-body"></div>'
+      declarationLayer.append(card); declarationCards.set(node.id, card)
+      card.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || event.target.closest('button,input,select,textarea,summary,a,.type-chip,.tn')) return
+        event.preventDefault(); event.stopPropagation()
+        flushCheckpoint()
+        clearTimeout(checkpointTimer)
+        state.multi.clear(); state.selected = node.id
+        declarationDrag = { node, pointerId: event.pointerId, x: event.clientX, y: event.clientY, startX: node.x, startY: node.y, moved: false }
+        card.setPointerCapture(event.pointerId)
+        updateInspector(); draw()
+      })
+      card.addEventListener('pointermove', (event) => {
+        if (declarationDrag?.node !== node) return
+        const dx = event.clientX - declarationDrag.x, dy = event.clientY - declarationDrag.y
+        if (Math.hypot(dx, dy) > 3) declarationDrag.moved = true
+        node.x = declarationDrag.startX + dx / state.zoom; node.y = declarationDrag.startY + dy / state.zoom
+        draw()
+      })
+      const finish = () => { if (declarationDrag?.node === node) { declarationDrag = null; draw() } }
+      card.addEventListener('pointerup', finish)
+      card.addEventListener('pointercancel', finish)
+      card.addEventListener('wheel', (event) => {
+        const scrolling = event.target.closest('.te-simple')
+        if (scrolling && scrolling.scrollHeight > scrolling.clientHeight) return
+        event.preventDefault()
+        setZoom(state.zoom * Math.exp(-event.deltaY * .001), event.clientX, event.clientY)
+      }, { passive: false })
+    }
+    card.dataset.declarationKind = node.declarationKind
+    card.dataset.declarationName = name
+    card.querySelector('.scene-node-handle span').textContent = node.declarationKind === 'type' ? '타입 선언' : '클래스 선언'
+    const editing = node.declarationKind === 'type' && typeEditor?.original === name
+    card.classList.toggle('editing', editing)
+    card.classList.toggle('selected', state.selected === node.id || state.multi.has(node.id))
+    const decl = node.declarationKind === 'type' ? types[name] : classes[name]
+    const signature = JSON.stringify([node.declarationKind, decl, instances[name], editing])
+    if (!editing && card.dataset.signature !== signature) {
+      const body = card.querySelector('.scene-node-body')
+      if (node.declarationKind === 'type' && decl) {
+        body.innerHTML = `<div class="scene-decl-heading"><button class="type-chip scene-type-chip" data-con="${escapeAttr(name)}" title="이 타입을 필드나 함수 타입으로 드래그">T</button><button class="scene-decl-title" data-scene-edit>${escapeAttr([name, ...decl.params].join(' '))}</button><button class="scene-construct" title="생성자 호출 추가">+</button></div><div class="scene-constructors">${decl.constructors.map((c) => `<div class="scene-constructor"><b>${escapeAttr(c.name)}</b>${c.fields.map((f, i) => `<div class="scene-field"><span>${escapeAttr(f.name || `field${i + 1}`)}</span><small>${escapeAttr(showType(f.type, (v) => v))}</small></div>`).join('')}</div>`).join('')}</div><button class="scene-edit" data-scene-edit>생성자 · 필드 편집</button>`
+        body.querySelector('.scene-construct').onclick = () => addTypeCall(name)
+      } else {
+        const methods = decl?.methods || Object.values(classDefs).filter((d) => d.method?.cls === name)
+        body.innerHTML = `<div class="scene-decl-heading"><span class="scene-class-glyph">C</span><button class="scene-decl-title" data-scene-edit>${escapeAttr(name)}</button></div><small class="scene-class-methods">${methods.map((m) => escapeAttr(m.name || m.label)).join(' · ') || '인스턴스'}</small><button class="scene-edit" data-scene-edit>메서드 · 인스턴스 편집</button>`
+      }
+      body.querySelectorAll('[data-scene-edit]').forEach((b) => { b.onclick = () => {
+        state.selected = node.id
+        if (node.declarationKind === 'type') openTypeEditor(name)
+        else openClassEditor(name)
+      } })
+    }
+    card.dataset.signature = signature
+    const { width, height } = declarationSize(node), p = point(node)
+    card.style.left = `${p.x - width * state.zoom / 2}px`; card.style.top = `${p.y - height * state.zoom / 2}px`
+    card.style.transform = `scale(${state.zoom})`
+  }
+}
+function drawDeclarationEdges() {
+  let svg = declarationLayer.querySelector('.scene-connections')
+  if (!svg) {
+    svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.classList.add('scene-connections'); svg.setAttribute('aria-hidden', 'true')
+    declarationLayer.prepend(svg)
+  }
+  if (declarationLayer.hidden) return
+  const graph = activeNodes()
+  const edges = declarationSceneEdges(nodes, types, classes, instances, functionBodies, definitions).flatMap((edge) => graph[edge.to] ? [edge] : Object.values(graph).filter((n) => n.sourceFunctionId === edge.to).map((n) => ({ ...edge, to: n.id })))
+  if (state.activeFunction) for (const call of Object.values(graph)) {
+    const name = definitions[call.sourceFunctionId]?.derived?.type
+    const type = name && declarationNode(nodes, 'type', name)
+    if (type) edges.push({ from: type.id, to: call.id, kind: 'function-type' })
+  }
+  svg.innerHTML = '<defs><marker id="scene-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#91a398"/></marker></defs>' + edges.map((edge) => {
+    const from = graph[edge.from], to = graph[edge.to]
+    if (!from || !to || !isVisible(to)) return ''
+    const a = isFunction(from) ? functionBlockScreenRect(from) : valueBlockScreenRect(from)
+    const b = isFunction(to) ? functionBlockScreenRect(to) : valueBlockScreenRect(to)
+    const forward = from.x < to.x, ax = forward ? a.right : a.left, bx = forward ? b.left : b.right
+    const ay = point(from).y, by = point(to).y, bend = Math.max(55 * state.zoom, Math.abs(ax - bx) / 2), sign = forward ? 1 : -1
+    const path = from === to ? `M${a.right},${ay - 20 * state.zoom} C${a.right + bend},${ay - 90 * state.zoom} ${a.right + bend},${ay + 90 * state.zoom} ${a.right},${ay + 20 * state.zoom}` : `M${ax},${ay} C${ax + sign * bend},${ay} ${bx - sign * bend},${by} ${bx},${by}`
+    return `<path class="scene-edge scene-edge-${edge.kind}" data-from="${escapeAttr(edge.from)}" data-to="${escapeAttr(edge.to)}" d="${path}" marker-end="url(#scene-arrow)"/>`
+  }).join('')
 }
 // A renamed declaration's layout goes with it.
 function moveLayout(from, to) {
@@ -860,9 +991,10 @@ function moveLayout(from, to) {
 function closeTypeEditor() {
   typeEditor = null
   classEditor = null
-  universeOpen = false
   typePanel.hidden = true
   typePanel.innerHTML = ''
+  renderSceneDeclarations()
+  draw()
 }
 
 // Check the draft; apply it if valid — rewiring every call to what the
@@ -899,6 +1031,7 @@ function applyTypeDraft() {
   const changed = before && typeEditor.appliedDraft ? migrateTypeEdit({ nodes, functionBodies }, before, next[d.name], draftKeyMap(typeEditor.appliedDraft, d)) : 0
   if (before && d.name !== before.name) renameTypeInAnnotations(before.name, d.name)
   if (before && d.name !== before.name) moveLayout(layoutKey('type', before.name), layoutKey('type', d.name))
+  if (before && d.name !== before.name) renameDeclarationNode(nodes, 'type', before.name, d.name)
   applyTypes(next, nextClasses, nextInstances)
   typeEditor.original = d.name
   typeEditor.appliedDraft = structuredClone(d)
@@ -1002,6 +1135,9 @@ function chooseType(title, commit, { variable = false, initial = '' } = {}) {
 
 function renderTypeEditor(error = '') {
   if (!typeEditor) return
+  renderSceneDeclarations()
+  const panel = declarationEditorHost()
+  if (!panel) return
   const d = typeEditor.draft
   const applied = typeEditor.original && types[typeEditor.original]
   const chainOfDef = (id) => {
@@ -1057,7 +1193,7 @@ function renderTypeEditor(error = '') {
         return `<div class="te-derived"><b>${escapeAttr(def.label)}</b> <small>${chainOfDef(def.id)}</small> ${custom ? `<i class="customized">✎ custom${changed ? '' : ' (unchanged)'}</i> <button class="law-check" data-edit="${def.id}">Edit body →</button> <button class="law-check" data-reset="${def.id}" title="Back to the derived definition">Reset</button>` : `<button class="law-check icon-only" data-edit="${def.id}" title="Customize: redefine it with a body of your own (starting from ${escapeAttr(primLabel(def.label))})">✎</button>`}</div>`
       }).join('')}`,
   }
-  typePanel.innerHTML = `
+  panel.innerHTML = `
     <div class="play-bar type-bar"><b>TYPE</b>
       <span class="te-status ${error ? 'bad' : 'ok'}" role="status">${error ? escapeAttr(error) : ''}</span>
       ${universeButtonHtml()}
@@ -1083,7 +1219,7 @@ function renderTypeEditor(error = '') {
   graph.edges = graph.edges.map((e) => (e.field === undefined ? e : { ...e, toPort: `[data-field-row="${e.field}"]` }))
   const key = layoutKey('type', typeEditor.original || d.name)
   const at = layoutGraph(graph, layouts[key])
-  drawDeclGraph(typePanel.querySelector('.decl-host'), {
+  drawDeclGraph(panel.querySelector('.decl-host'), {
     graph, at, viewKey: key, fixed: new Set(Object.keys(layouts[key] || {})),
     card: (n) => `<b>${escapeAttr(n.name || n.op)}</b>${n.fields ? `<small>${n.fields.map((f) => escapeAttr(f.type)).join(', ')}</small>` : ''}`,
     className: () => '',
@@ -1092,7 +1228,8 @@ function renderTypeEditor(error = '') {
       draw()
     },
   })
-  restoreDisclosureState(typePanel)
+  restoreDisclosureState(panel)
+  panel.querySelector('[data-universe]').onclick = openUniverse
   // Every _ must be filled before the declaration can apply.
   const update = (mutate) => { mutate(d); renderTypeEditor(d.constructors.some((c) => c.fields.some((f) => /(^|[^\w'])_(?![\w'])/.test(f.type))) ? 'Fill each _ in a field — drag a type into it' : applyTypeDraft()) }
   // A type variable a field mentions must be a parameter of the type (as in Haskell): it's added by itself.
@@ -1100,7 +1237,7 @@ function renderTypeEditor(error = '') {
     const vars = typeText(type).match(/(?<![\w'])[a-z][\w']*/g) || []
     d.params = [...(d.params || []), ...new Set(vars.filter((v) => !(d.params || []).includes(v)))]
   }
-  const $ = (sel) => typePanel.querySelector(sel)
+  const $ = (sel) => panel.querySelector(sel)
   const renames = {
     type: (name) => {
       const old = d.name
@@ -1120,7 +1257,7 @@ function renderTypeEditor(error = '') {
     },
     field: (name, el) => { const ci = Number(el.dataset.ci); d.constructors[ci].fields[Number(el.dataset.fi)].name = name; nameRecordFields(d, ci, functionLabelsExcept()) },
   }
-  typePanel.querySelectorAll('.te-ident').forEach((el) => {
+  panel.querySelectorAll('.te-ident').forEach((el) => {
     el.onclick = el.ondblclick = () => {
       if (!el.isConnected) return
       const input = document.createElement('input')
@@ -1161,11 +1298,11 @@ function renderTypeEditor(error = '') {
       update(() => { d.params = [...(d.params || []), type.id] })
     },
   })
-  typePanel.querySelectorAll('[data-te="drop-param"]').forEach((b) => { b.onclick = () => update(() => { d.params.splice(Number(b.dataset.pi), 1) }) })
-  typePanel.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => editDerived(b.dataset.edit) })
-  typePanel.querySelectorAll('[data-reset]').forEach((b) => { b.onclick = () => { resetDerivedFunction(b.dataset.reset); renderTypeEditor() } })
-  typePanel.querySelectorAll('[data-use-derived]').forEach((b) => { b.onclick = () => { const id = b.dataset.useDerived; closeTypeEditor(); addFunctionCall(id) } })
-  typePanel.querySelectorAll('.te-ctor').forEach((row) => {
+  panel.querySelectorAll('[data-te="drop-param"]').forEach((b) => { b.onclick = () => update(() => { d.params.splice(Number(b.dataset.pi), 1) }) })
+  panel.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => editDerived(b.dataset.edit) })
+  panel.querySelectorAll('[data-reset]').forEach((b) => { b.onclick = () => { resetDerivedFunction(b.dataset.reset); renderTypeEditor() } })
+  panel.querySelectorAll('[data-use-derived]').forEach((b) => { b.onclick = () => { const id = b.dataset.useDerived; closeTypeEditor(); addFunctionCall(id) } })
+  panel.querySelectorAll('.te-ctor').forEach((row) => {
     const c = d.constructors[Number(row.dataset.ci)]
     row.querySelector('[data-te="use-ctor"]').onclick = () => { closeTypeEditor(); addFunctionCall(`type:${d.name}:${c.name}`) }
     row.querySelector('[data-te="move-ctor"]')?.addEventListener('click', () => update(() => {
@@ -1230,6 +1367,7 @@ function renderTypeEditor(error = '') {
     renderFunctionLibrary(); renderPreludeLibrary(); updateInspector(); draw()
     showToast(restoring ? `${name} is the Prelude's declaration again (undo to bring yours back)` : `Deleted type ${name} (undo to bring it back)`)
   }
+  draw()
 }
 
 // --- Class editor ---------------------------------------------------------------
@@ -1257,7 +1395,6 @@ function classEditorFor(name) {
 function openClassEditor(name = null) {
   stopGame()
   typeEditor = null
-  universeOpen = false
   if (name) classEditor = classEditorFor(name)
   else {
     let k = 1
@@ -1292,6 +1429,7 @@ function applyClassDraft() {
     if (old && classEditor.appliedDraft) renameMethodCalls(classEditor.appliedDraft, d)
     // Signatures' pinned constraints follow a rename too.
     if (old && old !== d.name) for (const body of Object.values(functionBodies)) for (const n of Object.values(body)) if (n.context) n.context = n.context.map((q) => (q.cls === old ? { ...q, cls: d.name } : q))
+    if (old && old !== d.name) renameDeclarationNode(nodes, 'class', old, d.name)
     applyTypes(types, next, nextInstances)
     classEditor.original = d.name
     classEditor.appliedDraft = structuredClone(d)
@@ -1786,33 +1924,6 @@ function createFunctionBody(id, params) {
   return body
 }
 
-function createCustomFunction() {
-  if (document.querySelector('#function-dialog')) return
-  const dialog = document.createElement('div')
-  dialog.id = 'function-dialog'
-  dialog.innerHTML = `<form class="function-form"><h2>새 커스텀 함수</h2><label>함수 이름<input name="label" value="customFn" required /></label><label>매개변수 <small>(쉼표로 구분)</small><input name="params" value="x, y" /></label><p>생성 후 함수 본체에서 노드를 Output에 연결하세요.</p><div><button type="button" data-cancel>취소</button><button class="tool-button primary">생성</button></div></form>`
-  document.body.append(dialog)
-  const form = dialog.querySelector('form')
-  dialog.querySelector('[data-cancel]').onclick = () => dialog.remove()
-  form.onsubmit = (event) => {
-    event.preventDefault()
-    const label = new FormData(form).get('label').toString().trim()
-    const params = new FormData(form).get('params').toString().split(',').map(param => param.trim()).filter(Boolean)
-    const nameProblem = functionNameProblem(label)
-    if (nameProblem) return window.alert(nameProblem)
-    if (new Set(params).size !== params.length) return window.alert('매개변수 이름은 중복될 수 없습니다.')
-    const id = `custom-${Date.now()}`
-    nodes[id] = { id, type: 'function', ...freePosition(nodes, 120 + params.length * SLOT_STRIDE), label, params, mounted: params.map(() => null), paramScopes: params.map(() => 'local'), scope: 'main', color: '#f0954a', custom: true }
-    functionBodies[id] = createFunctionBody(id, params)
-    state.selected = id
-    dialog.remove()
-    renderFunctionLibrary()
-    functionLibrary.querySelector(`[data-function-id="${id}"]`)?.scrollIntoView({ block: 'nearest' })
-    updateInspector()
-    draw()
-  }
-}
-
 // A fit asked for while the canvas had no size (another column showing on a
 // phone) waits for the canvas to be shown again.
 let fitPending = false
@@ -1922,6 +2033,7 @@ function pointInFunctionBlock(node, x, y) { return x >= functionBlockLeft(node) 
 // A value chip is as wide as its content needs (head badge + text), within
 // [CHIP_W, CHIP_MAX_W] world px.
 function chipWidth(node) {
+  if (isDeclarationNode(node)) return declarationSize(node).width
   ctx.save()
   ctx.font = `600 ${CHIP_FONT}px ui-monospace, monospace`
   const text = ctx.measureText(nodeDisplayText(node)).width
@@ -1935,11 +2047,11 @@ function valueBlockScreenRect(node) {
   return {
     left: p.x - half * state.zoom,
     right: p.x + half * state.zoom,
-    top: p.y - (CHIP_H / 2) * state.zoom,
-    height: CHIP_H * state.zoom,
+    top: p.y - ((isDeclarationNode(node) ? declarationSize(node).height : CHIP_H) / 2) * state.zoom,
+    height: (isDeclarationNode(node) ? declarationSize(node).height : CHIP_H) * state.zoom,
   }
 }
-function pointInValueBlock(node, x, y) { return Math.abs(x - node.x) <= chipHalfWidth(node) && Math.abs(y - node.y) <= CHIP_H / 2 }
+function pointInValueBlock(node, x, y) { return Math.abs(x - node.x) <= chipHalfWidth(node) && Math.abs(y - node.y) <= (isDeclarationNode(node) ? declarationSize(node).height : CHIP_H) / 2 }
 // World-space bounding box of every node currently on screen (skips anything
 // mounted into a slot, same filter draw() uses) — the block/chip's own rect
 // widened with fixed padding for what draw() puts just outside that rect:
@@ -1952,7 +2064,7 @@ function graphBounds(graphNodes = Object.values(activeNodes()).filter(isVisible)
     const isFn = n.type === 'function'
     const left = isFn ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
     const right = isFn ? functionBlockRight(n) : n.x + chipHalfWidth(n)
-    const halfH = (isFn ? FN_H : CHIP_H) / 2
+    const halfH = (isDeclarationNode(n) ? declarationSize(n).height : isFn ? FN_H : CHIP_H) / 2
     minX = Math.min(minX, left); maxX = Math.max(maxX, right)
     minY = Math.min(minY, n.y - halfH - 40); maxY = Math.max(maxY, n.y + halfH + 50)
   })
@@ -1989,7 +2101,7 @@ function freePosition(graph, width) {
     if (!isVisible(n)) return false
     const left = n.type === 'function' ? functionBlockLeft(n) : n.x - chipHalfWidth(n)
     const right = n.type === 'function' ? functionBlockRight(n) : n.x + chipHalfWidth(n)
-    return Math.abs(n.y - y) < FN_H + 40 && x - FN_LEFT - 40 < right && x + width + 40 > left
+    return Math.abs(n.y - y) < (isDeclarationNode(n) ? declarationSize(n).height / 2 + FN_H / 2 : FN_H) + 40 && x - FN_LEFT - 40 < right && x + width + 40 > left
   })
   const inside = (x, y) => x - FN_LEFT >= view.left + 30 && x + width <= view.right - 30 && y - FN_H / 2 >= view.top + 30 && y + FN_H / 2 + 50 <= view.bottom - 30
   const stepX = width + 80, stepY = FN_H + 50
@@ -2264,7 +2376,7 @@ function editContext(fnId, change, message, edits = {}) {
 function drawCanvasChains(pass) {
   if (state.zoom < TAG_MIN_ZOOM) return
   for (const node of Object.values(activeNodes()).filter(isVisible)) {
-    if (node.type === 'law') continue
+    if (node.type === 'law' || isDeclarationNode(node)) continue
     const info = chainInfo(node, pass)
     if (!info) continue
     const el = document.createElement('div')
@@ -2291,6 +2403,61 @@ function drawCanvasChains(pass) {
 // parameter (named on top) and the result; drop a type from the workspace on a block to pin it.
 const signatureBar = document.createElement('div')
 signatureBar.id = 'signature-bar'
+function canRenameFunction(fnId) {
+  const def = nodes[fnId]
+  return !viewingReadonly() && def?.custom && !isManagedMain(def) && !def.readonly && !def.matchBranch && !def.override && !def.library
+}
+function commitFunctionName(fnId, value) {
+  const def = nodes[fnId]
+  const label = value.trim()
+  if (!canRenameFunction(fnId) || label === def.label) return
+  const problem = functionNameProblem(label, fnId)
+  if (problem) showToast(problem)
+  else {
+    const wasLambda = def.lambda
+    renameFunction({ nodes, functionBodies }, fnId, label)
+    if (wasLambda) {
+      // An untouched top-level λ becomes the named definition in place.
+      // Applied or connected calls keep their arguments and connections.
+      const call = !state.activeFunction && Object.values(nodes).find((n) => n.sourceFunctionId === fnId && !n.mountedTo && !n.connected && !n.mounted.some(Boolean) && !n.params.some(Boolean) && entryId !== n.id && !Object.values(nodes).some((m) => m.target === n.id || m.source === n.id || m.mounted?.includes(n.id)))
+      if (call) {
+        Object.assign(def, { x: call.x, y: call.y, folded: call.folded })
+        delete nodes[call.id]
+        if (state.selected === call.id) state.selected = fnId
+      } else Object.assign(def, freePosition(nodes, 120 + def.params.length * SLOT_STRIDE))
+    }
+    showToast(`${label}(으)로 이름을 바꿨어요 — 모든 호출이 따라가요`)
+  }
+  document.querySelectorAll('.function-name-input').forEach((el) => { if (el.dataset.definitionId === fnId) el.value = def.label })
+  renderFunctionLibrary(); updateInspector(); draw()
+}
+// A function's name occupies its head, including λ before it is named.
+// Calls and the body signature edit the same definition by id.
+function functionNameElement(fnId, location) {
+  const def = definitions[fnId]
+  const editable = canRenameFunction(fnId)
+  const el = document.createElement(editable ? 'input' : 'span')
+  el.className = editable ? 'function-name-input' : 'function-name-label'
+  el.dataset.nameLocation = location
+  el.dataset.definitionId = fnId
+  if (!editable) { el.textContent = def?.label ?? '?'; return el }
+  el.value = def.label
+  el.setAttribute('aria-label', '함수 이름')
+  el.title = def.lambda ? '이름을 입력해 함수로 등록' : '함수 이름 편집 — 모든 호출에 반영'
+  el.spellcheck = false
+  el.addEventListener('pointerdown', (event) => event.stopPropagation())
+  el.addEventListener('dblclick', (event) => event.stopPropagation())
+  el.addEventListener('change', () => commitFunctionName(fnId, el.value))
+  el.addEventListener('keydown', (event) => {
+    if (event.isComposing) return
+    if (event.key === 'Enter' || event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation()
+      if (event.key === 'Escape') el.value = nodes[fnId].label
+      el.blur()
+    }
+  })
+  return el
+}
 function drawSignatureBar() {
   if (!signatureBar.isConnected) document.querySelector('.canvas-wrap')?.append(signatureBar)
   const fnId = state.activeFunction
@@ -2305,7 +2472,8 @@ function drawSignatureBar() {
   signatureBar.hidden = !info
   if (!info) return
   const names = [...bodyParams(fnId).map((p) => p.label), 'result']
-  signatureBar.innerHTML = `<span class="sig-name"><b>ƒ ${escapeAttr(def.lambda ? 'λ' : def.label)}</b><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "Prelude의 타입 — 유지됨" : '함수 시그니처'}</span>`
+  signatureBar.innerHTML = `<span class="sig-name"><i>::</i></span>${chainHtml(info.segments, createNamer(), { ...info.opts, big: true, labels: names })}<span class="sig-hint">${def.library ? "Prelude의 타입 — 유지됨" : '함수 시그니처'}</span>`
+  signatureBar.querySelector('.sig-name').prepend(functionNameElement(fnId, 'signature'))
   wireChain(signatureBar, info)
 }
 
@@ -2413,6 +2581,8 @@ function commitSignature(fnId, edits, context, messages) {
   const body = functionBodies[fnId]
   const output = signatureOutput(fnId)
   if (!body || !output) return ''
+  // The program's main keeps IO () once it has it (older mains may still be given it).
+  if (isManagedMain(nodes[fnId]) && output.annotation === MAIN_TYPE && Object.hasOwn(edits, output.id) && String(edits[output.id]).replace(/\s+/g, ' ').trim() !== MAIN_TYPE) return MAIN_TYPE_LOCKED
   const before = Object.fromEntries(Object.keys(edits).map((id) => [id, body[id]?.annotation]))
   const contextBefore = output.context
   const hereBefore = inferGraph(definitions, functionBodies, body).annotations.here
@@ -2437,6 +2607,7 @@ function commitSignature(fnId, edits, context, messages) {
   return ''
 }
 function canConnect(source, target, index) {
+  if (isDeclarationNode(source) || isDeclarationNode(target)) return false
   if (target.match && index < target.match.branches.length) return false
   const pass = typePass()
   const expected = pass.perNode.get(target.id)?.paramTypes?.[index]
@@ -2654,12 +2825,15 @@ function drawReferenceLinks() {
   ctx.restore()
 }
 function draw() {
+  syncDeclarationBodies(nodes, functionBodies)
   foldedTexts = new Map()
   updateRunLabel()
   document.querySelector('.canvas-empty').hidden = !!state.activeFunction || Object.values(activeNodes()).some(isVisible)
   elaborationCache = null // something may have changed
   projectPassCache = null
   labelNamer = createNamer()
+  renderSceneDeclarations()
+  drawDeclarationEdges()
   const pass = typePass() // shared by every node label and port badge below, so nodes/ports that truly share a type variable display the same letter
   const w = canvas.clientWidth, h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h); ctx.fillStyle = '#f8f7fc'; ctx.fillRect(0, 0, w, h)
@@ -2674,6 +2848,7 @@ function draw() {
   drawReferenceLinks()
   drawOutputLink()
   Object.values(activeNodes()).filter((n) => isVisible(n)).forEach(n => {
+    if (isDeclarationNode(n)) return
     const selected = state.selected === n.id || state.multi.has(n.id)
     const snapHighlight = n.type === 'output' && state.snapTarget?.kind === 'output'
     if (n.type === 'function') drawFunctionBlock(n, pass, selected)
@@ -2691,7 +2866,7 @@ function draw() {
   document.querySelector('#back-graph').textContent = `← ${state.functionStack.length ? `ƒ ${definitions[state.functionStack[state.functionStack.length - 1]]?.label}` : '최상위'}`
   // Every mutation ends in a draw(), so this is the one place that notices
   // them — debounced, and skipped mid-drag so a drag records one step.
-  if (!state.drag && !state.wire) scheduleCheckpoint()
+  if (!state.drag && !state.wire && !declarationDrag) scheduleCheckpoint()
 }
 function resetExecution() {
   executionContext = null
@@ -2761,8 +2936,11 @@ function drawFunctionBlock(node, pass, selected) {
   roundedRectPath(ctx, rect.left, rect.top, rect.right - rect.left, rect.height, (FN_H / 2) * state.zoom)
   ctx.fillStyle = '#fff'; ctx.fill()
   ctx.shadowColor = 'transparent'; ctx.lineWidth = selected || broken ? 3 : 2; ctx.strokeStyle = broken ? '#e0537d' : selected ? ACCENT : NEUTRAL_BORDER; ctx.stroke()
-  ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
-  ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(node.match ? '⑂' : 'ƒ', p.x, p.y + 1)
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+  if (node.match) {
+    ctx.beginPath(); ctx.arc(p.x, p.y, 23 * state.zoom, 0, Math.PI * 2); ctx.fillStyle = ACCENT; ctx.fill()
+    ctx.fillStyle = '#fff'; ctx.font = `700 ${22 * state.zoom}px 'Space Grotesk', sans-serif`; ctx.fillText('⑂', p.x, p.y + 1)
+  }
   if (isFolded(node)) {
     ctx.textAlign = 'left'; ctx.fillStyle = '#211d34'; ctx.font = `600 ${CHIP_FONT * state.zoom}px ui-monospace, monospace`
     ctx.fillText(foldedText(node), p.x + FOLDED_TEXT_X * state.zoom, p.y + 1)
@@ -2906,11 +3084,23 @@ function updatePortEditor(pass = typePass()) {
   const focused = editor.contains(document.activeElement) && document.activeElement.classList.contains('literal-input')
     ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
     : null
+  const nameInput = document.activeElement?.matches('.function-name-input') ? document.activeElement : null
+  const focusedName = nameInput && { location: nameInput.dataset.nameLocation, value: nameInput.value, start: nameInput.selectionStart, end: nameInput.selectionEnd }
   rebuildingEditor = true
   editor.innerHTML = ''
   rebuildingEditor = false
   // A call folded away inside another's (folded) slot is hidden, and so are its own slots.
   const visibleFunctions = Object.values(activeNodes()).filter((n) => isFunction(n) && isVisible(n))
+  visibleFunctions.filter((node) => !node.match).forEach((node) => {
+    const name = functionNameElement(node.sourceFunctionId || node.id, `canvas-${node.id}`)
+    name.classList.add('function-head-name')
+    const p = point(node), folded = isFolded(node)
+    const width = folded ? 54 : 100
+    name.style.left = `${p.x - 32 * state.zoom}px`; name.style.top = `${p.y - 17 * state.zoom}px`
+    name.style.width = `${width * state.zoom}px`; name.style.height = `${34 * state.zoom}px`
+    name.style.fontSize = `${13 * state.zoom}px`
+    editor.append(name)
+  })
   // One fold toggle per call, on the top border above its head badge: folds
   // (or opens) all its slots, and everything plugged into them, at once.
   visibleFunctions.filter((node) => !node.match && node.params.length > 0).forEach((node) => {
@@ -3051,7 +3241,7 @@ function updatePortEditor(pass = typePass()) {
     el.style.left = `${at.x - portSize / 2}px`; el.style.top = `${at.y - portSize / 2}px`
     el.style.borderWidth = `${Math.max(1, 2 * state.zoom)}px`
   }
-  Object.values(graph).filter((n) => isVisible(n) && n.type !== 'output' && n.type !== 'law').forEach((n) => {
+  Object.values(graph).filter((n) => isVisible(n) && !isDeclarationNode(n) && n.type !== 'output' && n.type !== 'law').forEach((n) => {
     const port = document.createElement('div')
     const feeding = !!n.mountedTo || output?.source === n.id
     port.className = `out-port ${feeding ? 'filled' : ''} ${state.wire?.node === n ? 'active' : ''}`
@@ -3092,6 +3282,10 @@ function updatePortEditor(pass = typePass()) {
     input.focus()
     if (focused) input.setSelectionRange(focused.start, focused.end)
     else input.select()
+  }
+  if (focusedName) {
+    const next = [...document.querySelectorAll('.function-name-input')].find((el) => el.dataset.nameLocation === focusedName.location)
+    if (next) { next.value = focusedName.value; next.focus(); next.setSelectionRange(focusedName.start, focusedName.end) }
   }
 }
 // Clicking an empty slot: a literal node, plugged into it and laid out to the
@@ -3364,6 +3558,16 @@ function deleteNode(id) {
   const graph = activeNodes()
   const n = graph[id]
   if (!n) return
+  if (isDeclarationNode(n)) {
+    if (n.declarationKind === 'type') {
+      openTypeEditor(n.declarationName)
+      declarationEditorHost()?.querySelector('[data-te="delete"]')?.click()
+    } else {
+      openClassEditor(n.declarationName)
+      typePanel.querySelector('[data-ce="delete"]')?.click()
+    }
+    return
+  }
   const blocker = deleteBlocker(n)
   if (blocker) return showToast(blocker)
   // References to a deleted node would dangle — they go with it.
@@ -3394,12 +3598,6 @@ function ambiguityRow(n) {
   const why = ambiguityProblem(n, typePass())
   return why ? `<div class="property broken-call"><label>AMBIGUOUS TYPE</label><div class="connection-tag">${escapeAttr(why)}</div></div>` : ''
 }
-// A custom function's own definition can be renamed (calls refer to it by id, and follow).
-function functionNameRow(n) {
-  if (!(nodes[n.id] === n && n.custom && !isHiddenDefinition(n))) return ''
-  if (isManagedMain(n)) return `<div class="property"><label>PROGRAM ENTRY · main</label><div class="inspector-note">${MAIN_PROTECTION}</div></div>`
-  return `<div class="property"><label>NAME</label><input class="value-input" id="function-rename" value="${escapeAttr(n.label)}" title="Rename this function — every call follows" spellcheck="false" /></div>`
-}
 // A call to (or the definition of) a customized derived function says so, with the way back.
 function customizedRow(n) {
   const id = n.sourceFunctionId || n.id
@@ -3419,13 +3617,14 @@ function inspectorChainHtml(n) {
 // Inside a body, whatever is selected, the body's own definition is shown
 // too (its tokens marking the selection) — the way back to any other node.
 function enclosingDefinition(n) {
+  if (isDeclarationNode(n)) return ''
   const fn = state.activeFunction
   if (!fn || n.type === 'output' || definitions[fn]?.lambda || (n.sourceFunctionId || n.id) === fn) return ''
   return definitionBlock(fn, `DEFINITION · ƒ ${definitions[fn]?.label ?? ''}`)
 }
 function parameterControls(n) {
   if (!n.params.length) return ''
-  const editable = nodes[n.id] === n && n.custom
+  const editable = isSignatureEditable(n) === 'signature'
   return `<div class="property"><label>INPUTS</label>${n.params.map((value, i) => {
     const source = n.mounted[i] && activeNodes()[n.mounted[i]]
     return `<div class="port-row">${editable ? `<input class="param-rename" aria-label="Parameter ${i + 1} name" data-index="${i}" value="${escapeAttr(paramDisplayName(n, i))}" />${i ? `<button class="param-move" data-index="${i}" title="Move parameter left">↑</button>` : ''}` : `<span>${escapeAttr(paramDisplayName(n, i))}</span>`}${source ? `<button class="input-source" data-select-input="${i}" title="Select connected value">${escapeAttr(nodeDisplayText(source))}</button><button class="disconnect-input" data-disconnect-input="${i}" title="Disconnect input" aria-label="Disconnect ${escapeAttr(paramDisplayName(n, i))}">×</button>` : '<small>Not connected</small>'}</div>`
@@ -3440,7 +3639,7 @@ function renderFunctionInspector(n) {
   const problem = callProblem(n)
   const editable = nodes[n.id] === n && n.custom
   return `<div class="selected-node"><span class="selected-icon">ƒ</span><div><b>${escapeAttr(n.label)}</b><small>${editable ? 'Function definition' : 'Function call'}</small></div></div>
-    ${functionNameRow(n)}${ambiguityRow(n)}
+    ${ambiguityRow(n)}
     ${problem ? `<div class="property broken-call"><label>CONNECTION ERROR</label><div class="connection-tag">${escapeAttr(problem)}</div>${definitions[n.sourceFunctionId] ? '<button class="law-check" id="fix-slots">Fit slots to the function</button>' : ''}</div>` : ''}
     <div class="property"><label>${isSignatureEditable(n) === 'signature' ? 'FUNCTION SIGNATURE' : 'TYPE AFTER CONNECTIONS'}</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div>
     ${parameterControls(n)}
@@ -3465,15 +3664,22 @@ function renderMatchInspector(n) {
     ${n.match.defaultBranch ? '<button class="use-again" id="match-default-body">_ 기본 분기 편집 →</button>' : ''}
     <button class="evaluate" id="evaluate">▶ Run this node</button>${useAgainButton(n)}${deleteButton(n)}`
 }
+function renderDeclarationInspector(node) {
+  const isType = node.declarationKind === 'type', name = node.declarationName
+  const decl = isType ? types[name] : classes[name]
+  return `<div class="selected-node"><span class="selected-icon">${isType ? 'T' : 'C'}</span><div><b>${escapeAttr(name)}</b><small>${isType ? '타입 선언' : '클래스 선언'} · 최상위 씬</small></div></div><p class="inspector-note">카드의 머리글을 드래그해서 함수와 함께 배치하세요.${isType ? ' 생성자와 필드는 카드 안에서 편집합니다.' : ''}</p><button class="use-again" id="edit-scene-declaration">${isType ? '타입 노드 편집' : '클래스 편집'}</button>${isType ? `<button class="use-again" id="use-scene-type">+ 생성자 호출</button><div class="property"><label>생성자</label>${decl.constructors.map((c) => `<div class="port-row">${escapeAttr(c.name)}</div>`).join('')}</div>` : ''}${node.builtinDeclaration ? '' : deleteButton(node)}`
+}
 function updateInspector() {
   const n = activeNodes()[state.selected]
   inspectorChainInfo = null
   if (!n) { inspector.innerHTML = '<p class="inspector-empty">Select a node to edit its inputs and inspect its type.</p>'; return }
-  inspector.innerHTML = (viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
+  inspector.innerHTML = (isDeclarationNode(n) ? renderDeclarationInspector(n) : viewingReadonly() ? readonlyInspector(n) : n.type === 'output'
     ? `<div class="selected-node"><span class="selected-icon output-icon">→</span><div><b>Output</b><small>Function result</small></div></div><div class="property"><label>RESULT TYPE</label><div class="inspector-chain">${inspectorChainHtml(n)}</div></div><div class="property"><label>RETURN VALUE</label><div class="connection-tag">${n.source ? escapeAttr(nodeDisplayText(activeNodes()[n.source]) || n.value) : 'Connect a node to Output'}</div></div>${n.source ? '<button class="delete-node" id="disconnect-output">Disconnect</button>' : ''}${state.activeFunction ? `${nodes[state.activeFunction]?.library || nodes[state.activeFunction]?.override ? customizedRow(nodes[state.activeFunction]) : ''}${definitionBlock(state.activeFunction)}` : ''}`
     : n.type === 'function' ? renderFunctionInspector(n) : renderValueInspector(n)) + enclosingDefinition(n)
-  if (!viewingReadonly() && state.activeFunction && !['output', 'law'].includes(n.type) && !n.matchInternal) inspector.insertAdjacentHTML('beforeend', '<button class="use-again" id="pattern-match">⑂ 패턴 매칭</button>')
+  if (!viewingReadonly() && state.activeFunction && !isDeclarationNode(n) && !['output', 'law'].includes(n.type) && !n.matchInternal) inspector.insertAdjacentHTML('beforeend', '<button class="use-again" id="pattern-match">⑂ 패턴 매칭</button>')
   restoreDisclosureState(inspector)
+  inspector.querySelector('#edit-scene-declaration')?.addEventListener('click', () => n.declarationKind === 'type' ? openTypeEditor(n.declarationName) : openClassEditor(n.declarationName))
+  inspector.querySelector('#use-scene-type')?.addEventListener('click', () => addTypeCall(n.declarationName))
   inspector.querySelector('#pattern-match')?.addEventListener('click', () => beginPatternMatch(n))
   inspector.querySelector('#convert-match')?.addEventListener('click', () => {
     const name = definitions[n.sourceFunctionId].derived.type
@@ -3509,8 +3715,14 @@ function updateInspector() {
   if (editDefinitionButton) editDefinitionButton.onclick = () => editDefinition(state.activeFunction)
   const restoreLibrary = document.querySelector('#restore-library')
   if (restoreLibrary) restoreLibrary.onclick = () => restoreLibraryDefinition(restoreLibrary.dataset.id)
-  if (isManagedMain(nodes[state.activeFunction]) || isManagedMain(n)) {
-    inspector.insertAdjacentHTML('beforeend', `<div class="inspector-note program-entry-note">${MAIN_GUIDANCE}<br/><br/>Run graph: main 전체 실행. 각 노드의 ▶ / Play function: 선택 함수만 개별 테스트.<br/><br/>이 main은 앱의 순수 계산 시작 함수입니다. DEFINITION은 함수 정의 참고용이며, 이 앱은 JavaScript로 그래프를 실행합니다. 실제 Haskell 실행 파일의 main :: IO ()와는 다릅니다. Haskell로 옮길 때는 계산을 별도 함수/모듈에 두고 IO main에서 print로 출력하세요.</div>`)
+  if (!isDeclarationNode(n) && (isManagedMain(nodes[state.activeFunction]) || isManagedMain(n))) {
+    const main = isManagedMain(n) ? n : nodes[state.activeFunction]
+    const mainType = valueTypeOfEntry(typePass(nodes).perNode.get(main.id))
+    const pinned = Object.values(functionBodies[main.id] || {}).find((x) => x.type === 'output')?.annotation === MAIN_TYPE
+    const notice = pinned ? (['game', 'value'].includes(entryKind(mainType)) ? mainTypeProblem(mainType) : null) : legacyMainNotice(mainType)
+    inspector.insertAdjacentHTML('beforeend', `<div class="inspector-note program-entry-note">${MAIN_GUIDANCE}<br/><br/>Run graph: main :: IO () 를 실행합니다. 출력은 캔버스 위 콘솔에 순서대로 나타나고, getLine은 콘솔에서 입력받으며, play는 게임 화면을 엽니다. 각 노드의 ▶ / Play function: 선택 함수만 개별 테스트.<br/><br/>main을 평가하는 것만으로는 아무것도 출력되지 않습니다 — IO 값은 동작의 기술이고, IO 런타임이 그것을 순서대로 수행합니다(Graph JS 실행이며 GHC 실행이 아닙니다).${notice ? `<br/><br/><b>${escapeAttr(notice)}</b><br/><button class="law-check" id="wrap-main-io">IO로 감싸기</button>` : ''}</div>`)
+    const wrap = document.querySelector('#wrap-main-io')
+    if (wrap) wrap.onclick = () => wrapMainInIO(main.id)
   }
   const evaluate = document.querySelector('#evaluate')
   const help = preludeDefs[n.sourceFunctionId || n.id]?.description
@@ -3524,26 +3736,18 @@ function updateInspector() {
     entryToggle.textContent = isManagedMain(n) ? '● main · 프로그램 시작점' : '전체 실행은 main · 개별 테스트는 Play function'
   }
   if (entryToggle) entryToggle.onclick = () => { entryId = entryId === n.id ? null : n.id; updateInspector(); draw() }
-  const fnRename = document.querySelector('#function-rename')
-  if (fnRename) fnRename.onchange = () => {
-    const label = fnRename.value.trim()
-    const problem = label === n.label ? null : functionNameProblem(label, n.id)
-    if (problem) showToast(problem)
-    else if (label !== n.label) { renameFunction({ nodes, functionBodies }, n.id, label); showToast(`${label}(으)로 이름을 바꿨어요 — 모든 호출이 따라가요`) }
-    renderFunctionLibrary(); updateInspector(); draw()
-  }
   const resetCustom = document.querySelector('#reset-derived')
   if (resetCustom) resetCustom.onclick = () => resetDerivedFunction(resetCustom.dataset.id)
   document.querySelectorAll('.param-move').forEach((button) => {
     button.onclick = () => {
       const i = Number(button.dataset.index)
-      moveParameter({ nodes, functionBodies }, n.id, i, i - 1)
+      moveParameter({ nodes, functionBodies }, n.sourceFunctionId || n.id, i, i - 1)
       renderFunctionLibrary(); updateInspector(); draw()
     }
   })
   document.querySelectorAll('.param-rename').forEach((input) => {
     input.onchange = () => {
-      if (!renameParameter({ nodes, functionBodies }, n.id, Number(input.dataset.index), input.value.trim())) showToast(`"${input.value}" can't be a parameter name here (lowercase identifier, not already used)`)
+      if (!renameParameter({ nodes, functionBodies }, n.sourceFunctionId || n.id, Number(input.dataset.index), input.value.trim())) showToast(`"${input.value}" can't be a parameter name here (lowercase identifier, not already used)`)
       renderFunctionLibrary(); updateInspector(); draw()
     }
   })
@@ -3612,6 +3816,9 @@ function executeFunction(fn, { graph = activeNodes(), displayGraph = graph, anch
     replayExecution(displayGraph, fn, [{ phase: 'error', nodeId: anchor.id, validation: true, origin: true }], { error: ambiguous, validation: true })
     return showToast(`Can't run — ${ambiguous}`)
   }
+  // An IO action (main :: IO (), or any call whose value is IO a) is
+  // performed by the IO runtime rather than shown as a value.
+  if (entryKind(entry ? valueTypeOfEntry(entry) : null) === 'io') return performIOEntry(fn, { graph, displayGraph, anchor })
   // For whole-program main, evaluate its real definition with the normal
   // dictionaries once, but replay the initial body frame currently on screen.
   const trace = createExecutionTrace(displayGraph)
@@ -4001,16 +4208,28 @@ function runEntry() {
     }
     const ambiguous = runBlocker(nodes, target.fn.id)
     if (ambiguous) return showToast(`Can't run — ${ambiguous}`)
-    if (valueTypeOfEntry(typePass(nodes).perNode.get(target.fn.id))?.kind === 'fun') {
-      return showToast('main의 Output이 아직 함수입니다. 호출 노드의 빈 입력을 채워 계산 결과를 Output에 연결하세요. 부분 적용 테스트는 해당 노드의 Play function을 사용하세요.')
+    const type = valueTypeOfEntry(typePass(nodes).perNode.get(target.fn.id))
+    const kind = entryKind(type)
+    if (kind === 'function') {
+      return showToast('main의 Output이 아직 함수입니다. 호출 노드의 빈 입력을 채워 IO 동작을 Output에 연결하세요. 부분 적용 테스트는 해당 노드의 Play function을 사용하세요.')
     }
-    if (startGameIfProgram(target.fn.id)) return
+    // A main pinned to IO () runs only as IO: a plain value has to be printed (or a Program played) first.
+    const mainOutput = Object.values(functionBodies[target.fn.id] || {}).find((n) => n.type === 'output')
+    if (mainOutput?.annotation === MAIN_TYPE && kind !== 'io') {
+      if (state.activeFunction !== target.fn.id) enterFunction(target.fn.id)
+      state.selected = 'output'; updateInspector(); draw()
+      return showToast(mainTypeProblem(type))
+    }
+    // An older main that is not IO () yet still runs as it used to, with a note on how to make it IO.
+    if (kind === 'game' && startGameIfProgram(target.fn.id)) return showToast(legacyMainNotice(type))
     if (state.activeFunction !== target.fn.id) enterFunction(target.fn.id)
-    return executeFunction(target.fn, target)
+    executeFunction(target.fn, target)
+    if (kind === 'value') showToast(legacyMainNotice(type))
+    return
   }
   const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
   if (ambiguous) return showToast(`실행할 수 없어요 — ${ambiguous}`)
-  if (entryId && nodes[entryId] && startGameIfProgram(entryId)) return
+  if (entryId && nodes[entryId] && entryKind(valueTypeOfEntry(typePass(nodes).perNode.get(entryId))) === 'game' && startGameIfProgram(entryId)) return
   if (entryId && nodes[entryId]) {
     if (state.activeFunction) { state.activeFunction = null; renderFunctionLibrary(); fitToView() }
     return executeFunction(nodes[entryId])
@@ -4045,21 +4264,47 @@ function programInfo(id) {
     throw error
   }
   if (!isProgram(program)) return null
-  const modelType = programType.fn.arg
+  return { program, ...programTypes(program, programType) }
+}
+// The model and message types of `program` (a value of type `programType`, or
+// unknown), and whether its step passes the monoid-action law.
+function programTypes(program, programType) {
+  const modelType = programType?.fn?.arg || null
   const law = modelType && !ftv(modelType).size
     ? checkFunctionLaw('action', program.args[3], tfun(tcon('Double'), tfun(modelType, modelType)), { ev: evaluator, types })
     : { ok: false, counterexample: 'the model type is not concrete' }
-  return { program, modelType, messageType: programType.arg, law }
+  return { modelType, messageType: programType?.arg || null, law }
+}
+// The type of the Program a `play` call reachable from the entry `id` plays:
+// read from the call's argument in the graph that holds it (the entry's own
+// body first). Null when no such call has a concrete Program type.
+function playedProgramType(id) {
+  const graphs = [functionBodies[id], nodes, ...Object.entries(functionBodies).filter(([key]) => key !== id).map(([, body]) => body)].filter(Boolean)
+  for (const graph of graphs) {
+    const calls = Object.values(graph).filter((n) => n.type === 'function' && n.sourceFunctionId === 'prelude:play' && n.mounted?.[0])
+    if (!calls.length) continue
+    const pass = typePass(graph)
+    for (const call of calls) {
+      const type = valueTypeOfEntry(pass.perNode.get(call.mounted[0]))
+      if (returnsProgram(type)) return type
+    }
+  }
+  return null
 }
 
 function startGameIfProgram(id) {
   const info = programInfo(id)
   if (!info) return false
-  const { program, modelType, messageType, law } = info
+  startGame(id, info.program, info)
+  return true
+}
+
+/** Play `program` (from the entry `id`) in the play panel, its save restored. */
+function startGame(id, program, { modelType, messageType, law }) {
   stopGame()
   const game = createGame(evaluator, program, { exactTime: law.ok })
-  const slot = gameStorageSlot(projectId, id, modelType, messageType, types)
-  play = { game, slot, entry: id, modelTypeObj: modelType, modelType: showQual([], modelType), speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
+  const slot = gameStorageSlot(projectId, id, modelType || tcon('?'), messageType || tcon('?'), types)
+  play = { game, slot, entry: id, modelTypeObj: modelType, modelType: modelType ? showQual([], modelType) : '?', speed: 1, running: true, last: null, acc: 0, frame: null, saveTimer: null, law }
   let offline = null
   try {
     const saved = readGameSave(localStorage, slot)
@@ -4078,7 +4323,135 @@ function startGameIfProgram(id) {
   if (offline) showToast(offline.exact ? `While you were away: ${formatSeconds(offline.away)} applied in one step (step is a monoid action)` : `While you were away: ${formatSeconds(offline.away)} simulated in ${offline.calls} slices`)
   play.saveTimer = setInterval(saveGame, 2000)
   play.frame = requestAnimationFrame(loop)
-  return true
+}
+
+// --- Performing IO (main :: IO ()) -------------------------------------------
+// Evaluating main gives an IO action — a description; the IO runtime
+// (ioRuntime.js) performs it in order. Standard output goes to a console over
+// the canvas, getLine waits for a line typed there, and play opens the game.
+const consolePanel = document.querySelector('#console-panel')
+let ioRun = null // { fn, waiting, text, actions, snapshot: the graph that was run }
+
+function openConsole(fn) {
+  ioRun = { fn, waiting: null, text: '', actions: 0, snapshot: currentSnapshot() }
+  consolePanel.hidden = false
+  consolePanel.innerHTML = `<div class="console-bar"><b></b><span class="console-status"></span><button class="tool-button icon-only" data-console="close" title="콘솔 닫기">×</button></div><pre class="console-output" aria-live="polite"></pre><form class="console-input" hidden><span>›</span><input type="text" spellcheck="false" autocomplete="off" aria-label="getLine 입력" placeholder="getLine 입력 후 Enter"/></form>`
+  consolePanel.querySelector('.console-bar b').textContent = `${fn.label} :: IO`
+  consolePanel.querySelector('[data-console="close"]').onclick = closeConsole
+  consolePanel.querySelector('.console-input').onsubmit = (event) => {
+    event.preventDefault()
+    const input = consolePanel.querySelector('.console-input input')
+    const line = input.value
+    input.value = ''
+    if (!ioRun?.waiting) return
+    consoleWrite({ text: `${line}\n`, echo: true })
+    const waiting = ioRun.waiting
+    ioRun.waiting = null
+    try {
+      settleIO(waiting.resume(line, { onEffect: consoleWrite }))
+    } catch (error) {
+      if (!(error instanceof EvalError)) throw error
+      consoleFail(error.message)
+    }
+  }
+  renderConsole('실행 중')
+}
+/** Why a main pinned to IO () can't run its current Output, and the fix. */
+function mainTypeProblem(type) {
+  const shown = type ? showQual([], type) : '?'
+  return entryKind(type) === 'game'
+    ? `main :: IO () 인데 Output이 ${shown} 값입니다. play로 게임을 실행하세요 (속성 패널의 “IO로 감싸기”).`
+    : `main :: IO () 인데 Output이 ${shown} 값입니다. print로 출력하세요 (속성 패널의 “IO로 감싸기”).`
+}
+function closeConsole() {
+  ioRun = null
+  consolePanel.hidden = true
+  consolePanel.innerHTML = ''
+}
+function consoleWrite({ text, echo = false }) {
+  if (!ioRun) return
+  ioRun.text += text
+  const out = consolePanel.querySelector('.console-output')
+  if (!out) return
+  if (echo) out.append(Object.assign(document.createElement('span'), { className: 'console-echo', textContent: text }))
+  else out.append(text)
+  out.scrollTop = out.scrollHeight
+}
+function consoleFail(message) {
+  const out = consolePanel.querySelector('.console-output')
+  out?.append(Object.assign(document.createElement('span'), { className: 'console-error', textContent: `\n*** 실행 오류: ${message}\n` }))
+  renderConsole('오류로 중단')
+  showToast(message)
+}
+function renderConsole(status) {
+  const form = consolePanel.querySelector('.console-input')
+  if (!form) return
+  consolePanel.querySelector('.console-status').textContent = status
+  form.hidden = !ioRun?.waiting
+  if (!form.hidden) form.querySelector('input').focus()
+}
+/** What happens after the IO runtime stops: done, waiting for a line, or a game to play. */
+function settleIO(result) {
+  if (!ioRun) return
+  ioRun.actions += result.actions
+  if (result.status === 'done') {
+    const lines = outputLines(ioRun.text).filter((l) => l !== '').length
+    return renderConsole(`완료 · 출력 ${lines}줄 · 동작 ${ioRun.actions}단계`)
+  }
+  if (result.effect === 'getLine') {
+    ioRun.waiting = result
+    return renderConsole('입력 대기 (getLine)')
+  }
+  // play: the game runs until it is closed — like gloss's play, it does not return.
+  const fn = ioRun.fn
+  if (!ioRun.text) closeConsole()
+  else renderConsole('게임 실행 중 (play)')
+  const programType = playedProgramType(fn.id)
+  startGame(fn.id, result.program, programTypes(result.program, programType))
+}
+function performIOEntry(fn, { graph, displayGraph, anchor }) {
+  stopGame()
+  openConsole(fn)
+  const trace = createExecutionTrace(displayGraph)
+  let result
+  try {
+    result = evaluator.runIO(graph, fn.id, { onNode: trace.record, onEffect: consoleWrite })
+  } catch (error) {
+    if (error instanceof EvalError) {
+      trace.fail(anchor.id, error)
+      replayExecution(displayGraph, fn, trace.events, { error: error.message })
+      return consoleFail(error.message)
+    }
+    throw error
+  }
+  replayExecution(displayGraph, fn, trace.events, {})
+  settleIO(result)
+}
+
+/**
+ * Make an older managed main IO (): put `play` (its value is a Program) or
+ * `print` (any other shown value) between its result and Output, and pin
+ * the Output type to IO (). Undoable like any edit.
+ */
+function wrapMainInIO(fnId) {
+  const body = functionBodies[fnId]
+  const output = body && Object.values(body).find((n) => n.type === 'output')
+  const source = output?.source && body[output.source]
+  if (!source) return showToast(MAIN_GUIDANCE)
+  const type = valueTypeOfEntry(typePass(body).perNode.get(source.id))
+  const wrapper = ioWrapperFor(type)
+  if (!wrapper) return showToast('main의 결과가 아직 함수입니다. 빈 입력을 먼저 채우세요.')
+  const def = definitions[`prelude:${wrapper}`]
+  let id = `${wrapper}-main`, k = 2
+  while (body[id]) id = `${wrapper}-main-${k++}`
+  body[id] = { id, type: 'function', sourceFunctionId: def.id, label: def.label, params: [''], mounted: [source.id], paramScopes: ['local'], scope: 'local', color: def.color, x: source.x + 260, y: source.y, connected: true }
+  Object.assign(source, { mountedTo: `${id}:0`, connected: true })
+  output.source = id
+  output.annotation = MAIN_TYPE
+  state.selected = id
+  flushCheckpoint()
+  updateInspector(); draw()
+  showToast(`main = ${wrapper} (…) — 이제 main :: IO () 입니다`)
 }
 
 function formatSeconds(t) {
@@ -4255,14 +4628,24 @@ function setupTemplates() {
     showToast(`Loaded ${name} — Run graph to play it (undo to go back)`)
   }
 }
+// What exporting the entry `id` needs: an IO main (its game's step law, when
+// it plays one) or an older entry whose value is a Program.
+function exportInfo(id) {
+  const type = valueTypeOfEntry(typePass(nodes).perNode.get(id))
+  if (entryKind(type) === 'game') return programInfo(id)
+  if (entryKind(type) !== 'io') return null
+  let program = null
+  try { program = entryProgram(evaluator, nodes, id) } catch (error) { if (!(error instanceof EvalError)) throw error }
+  return program ? programTypes(program, playedProgramType(id)) : { law: { ok: false } }
+}
 // Download the entry point's game as one HTML file that runs without the
 // editor: the player modules plus every definition, body and type it needs.
 function setupGameExport() {
   document.querySelector('#export-game').onclick = () => {
     const ambiguous = entryId && nodes[entryId] && runBlocker(nodes, entryId)
     if (ambiguous) return showToast(`Can't export — ${ambiguous}`)
-    const info = entryId && nodes[entryId] ? programInfo(entryId) : null
-    if (!info) return showToast('Make a function that returns a Program (see the Game group) the Run graph entry first')
+    const info = entryId && nodes[entryId] ? exportInfo(entryId) : null
+    if (!info) return showToast('main :: IO () (또는 Program을 돌려주는 함수)를 Run graph 시작 함수로 정한 뒤 내보내세요')
     const title = nodes[entryId].label === 'main' ? 'hs-simulate game' : nodes[entryId].label
     const data = { title, definitions: { ...libraryDefs, ...derivedDefs, ...classDefs, ...nodes }, functionBodies, types, entry: entryId, exactTime: info.law.ok, elaboration: elaborationData() }
     const url = URL.createObjectURL(new Blob([buildPlayerHtml(data, playerSources)], { type: 'text/html' }))
@@ -4292,14 +4675,17 @@ function loadProject(project) {
   stopGame()
   resetExecution()
   projectId = project.projectId || 'project:' + [...crypto.getRandomValues(new Uint32Array(4))].map(part => part.toString(16).padStart(8, '0')).join('')
+  declarationDrag = null
+  for (const card of declarationCards.values()) card.remove()
+  declarationCards.clear()
   Object.keys(nodes).forEach((id) => delete nodes[id])
   Object.assign(nodes, project.nodes)
   Object.keys(functionBodies).forEach((id) => delete functionBodies[id])
   Object.assign(functionBodies, project.functionBodies)
   ;[nodes, ...Object.values(functionBodies)].forEach(materializeLiterals)
   state.editingLiteral = null
-  applyTypes(project.types || {}, project.classes || {}, project.instances || {})
   layouts = project.layouts || {}
+  applyTypes(project.types || {}, project.classes || {}, project.instances || {})
   if (typeEditor) { if (types[typeEditor.original]) { typeEditor = editorFor(typeEditor.original); renderTypeEditor() } else closeTypeEditor() }
   if (classEditor) { if (classes[classEditor.original] || classEditor.builtin) { classEditor = classEditorFor(classEditor.original); renderClassEditor() } else closeTypeEditor() }
   renderUniverse()
@@ -4321,7 +4707,8 @@ function flushCheckpoint() {
   clearTimeout(checkpointTimer)
   checkpointTimer = null
   const snapshot = currentSnapshot()
-  if (history.record(snapshot)) { persist(snapshot); renderFunctionLibrary(); recheckLawNodes(); draw() } // keep sidebar signatures and pinned laws current
+  // An edit makes what the console shows stale (unless a run is waiting for its input).
+  if (history.record(snapshot)) { if (ioRun && !ioRun.waiting && snapshot !== ioRun.snapshot) closeConsole(); persist(snapshot); renderFunctionLibrary(); recheckLawNodes(); draw() } // keep sidebar signatures and pinned laws current
   updateHistoryButtons()
 }
 function persist(snapshot) {
@@ -4386,7 +4773,7 @@ let clipboard = null
 let clipboardOwned = null
 function copySelection() {
   const graph = activeNodes()
-  const roots = (state.multi.size ? [...state.multi] : [state.selected]).map((id) => graph[id]).filter((n) => n && !n.readonly && n.type !== 'output' && n.type !== 'parameter' && !(graph === nodes && n.custom))
+  const roots = (state.multi.size ? [...state.multi] : [state.selected]).map((id) => graph[id]).filter((n) => n && !isDeclarationNode(n) && !n.readonly && n.type !== 'output' && n.type !== 'parameter' && !(graph === nodes && n.custom))
   if (!roots.length) return showToast('Nothing copyable selected (builtins, Output, parameters and function definitions stay put)')
   const take = new Map()
   const visit = (n) => { if (!n || take.has(n.id)) return; take.set(n.id, structuredClone(n)); (n.mounted || []).forEach((id) => visit(graph[id])); if (n.match?.defaultBranch) visit(graph[n.match.defaultBranch.callId]) }
@@ -4428,7 +4815,7 @@ function setupKeyboard() {
     const mod = event.ctrlKey || event.metaKey
     if (mod && event.key === 'Enter') { event.preventDefault(); runEntry(); return }
     if (mod && event.key.toLowerCase() === 'k') { event.preventDefault(); searchInput.focus(); searchInput.select(); return }
-    if (typing || document.querySelector('#function-dialog, dialog[open]') || play) return // no editing shortcuts while a game is playing
+    if (typing || document.querySelector('dialog[open]') || play) return // no editing shortcuts while a game is playing
     const key = event.key.toLowerCase()
     if (mod && key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo() }
     else if (mod && key === 'y') { event.preventDefault(); redo() }
@@ -4455,7 +4842,6 @@ function setupToolbar() {
   window.addEventListener('resize', resize) // devicePixelRatio changes (browser zoom) don't resize the element
 }
 function setupSidebarButtons() {
-  document.querySelector('.add-node').addEventListener('click', createCustomFunction)
   document.querySelector('.add-type').addEventListener('click', () => openTypeEditor())
   document.querySelector('.add-class').addEventListener('click', () => openClassEditor())
   document.querySelectorAll('.open-universe').forEach((b) => b.addEventListener('click', openUniverse))
@@ -4553,8 +4939,9 @@ function restoreSavedProject() {
   history.reset(currentSnapshot())
   if (needsProjectId && restoredProject && entryId) {
     try {
-      const type = valueTypeOfEntry(typePass(nodes).perNode.get(entryId))
-      if (returnsProgram(type)) {
+      const entryType = valueTypeOfEntry(typePass(nodes).perNode.get(entryId))
+      const type = returnsProgram(entryType) ? entryType : entryKind(entryType) === 'io' ? playedProgramType(entryId) : null
+      if (type) {
         const model = type.fn.arg, message = type.arg
         migrateLegacyGame(localStorage, gameStorageSlot(projectId, entryId, model, message, types), { entry: entryId, model, message, types })
       }

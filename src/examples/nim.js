@@ -74,7 +74,7 @@ export const NIM_FUNCTIONS = {
   ], 'out'],
   step: [['dt', 'm'], [], 'm'],
   initial: [[], [call('out', M('Model'), 'Model', ['20', '0'])], 'out'],
-  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')])], 'out'],
+  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')]), call('io', P('play'), 'play', [n('out')])], 'io'],
 }
 
 export function buildNim() {

@@ -1,0 +1,2 @@
+# Haskell sources (test fixtures) keep LF so pasted source matches a textarea, which stores LF.
+*.hs text eol=lf

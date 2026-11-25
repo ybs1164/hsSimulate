@@ -68,6 +68,9 @@ body{margin:0;font-family:ui-monospace,'DM Mono',monospace;background:#f8f7fc;co
 .player-bar button{border:1.5px solid #e6e3f0;border-radius:999px;background:#fff;padding:6px 12px;font:inherit;cursor:pointer}
 .player-view{display:flex;justify-content:center;padding:36px}
 .player-note{font-size:11px;color:#8a85a0;text-align:center;margin:0 0 12px}
+.player-console{margin:16px 18px 0;padding:10px 12px;background:#fff;border:1px solid #e6e3f0;border-radius:10px;font:13px/1.5 inherit;font-family:inherit;white-space:pre-wrap;min-height:1.5em}
+.player-input{margin:8px 18px}
+.player-input input{width:100%;box-sizing:border-box;border:1.5px solid #e6e3f0;border-radius:8px;padding:8px;font:inherit}
 .w-column{display:flex;flex-direction:column;gap:12px;min-width:300px;max-width:520px;width:100%}
 .w-row{display:flex;gap:12px;flex-wrap:wrap}
 .w-text{margin:0;font-size:16px}
@@ -90,8 +93,59 @@ export function startPlayer(data, root, { storage = globalThis.localStorage, now
   // `elaboration`: which instance each call means (user classes), worked out by the editor's type pass.
   const elaboration = data.elaboration ? elaborationIndex(data.elaboration, data.definitions, data.functionBodies) : null
   const ev = createEvaluator({ nodes: data.definitions, functionBodies: data.functionBodies, types: data.types, elaboration: () => elaboration })
-  const program = ev.run(data.definitions, data.entry)
-  if (!isProgram(program)) throw new EvalError('The exported entry point is not a Program')
+  const value = ev.run(data.definitions, data.entry)
+  if (isProgram(value)) return playProgram(ev, value, data, root, { storage, now }) // an older export: the entry is the Program
+  if (value?.type !== 'IO') throw new EvalError('The exported entry point is neither IO () nor a Program')
+  return performMain(ev, data, root, { storage, now })
+}
+
+/**
+ * Perform `main :: IO ()` (ioRuntime.js): its output in a console, getLine
+ * read from an input under it, and `play` opening the game. Returns the game
+ * when main plays one without waiting for input first, else null.
+ */
+function performMain(ev, data, root, options) {
+  root.innerHTML = `<div class="player-bar"><b></b></div><pre class="player-console"></pre><form class="player-input" hidden><input type="text" autocomplete="off" aria-label="getLine" placeholder="getLine — Enter"/></form>`
+  root.querySelector('.player-bar b').textContent = data.title
+  const out = root.querySelector('.player-console')
+  const form = root.querySelector('.player-input')
+  const write = (e) => { out.append(e.text) }
+  let waiting = null
+  const settle = (result) => {
+    if (result.status === 'done') { form.hidden = true; return null }
+    if (result.effect === 'getLine') { waiting = result; form.hidden = false; form.querySelector('input').focus?.(); return null }
+    const host = Object.assign(root.ownerDocument.createElement('div'), { className: 'player-game' })
+    form.hidden = true
+    if (!out.textContent) out.hidden = true
+    root.append(host)
+    return playProgram(ev, result.program, data, host, options)
+  }
+  const fail = (error) => {
+    if (!(error instanceof EvalError)) throw error
+    out.append(Object.assign(root.ownerDocument.createElement('span'), { className: 'w-error', textContent: `\n${error.message}` }))
+    return null
+  }
+  form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const input = form.querySelector('input')
+    if (!waiting) return
+    const line = input.value
+    input.value = ''
+    out.append(`${line}\n`)
+    const resume = waiting.resume
+    waiting = null
+    try { settle(resume(line, { onEffect: write })) } catch (error) { fail(error) }
+  })
+  try {
+    return settle(ev.runIO(data.definitions, data.entry, { onEffect: write }))
+  } catch (error) {
+    return fail(error)
+  }
+}
+
+/** Play `program` inside `root` (gloss's play), its state saved and time away applied. */
+function playProgram(ev, program, data, root, { storage, now }) {
+  if (!isProgram(program)) throw new EvalError('play needs a Program')
   const game = createGame(ev, program, { exactTime: data.exactTime })
   const key = `hs-simulate:player:${data.title}`
   let note = ''

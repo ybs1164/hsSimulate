@@ -99,6 +99,9 @@ for (const w of ['Any', 'All']) for (const cls of ['Semigroup', 'Monoid']) decla
 for (const cls of ['Semigroup', 'Monoid']) declareInstance(cls, app('Endo', $a))
 // State s: the state monad, s → (a, s) — the monad of the adjunction (− × s) ⊣ (s → −).
 for (const cls of ['Functor', 'Applicative', 'Monad']) declareInstance(cls, app('State', $a))
+// IO: the monad of effect descriptions the IO runtime performs (src/ioRuntime.js) —
+// the free monad over the console/game effects, read by an interpreter.
+for (const cls of ['Functor', 'Applicative', 'Monad']) declareInstance(cls, tcon('IO'))
 
 /**
  * Classes a product (single-constructor record) may derive pointwise, by

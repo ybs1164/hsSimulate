@@ -1,8 +1,8 @@
 // The click-counter example game, built only from what the editor offers —
 // declared types, custom functions whose bodies are node graphs, references
 // for reused values, derived projections/updates, the copairing caseMsg,
-// and Prelude widgets — wired together by `main = program initial view
-// handle onTick`. Every number in the model is an Int; the Double the
+// and Prelude widgets — wired together by `main = play (program initial view
+// handle onTick)`. Every number in the model is an Int; the Double the
 // runtime hands `onTick` and the ones `progress` and `showCompact` take
 // are crossed with the conversions `round` and `fromIntegral` (Prelude
 // functions written as graphs, so they can be opened and edited too).
@@ -24,7 +24,7 @@
 //                                  button "Click!" Click, …, progress (fromIntegral (clicks (wallet m)) / 25)]
 //   keys k               = select (k == " ") (Just Click) Nothing       -- Space clicks too
 //   subs m               = onKey keys
-//   main                 = set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick))
+//   main                 = play (set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick)))
 //
 // The node ids it uses are the app's own (`plus`, `prelude:wButton`,
 // `type:Model:wallet`, …), so the same project runs in tests and in the app.
@@ -91,7 +91,8 @@ export const CLICK_COUNTER_FUNCTIONS = {
     call('fast', P('setStepsPerSecond'), 'set stepsPerSecond', ['20', n('prog')]),
     call('sb', 'subs', 'subs', ['']),
     call('out', P('setSubscriptions'), 'set subscriptions', [n('sb'), n('fast')]),
-  ], 'out'],
+    call('io', P('play'), 'play', [n('out')]),
+  ], 'io'],
 }
 
 /**

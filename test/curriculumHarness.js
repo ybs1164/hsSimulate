@@ -3,7 +3,7 @@
 import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
-import { createGame } from '../src/runtime.js'
+import { createGame, entryProgram } from '../src/runtime.js'
 import { derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
 import { showType } from '../src/typeSystem.js'
 import { preludeTypeDefs } from '../src/library.js'
@@ -22,7 +22,7 @@ export function play(build) {
   const project = build()
   const nodes = registryOf(project)
   const ev = createEvaluator({ nodes, functionBodies: project.functionBodies, types: project.types })
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   const widgets = () => {
     const out = []
     const walk = (w) => { out.push(w); (w.children || []).forEach(walk); if (w.child) walk(w.child) }

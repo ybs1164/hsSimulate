@@ -8,8 +8,12 @@ export const sourceOps = {
   ':':['cons',':',2], '++':['append','++',2], nil:['nil','[]',0], apply:['apply','함수 적용',2],
   abs:['abs','abs',1], div:['div','div',2], mod:['mod','mod',2],
   map:['map','map',2], filter:['filter','filter',2], foldl:['foldl','foldl',3],
+  // IO (ioRuntime.js): main :: IO () is performed, its output collected.
+  '>>':['thenM','>>',2], '>>=':['bind','>>=',2], unit:['unit','()',0],
+  print:['print','print',1], putStrLn:['putStrLn','putStrLn',1], putStr:['putStr','putStr',1], show:['show','show',1],
+  return:['returnM','return',1], pure:['pure','pure',1], getLine:['getLine','getLine',0],
 }
-export const sourceNames = new Set(['abs','div','mod','map','filter','foldl'])
+export const sourceNames = new Set(['abs','div','mod','map','filter','foldl','print','putStrLn','putStr','show','return','pure','getLine'])
 const Int=tcon('Int'), Bool=tcon('Bool')
 const arrows=(args,result)=>args.reduceRight((r,a)=>tfun(a,r),result)
 const fixed=(args,result)=>scheme([],[],arrows(args,result))

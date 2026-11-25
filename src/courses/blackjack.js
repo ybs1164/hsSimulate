@@ -260,9 +260,9 @@ export function blackjackUnits() {
       { id: 'bj-program-type', kind: 'type', title: 'program의 타입', expr: 'program', answer: 'm -> (m -> Widget e) -> (e -> m -> m) -> (Double -> m -> m) -> Program m e', engine: 'program',
         prompt: 'program은 처음 상태, 화면, 메시지 처리, 시간 흐름(step)을 받아 게임을 만들어요. program의 타입을 쓰세요 (상태 m, 메시지 e).', hint: 'm, (m -> Widget e), (e -> m -> m), (Double -> m -> m)를 받아 Program m e.',
         explain: '이 앱의 게임은 모두 이 모양이에요(Elm 아키텍처): 상태 → 화면, 메시지 → 상태 바꾸기, 시간 → 상태 바꾸기.' },
-      { id: 'bj-main', kind: 'build', title: 'main 만들기', name: 'main', params: [], signature: 'Program Model Msg', types: ['Model', 'Phase', 'Msg'],
-        prompt: '모두 묶어 main = program initial view handle step 을 만드세요. 그다음 main을 시작 함수로 정하고 실행하면 블랙잭 완성이에요!', uses: ['program', 'initial', 'view', 'handle', 'step'],
-        hint: 'view, handle, step은 슬롯을 비운 채(함수 그 자체로) program의 슬롯에 넣어요.' },
+      { id: 'bj-main', kind: 'build', title: 'main 만들기', name: 'main', params: [], signature: 'IO ()', types: ['Model', 'Phase', 'Msg'],
+        prompt: '모두 묶어 main = play (program initial view handle step) 을 만드세요. main :: IO () 는 게임을 실행하는 동작이에요. 그다음 main을 시작 함수로 정하고 실행하면 블랙잭 완성이에요!', uses: ['play', 'program', 'initial', 'view', 'handle', 'step'],
+        hint: 'view, handle, step은 슬롯을 비운 채(함수 그 자체로) program의 슬롯에 넣고, 그 program을 play에 넣어요.' },
     ]),
   ]
 }

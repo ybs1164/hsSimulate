@@ -12,7 +12,7 @@ import { bundleModules, PLAYER_MODULES } from '../src/exportHtml.js'
 import { showType } from '../src/typeSystem.js'
 import { builtinSchemes } from '../src/builtinSchemes.js'
 import { libraryDefs, preludeTypes } from '../src/library.js'
-import { createGame } from '../src/runtime.js'
+import { createGame, entryProgram } from '../src/runtime.js'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
 import { buildBlankGame } from '../src/examples/blankGame.js'
 import { buildBlackjack } from '../src/examples/blackjack.js'
@@ -255,7 +255,7 @@ test('new template graphs can replace their case calls and still run the same ga
     }
     const entry = { run: call('run', 'main', []) }
     const before = createTypedEvaluator(project)
-    const gameBefore = createGame(before, before.run(entry, 'run'))
+    const gameBefore = createGame(before, entryProgram(before, entry, 'run'))
     const expected = gameBefore.view()
     let converted = 0
     for (const [ownerId, graph] of Object.entries(project.functionBodies)) for (const node of Object.values(graph)) {
@@ -264,7 +264,7 @@ test('new template graphs can replace their case calls and still run the same ga
     }
     assert.ok(converted > 0)
     const after = createTypedEvaluator(project)
-    const gameAfter = createGame(after, after.run(entry, 'run'))
+    const gameAfter = createGame(after, entryProgram(after, entry, 'run'))
     assert.deepEqual(gameAfter.view(), expected)
     const findButton = (widget) => widget.kind === 'button' ? widget : (widget.children || []).map(findButton).find(Boolean)
     const button = findButton(expected)

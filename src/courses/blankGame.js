@@ -61,7 +61,7 @@ export function blankGameUnits() {
       { id: 'bg-program-type', kind: 'type', title: 'program의 타입', expr: 'program', answer: 'm -> (m -> Widget e) -> (e -> m -> m) -> (Double -> m -> m) -> Program m e', engine: 'program',
         prompt: 'program은 처음 상태, 화면, 메시지 처리, 시간 흐름을 받아 게임을 만들어요. program의 타입을 쓰세요 (상태 m, 메시지 e).', hint: 'm, (m -> Widget e), (e -> m -> m), (Double -> m -> m)를 받아 Program m e.',
         explain: '이 앱의 게임은 모두 이 모양이에요(Elm 아키텍처): 상태 → 화면, 메시지 → 상태 바꾸기, 시간 → 상태 바꾸기.' },
-      mainBuild('bg-', { signature: 'Program Model Msg', types: ['Model', 'Msg'] }),
+      mainBuild('bg-', { signature: 'IO ()', types: ['Model', 'Msg'] }),
     ]),
   ]
 }

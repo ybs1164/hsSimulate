@@ -12,7 +12,7 @@
 //   view total        = column [heading "Vending machine", text ("Balance: " ++ show total ++ " won"),
 //                               row [button "+100" Coin100, button "+500" Coin500, button "Refund" Refund]]
 //   initial = 0
-//   main    = program initial view handle step
+//   main    = play (program initial view handle step)
 import { P, T, buildProject, call, lit, n } from './build.js'
 
 export const VENDING_TYPES = `data Msg = Coin100 | Coin500 | Refund deriving stock (Eq, Show)`
@@ -36,7 +36,7 @@ export const VENDING_FUNCTIONS = {
   ], 'out'],
   step: [['dt', 'm'], [], 'm'],
   initial: [[], [lit('out', '0')], 'out', ['Int']],
-  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')])], 'out'],
+  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')]), call('io', P('play'), 'play', [n('out')])], 'io'],
 }
 
 export function buildVending() {

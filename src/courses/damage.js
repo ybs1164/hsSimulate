@@ -101,7 +101,7 @@ export function damageUnits() {
         tests: [{ args: [], after: ['damage'], expect: '10' }, { args: [], after: ['critFirst'], expect: 'False' }] },
     ]),
     unit('game', 'main', '모두 묶어 데미지 계산기를 완성해요. 순서를 바꾸면 피해가 달라지는지 확인해 보세요.', [
-      mainBuild('dm-', { signature: 'Program Model Msg', types: ['Model', 'Msg'] }),
+      mainBuild('dm-', { signature: 'IO ()', types: ['Model', 'Msg'] }),
     ]),
   ]
 }

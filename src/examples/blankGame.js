@@ -7,7 +7,7 @@
 //   handle msg m = apply (caseMsg (over count (1 +)) msg) m
 //   view m       = column [text ("Count: " ++ showFFloat 0 (count m)), button "+1" Increment]
 //   step dt m    = m
-//   main         = program initial view handle step
+//   main         = play (program initial view handle step)
 import { P, T, buildProject, call, n } from './build.js'
 
 export const BLANK_GAME_TYPES = `data Model = Model { count :: Double } deriving stock (Eq, Show)
@@ -22,7 +22,7 @@ export const BLANK_GAME_FUNCTIONS = {
     call('list', P('listOf'), '[ , , ]', [n('w1'), n('b')]), call('out', P('wColumn'), 'column', [n('list')]),
   ], 'out'],
   step: [['dt', 'm'], [], 'm'],
-  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('h', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('h'), n('s')])], 'out'],
+  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('h', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('h'), n('s')]), call('io', P('play'), 'play', [n('out')])], 'io'],
 }
 
 export function buildBlankGame() {

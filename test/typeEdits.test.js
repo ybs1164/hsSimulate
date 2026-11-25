@@ -7,7 +7,7 @@ import { buildClickCounter } from '../src/examples/clickCounter.js'
 import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.js'
 import { inferGraph, valueTypeOfEntry } from '../src/inferGraph.js'
 import { reduce, setDynamicInstances } from '../src/prelude.js'
-import { createGame } from '../src/runtime.js'
+import { createGame, entryProgram } from '../src/runtime.js'
 import { declareTypes, derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
 import { customizeDerived, isPristineOverride, migrateTypeEdit, primitiveDefinitions, resetDerived } from '../src/typeEdits.js'
 import { showType } from '../src/typeSystem.js'
@@ -27,7 +27,7 @@ function registryOf(project) {
 function play(project) {
   const nodes = registryOf(project)
   const ev = createEvaluator({ nodes, functionBodies: project.functionBodies, types: project.types })
-  const game = createGame(ev, ev.run(nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, nodes, 'main'))
   const buttons = () => { const out = []; const walk = (w) => { if (w.kind === 'button') out.push(w); (w.children || []).forEach(walk) }; walk(game.view()); return out }
   for (let i = 0; i < 12; i++) game.dispatch(buttons().find((b) => b.label === 'Click!').msg)
   game.dispatch(buttons().find((b) => /per click/.test(b.label)).msg)
@@ -42,7 +42,11 @@ function typeOfMain(project) {
   try {
     const pass = inferGraph(registryOf(project), project.functionBodies, project.nodes)
     reduce(pass.preds)
-    return showType(valueTypeOfEntry(pass.perNode.get('main')))
+    assert.equal(showType(valueTypeOfEntry(pass.perNode.get('main'))), 'IO ()')
+    // main = play p: the type of the Program it plays.
+    const body = project.functionBodies.main
+    const playCall = Object.values(body).find((n) => n.sourceFunctionId === 'prelude:play')
+    return showType(valueTypeOfEntry(inferGraph(registryOf(project), project.functionBodies, body).perNode.get(playCall.mounted[0])))
   } finally {
     setDynamicInstances([])
   }

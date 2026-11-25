@@ -74,7 +74,7 @@ export const HIGH_LOW_FUNCTIONS = {
     call('seven', T('Rank', 'Seven'), 'Seven'), call('g', P('mkStdGen'), 'mkStdGen', ['2026']),
     call('out', M('Model'), 'Model', [n('seven'), n('g'), '0', '0', '"Higher or lower?"']),
   ], 'out'],
-  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')])], 'out'],
+  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')]), call('io', P('play'), 'play', [n('out')])], 'io'],
 }
 
 export function buildHighLow() {

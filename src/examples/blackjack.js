@@ -38,7 +38,7 @@
 //                           text ("Wins " ++ show (wins m) ++ "  ·  Losses " ++ show (losses m))]
 //     -- the dealer's second card stays hidden while you play
 //   initial       = deal (Model [] [] [] (mkStdGen 2026) Playing 0 0)
-//   main          = program initial view handle step
+//   main          = play (program initial view handle step)
 import { P, T, buildProject, call, n, ref } from './build.js'
 
 export const BLACKJACK_TYPES = `data Phase = Playing | Won | Lost | Push deriving stock (Eq, Show)
@@ -176,7 +176,7 @@ export const BLACKJACK_FUNCTIONS = {
     call('playing', T('Phase', 'Playing'), 'Playing'),
     call('blank', M('Model'), 'Model', [n('n1'), n('n2'), n('n3'), n('g'), n('playing'), '0', '0']), call('out', 'deal', 'deal', [n('blank')]),
   ], 'out'],
-  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')])], 'out'],
+  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')]), call('io', P('play'), 'play', [n('out')])], 'io'],
 }
 
 export function buildBlackjack() {

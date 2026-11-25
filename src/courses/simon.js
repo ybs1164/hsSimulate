@@ -111,7 +111,7 @@ export function simonUnits() {
         tests: [{ args: [], after: ['pattern', 'length'], expect: '1' }, { args: [], after: ['best'], expect: '0' }] },
     ]),
     unit('game', 'main', '모두 묶어 사이먼을 완성해요.', [
-      mainBuild('sm-', { signature: 'Program Model Msg', types: [...types, 'Msg'] }),
+      mainBuild('sm-', { signature: 'IO ()', types: [...types, 'Msg'] }),
     ]),
   ]
 }

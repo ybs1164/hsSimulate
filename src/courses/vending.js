@@ -60,7 +60,7 @@ export function vendingUnits() {
         prompt: '처음 상태 initial을 만드세요: 0.', uses: ['수(#)'], hint: '수 블록 0을 Output에 이으세요.', tests: [{ args: [], expect: '0' }] },
     ]),
     unit('game', 'main', '모두 묶어 자판기를 완성해요.', [
-      mainBuild('vd-', { signature: 'Program Int Msg', types: ['Msg'] }),
+      mainBuild('vd-', { signature: 'IO ()', types: ['Msg'] }),
     ]),
   ]
 }

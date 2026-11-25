@@ -96,8 +96,8 @@ export function clickCounterUnits() {
         prompt: 'subs m = onKey keys 를 만드세요. 타입만 채점해요.', uses: ['onKey', 'keys'], hint: 'keys는 슬롯을 비워 함수 그대로 넣어요.' },
     ]),
     unit('game', 'main', '모두 묶어요: 1초에 20번 onTick을 부르고, subs를 구독해요.', [
-      mainBuild('cc-', { signature: 'Program Model Msg', types: [...types, 'Msg'], step: 'onTick',
-        hint: 'set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick)).' }),
+      mainBuild('cc-', { signature: 'IO ()', types: [...types, 'Msg'], step: 'onTick',
+        hint: 'play (set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick))).' }),
     ]),
   ]
 }

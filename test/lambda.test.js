@@ -7,6 +7,7 @@ import { createTypedEvaluator as createEvaluator } from '../src/typedEvaluator.j
 import { printDefinition } from '../src/haskellPrint.js'
 import { inferGraph } from '../src/inferGraph.js'
 import { showQual, tfun } from '../src/typeSystem.js'
+import { renameFunction } from '../src/signature.js'
 
 // f c xs = map (\x -> x + c) xs
 const nodes = {
@@ -46,4 +47,19 @@ test('its type flows through: f :: AddSemigroup a ⇒ a → [a] → [a]', () => 
 
 test('it prints as an applied lambda — a β-redex', () => {
   assert.equal(printDefinition('f', nodes, functionBodies), 'f c xs = map ((\\c x -> x + c) c) xs')
+})
+
+test('naming a lambda preserves its captures, body and evaluation as a reusable function', () => {
+  const p = structuredClone({ nodes, functionBodies })
+  const before = inferGraph(p.nodes, p.functionBodies, { f: p.nodes.f }).schemes.get('f')
+  assert.ok(renameFunction(p, 'lam', 'addCaptured'))
+  assert.ok(!p.nodes.lam.lambda)
+  assert.equal(p.functionBodies.f.λ.label, 'addCaptured')
+  assert.deepEqual(p.functionBodies.f.λ.mounted, ['input-f-0', null])
+  assert.deepEqual(p.functionBodies.lam, functionBodies.lam)
+  const after = inferGraph(p.nodes, p.functionBodies, { f: p.nodes.f }).schemes.get('f')
+  assert.equal(showQual(after.preds, after.type), showQual(before.preds, before.type))
+  assert.equal(printDefinition('f', p.nodes, p.functionBodies), 'f c xs = map (addCaptured c) xs')
+  const graph = { xs: { id: 'xs', type: 'function', sourceFunctionId: 'listOf', params: ['1', '2'], mounted: [null, null] }, call: { id: 'call', type: 'function', sourceFunctionId: 'f', params: ['10', ''], mounted: [null, 'xs'] } }
+  assert.equal(showValue(createEvaluator(p).run(graph, 'call')), '[11,12]')
 })

@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { entryProgram } from '../src/runtime.js'
 import { readFileSync } from 'node:fs'
 import { buildClickCounter } from '../src/examples/clickCounter.js'
 import { BundleError, bundleModules, buildPlayerHtml, PLAYER_MODULES } from '../src/exportHtml.js'
@@ -28,7 +29,7 @@ test('the bundled player modules run the exported game exactly like the editor d
   // The export carries the editor's elaboration: which dictionary every call gets.
   const elaboration = elaborate({ nodes: definitions, functionBodies: example.functionBodies, types: example.types }, definitions)
   const ev = m.evaluator.createEvaluator({ nodes: definitions, functionBodies: example.functionBodies, types: example.types, elaboration: () => elaboration })
-  const game = m.runtime.createGame(ev, ev.run(definitions, 'main'), { exactTime: true })
+  const game = m.runtime.createGame(ev, entryProgram(ev, definitions, 'main'), { exactTime: true })
   const click = game.view().children[3].msg
   for (let i = 0; i < 5; i++) game.dispatch(click)
   assert.equal(game.view().children[0].text, 'Clicks: 5')

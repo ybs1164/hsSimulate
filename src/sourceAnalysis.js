@@ -1,19 +1,22 @@
 import { SourceError, locateSourceError, parseSource } from './sourceParser.js'
 import { sourceNames, sourceScheme } from './sourceBuiltins.js'
-import { tcon, tfun, tlist, freshVar, unify, applySubst, instantiate } from './typeSystem.js'
+import { tapp, tcon, tfun, tlist, freshVar, unify, applySubst, instantiate } from './typeSystem.js'
 
 export function showSourceType(t) {
   if(t.kind==='con')return t.name
+  if(t.kind==='app'&&t.fn.kind==='con'&&t.fn.name==='IO'){const inner=showSourceType(t.arg);return `IO ${/[ \->]/.test(inner)&&!/^[[(]/.test(inner)?`(${inner})`:inner}`}
+  if(t.kind==='app'&&t.arg.kind==='con'&&t.arg.name==='Char')return 'String'
   if(t.kind==='app')return `[${showSourceType(t.arg)}]`
   if(t.kind==='var')return '?'
   return `${t.from.kind==='fun'?`(${showSourceType(t.from)})`:showSourceType(t.from)} -> ${showSourceType(t.to)}`
 }
-const declared=t=>t.kind==='int'?tcon('Int'):t.kind==='bool'?tcon('Bool'):t.kind==='list'?tlist(declared(t.element)):tfun(declared(t.from),declared(t.to))
+const declared=t=>t.kind==='int'?tcon('Int'):t.kind==='bool'?tcon('Bool'):t.kind==='char'?tcon('Char'):t.kind==='unit'?tcon('()'):t.kind==='io'?tapp(tcon('IO'),declared(t.result)):t.kind==='list'?tlist(declared(t.element)):tfun(declared(t.from),declared(t.to))
 const Int=tcon('Int'), Bool=tcon('Bool')
 export function analyzeSource(parsed, moduleName = 'Main', imported = new Map()) {
   const {source,definitions,signatures}=parsed, names=new Map(), sigs=new Map()
   const fail=(stage,message,span)=>{throw new SourceError(stage,message,source,span)}
   let subst=new Map()
+  const showUses=[]
   const fits=(want,have,span,message)=>{
     try{subst=unify(want,have,subst)}catch{fail('types',message||`인자는 ${showSourceType(applySubst(subst,want))}이어야 하지만 ${showSourceType(applySubst(subst,have))}입니다.`,span)}
   }
@@ -25,7 +28,7 @@ export function analyzeSource(parsed, moduleName = 'Main', imported = new Map())
     let def=names.get(eq.name)
     if(!def){
       const sig=sigs.get(eq.name)
-      if(!sig)fail('types',`${eq.name}: 명시적인 Int/Bool/리스트/함수 타입 시그니처가 필요합니다.`,eq.nameSpan)
+      if(!sig)fail('types',`${eq.name}: 명시적인 Int/Bool/Char/String/IO/리스트/함수 타입 시그니처가 필요합니다.`,eq.nameSpan)
       const type=declared(sig.type),paramTypes=[];let result=type
       while(result.kind==='fun'){paramTypes.push(result.from);result=result.to}
       def={...eq,type,paramTypes,returnType:result,signatureSpan:sig.span,equations:[],dependencies:[],moduleName,key:`${moduleName}.${eq.name}`};names.set(eq.name,def)
@@ -57,6 +60,11 @@ export function analyzeSource(parsed, moduleName = 'Main', imported = new Map())
       if(!Number.isSafeInteger(Number(expr.text)))fail('range','정수는 ±9007199254740991 범위만 지원합니다.',expr.span)
       type=Int
     }else if(expr.kind==='boolean')type=Bool
+    else if(expr.kind==='string'){
+      if(expr.value.includes('"'))fail('support','문자열 안의 \\" 는 아직 지원하지 않습니다.',expr.span)
+      type=tlist(tcon('Char'))
+    }else if(expr.kind==='char')type=tcon('Char')
+    else if(expr.kind==='unit')type=tcon('()')
     else if(expr.kind==='list'){
       const element=freshVar();for(const item of expr.items)fits(element,child(item),item.span,'리스트 원소 타입은 모두 같아야 합니다.');type=tlist(element)
     }else if(expr.kind==='name'){
@@ -71,7 +79,8 @@ export function analyzeSource(parsed, moduleName = 'Main', imported = new Map())
           expr.binding='definition'; expr.targetKey=target.key; type=target.type
           def.dependencies.push({name:target.key,span:expr.span})
         } else if (!expr.qualifier && sourceNames.has(expr.name)) {
-          expr.binding='builtin'; type=instantiate(sourceScheme(expr.name)).type
+          expr.binding='builtin'; const used=instantiate(sourceScheme(expr.name)); type=used.type
+          for(const p of used.preds)if(p.cls==='Show')showUses.push({name:expr.name,type:p.type,span:expr.span})
         } else fail('names', `정의되지 않은 이름 ${written}입니다. 모듈의 공개 이름과 import 목록을 확인하세요.`, expr.span)
       }
     }else if(expr.kind==='application'){
@@ -91,7 +100,7 @@ export function analyzeSource(parsed, moduleName = 'Main', imported = new Map())
     }else{
       const op=expr.kind==='negate'?'negate':expr.op, fn=instantiate(sourceScheme(op)).type
       const parts=expr.kind==='negate'?[expr.arg]:[expr.left,expr.right];let rest=fn
-      for(const part of parts){fits(rest.from,child(part),part.span,['&&','||'].includes(op)?'논리 연산에는 Bool이 필요합니다.':op===':'||op==='++'?'리스트 연결의 원소 타입이 같아야 합니다.':'산술·비교 연산에는 Int 값이 필요합니다.');rest=rest.to}
+      for(const part of parts){fits(rest.from,child(part),part.span,['&&','||'].includes(op)?'논리 연산에는 Bool이 필요합니다.':op===':'||op==='++'?'리스트 연결의 원소 타입이 같아야 합니다.':op==='>>'||op==='>>='?`${op}의 양쪽은 IO 동작(${op==='>>='?'오른쪽은 결과를 받는 함수':'IO 값'})이어야 합니다.`:'산술·비교 연산에는 Int 값이 필요합니다.');rest=rest.to}
       type=rest
     }
     expr.type=type;return type
@@ -103,6 +112,14 @@ export function analyzeSource(parsed, moduleName = 'Main', imported = new Map())
     for(const item of expr.items||[])resolve(item)
   }
   for(const def of names.values())for(const eq of def.equations){resolve(eq.expr);for(const b of eq.binders)b.type=applySubst(subst,b.type)}
+  // print/show need a Show instance: Int, Bool, Char, () and lists of them.
+  const showable=t=>t.kind==='con'?['Int','Bool','Char','()'].includes(t.name):t.kind==='app'&&t.fn.kind==='con'&&t.fn.name==='List'&&showable(t.arg)
+  for(const use of showUses){
+    const t=applySubst(subst,use.type)
+    if(!showable(t))fail('types',t.kind==='var'
+      ?`${use.name}: 보여 줄 값의 타입을 정할 수 없습니다. 값에 타입이 드러나게 하세요 (예: 시그니처가 있는 정의를 사용).`
+      :`${use.name}: ${showSourceType(t)} 값은 보여 줄 수 없습니다 (Show는 Int·Bool·Char·()·리스트만 지원, 함수·IO는 불가).`,use.span)
+  }
   return {source,definitions:[...names.values()]}
 }
 

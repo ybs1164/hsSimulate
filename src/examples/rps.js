@@ -85,7 +85,7 @@ export const RPS_FUNCTIONS = {
     call('n1', P('nothing'), 'Nothing'), call('n2', P('nothing'), 'Nothing'), call('n3', P('nothing'), 'Nothing'), call('g', P('mkStdGen'), 'mkStdGen', ['2026']),
     call('out', M('Model'), 'Model', [n('n1'), n('n2'), n('n3'), n('g'), '0']),
   ], 'out'],
-  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')])], 'out'],
+  main: [[], [call('i', 'initial', 'initial'), call('v', 'view', 'view', ['']), call('hd', 'handle', 'handle', ['', '']), call('s', 'step', 'step', ['', '']), call('out', P('program'), 'program', [n('i'), n('v'), n('hd'), n('s')]), call('io', P('play'), 'play', [n('out')])], 'io'],
 }
 
 export function buildRps() {

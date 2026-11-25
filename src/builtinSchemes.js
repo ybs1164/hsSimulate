@@ -44,6 +44,7 @@ const sub = (msg) => tapp(tcon('Sub'), msg)
 const Picture = tcon('Picture')
 const Color = tcon('Color')
 const prog = (model, msg) => tapp(tapp(tcon('Program'), model), msg)
+const io = (x) => tapp(tcon('IO'), x)
 
 export const builtinSchemes = {
   zero: scheme([], [], Int),
@@ -221,6 +222,14 @@ export const builtinSchemes = {
   // declarative widget tree over the message type, like Elm's `Html msg`.
   // The runtime (src/runtime.js) runs a Program when it is the entry point.
   program: scheme(['m', 'e'], [], tfun(m, tfun(tfun(m, widget(e)), tfun(tfun(e, tfun(m, m)), tfun(tfun(Double, tfun(m, m)), tapp(tapp(tcon('Program'), m), e)))))),
+  // IO (src/ioRuntime.js): an action is a description of effects that the
+  // IO runtime performs in order — evaluating `main` performs nothing. `play`
+  // hands a Program to the game runtime, as gloss's `play :: … -> IO ()`.
+  putStr: scheme([], [], tfun(String, io(Unit))),
+  putStrLn: scheme([], [], tfun(String, io(Unit))),
+  print: scheme(['a'], [pred('Show', a)], tfun(a, io(Unit))),
+  getLine: scheme([], [], io(String)),
+  play: scheme(['m', 'e'], [], tfun(prog(m, e), io(Unit))),
   // A Program's settings, changed like record fields (lens-style `set`):
   // how many `step` calls per second, the most time away that counts, and
   // its subscriptions (Elm's): outside events turned into messages.

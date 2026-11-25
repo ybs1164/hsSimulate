@@ -52,7 +52,7 @@ export function initSourcePanel({ onEnter, onLeave, onLayoutChange, onShowGraph 
     <details id="code-preview-details"><summary id="code-preview-version">변환된 원문 · 아직 변환되지 않음</summary>
       <pre id="code-source-preview" tabindex="0" aria-label="변환된 원문"></pre>
     </details>
-    <details id="code-support"><summary>지원 범위와 제한</summary><p>정의는 한 줄씩, 모든 정의에 구체적인 Int/Bool·리스트·함수 시그니처가 필요합니다. 정수·True/False·+ − *·비교·&amp;&amp;·||·if then else·abs/div/mod·백틱 호출·괄호·변수·자기/상호 재귀·빈 줄·-- 주석을 지원합니다. 리스트([Int]·[Bool], 중첩 가능), :·++, 순서 있는 []·[x]·(x:xs)·변수·_ 패턴, 함수 값·부분 적용, map/filter/지연 foldl, 오른쪽 연산자 섹션(< pivot)을 지원합니다. 정의의 인자는 전부 명시합니다. 음수 인자는 (-2)처럼 괄호로 감싸세요.</p><p>사용자가 선택한 UTF-8 .hs 파일만 불러옵니다. 파일당 40,000자, 전체 120,000자, 파일 12개까지 지원합니다. 로컬 module·export·import·qualified·as와 함수/값 목록을 지원합니다. 명시적 Prelude import·hiding·재내보내기·순환 모듈·외부 라이브러리·IO·튜플·가드·let/where·사용자 data·사용자 다형 시그니처는 미지원입니다. 모든 중간 계산은 ±9007199254740991 이내여야 합니다. Graph JS 실행이며 GHC 실행이 아닙니다. 호출 깊이 48·평가 깊이 128, 함수/노드/리스트 검사 각 6,000회, 계산 1.5초(Worker 강제 종료 4초), 노드 기록 20,000개가 상한입니다. 탐색 기록은 최대 4,000단계와 값 참조 10,000개까지 보관하며 초과분은 생략합니다. 리스트 표시는 앞 100개·총 300개·중첩 8단계까지만 요구하며, 나머지는 강제로 계산하지 않고 …로 표시합니다. 계산 한도를 넘으면 오류로 중단합니다. 계산 중단과 기록 재생 중단은 별개입니다.</p><p>분석 문서는 수동 프로젝트와 별도 저장됩니다. 생성 그래프는 읽기 전용이며 원문으로의 역변환은 없습니다.</p></details>
+    <details id="code-support"><summary>지원 범위와 제한</summary><p>정의는 한 줄씩, 모든 정의에 구체적인 Int/Bool/Char/String·리스트·함수·IO 시그니처가 필요합니다. main :: IO ()는 IO 런타임이 실행하고 표준 출력을 보여 줍니다: putStrLn·putStr·print·show·return·pure, (&gt;&gt;)·(&gt;&gt;=)·$, 문자열 "…"·문자 'c'·()를 지원합니다(getLine 입력·do 블록은 미지원). 정수·True/False·+ − *·비교·&amp;&amp;·||·if then else·abs/div/mod·백틱 호출·괄호·변수·자기/상호 재귀·빈 줄·-- 주석을 지원합니다. 리스트([Int]·[Bool], 중첩 가능), :·++, 순서 있는 []·[x]·(x:xs)·변수·_ 패턴, 함수 값·부분 적용, map/filter/지연 foldl, 오른쪽 연산자 섹션(< pivot)을 지원합니다. 정의의 인자는 전부 명시합니다. 음수 인자는 (-2)처럼 괄호로 감싸세요.</p><p>사용자가 선택한 UTF-8 .hs 파일만 불러옵니다. 파일당 40,000자, 전체 120,000자, 파일 12개까지 지원합니다. 로컬 module·export·import·qualified·as와 함수/값 목록을 지원합니다. 명시적 Prelude import·hiding·재내보내기·순환 모듈·외부 라이브러리·do 블록·getLine·파일 IO·튜플·가드·let/where·사용자 data·사용자 다형 시그니처는 미지원입니다. 모든 중간 계산은 ±9007199254740991 이내여야 합니다. Graph JS 실행이며 GHC 실행이 아닙니다. 호출 깊이 48·평가 깊이 128, 함수/노드/리스트 검사 각 6,000회, 계산 1.5초(Worker 강제 종료 4초), 노드 기록 20,000개가 상한입니다. 탐색 기록은 최대 4,000단계와 값 참조 10,000개까지 보관하며 초과분은 생략합니다. 리스트 표시는 앞 100개·총 300개·중첩 8단계까지만 요구하며, 나머지는 강제로 계산하지 않고 …로 표시합니다. 계산 한도를 넘으면 오류로 중단합니다. 계산 중단과 기록 재생 중단은 별개입니다.</p><p>분석 문서는 수동 프로젝트와 별도 저장됩니다. 생성 그래프는 읽기 전용이며 원문으로의 역변환은 없습니다.</p></details>
     `
   sidebar.querySelector('.side-heading').after(tabs, manual, pane)
   const input = pane.querySelector('textarea'), status = pane.querySelector('#code-status'), preview = pane.querySelector('pre')
@@ -416,6 +416,12 @@ export function initSourcePanel({ onEnter, onLeave, onLayoutChange, onShowGraph 
       result.dataset.truncated=String(sourceValueTruncated(model.result.value))
       result.className = 'code-result'; result.dataset.result = model.result.error ? 'error' : show(model.result.value)
       result.setAttribute('role', 'status')
+      // main :: IO (): what it wrote to standard output, in order (also when it stopped with an error).
+      if (typeof model.result.output === 'string') {
+        const label = document.createElement('label'); label.textContent = '표준 출력 (IO)'
+        const out = document.createElement('pre'); out.className = 'code-output'; out.textContent = model.result.output || '(출력 없음)'
+        inspector.append(label, out)
+      }
       addTraceInspector(inspector, model.document, history, selectedCallId, {
         pause() { history.pause(false); renderPlayback() },
         select(id) { showCall(history.calls.get(id)); inspector.querySelector('#code-trace-call')?.focus() },

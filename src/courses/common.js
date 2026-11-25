@@ -18,11 +18,11 @@ export const stepBuild = (prefix, { signature, types, test }) => ({
   hint: 'm 매개변수를 바로 Output에 이으세요. dt는 쓰지 않아요.', tests: [test],
 })
 
-/** main: program initial view handle step — graded by its type only. */
+/** main = play (program initial view handle step) :: IO () — graded by its type only. */
 export const mainBuild = (prefix, { signature, types, step = 'step', hint = '' }) => ({
   id: `${prefix}main`, kind: 'build', title: 'main 만들기', name: 'main', params: [], signature, types,
-  prompt: `모두 묶어 main = program initial view handle ${step} 을 만드세요. 그다음 main을 시작 함수로 정하고 실행하면 게임 완성이에요!`, uses: ['program', 'initial', 'view', 'handle', step],
-  hint: hint || `view, handle, ${step}은 슬롯을 비운 채(함수 그 자체로) program의 슬롯에 넣어요.`,
+  prompt: `모두 묶어 main = play (program initial view handle ${step}) 을 만드세요. main :: IO () 는 게임을 실행하는 동작이에요. 그다음 main을 시작 함수로 정하고 실행하면 게임 완성이에요!`, uses: ['play', 'program', 'initial', 'view', 'handle', step],
+  hint: hint || `view, handle, ${step}은 슬롯을 비운 채(함수 그 자체로) program의 슬롯에 넣고, 그 program을 play에 넣어요.`,
 })
 
 /** The intro every game course's first unit shares: start from an empty project. */

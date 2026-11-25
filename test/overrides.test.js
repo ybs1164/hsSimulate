@@ -10,7 +10,7 @@ import { customizeDerived, resetDerived } from '../src/typeEdits.js'
 import { inferGraph } from '../src/inferGraph.js'
 import { libraryDefs } from '../src/library.js'
 import { setDynamicInstances } from '../src/prelude.js'
-import { createGame } from '../src/runtime.js'
+import { createGame, entryProgram } from '../src/runtime.js'
 import { derivedDefinitions, derivedInstances } from '../src/typeDecls.js'
 
 const fn = (id, builtin, label, params) => ({ id, type: 'function', builtin, label, params, mounted: params.map(() => null), readonly: true })
@@ -39,7 +39,7 @@ const edit = ({ project, definitions }, id) => takeOverDefinition(project, defin
 
 function texts({ project, definitions }, clicks = 3) {
   const ev = createEvaluator({ nodes: definitions, functionBodies: project.functionBodies, types: project.types })
-  const game = createGame(ev, ev.run(project.nodes, 'main'))
+  const game = createGame(ev, entryProgram(ev, project.nodes, 'main'))
   const all = []
   const walk = (w) => { if (w.kind === 'text') all.push(w.text); (w.children || []).forEach(walk) }
   const button = (w) => (w.kind === 'button' && w.label === 'Click!' ? w : (w.children || []).map(button).find(Boolean))

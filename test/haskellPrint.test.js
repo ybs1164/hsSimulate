@@ -18,7 +18,7 @@ test('applications, sections and Haskell\'s subtract', () => {
 test('functions as values, zero-argument definitions', () => {
   assert.equal(print('handle'), 'handle msg = caseMsg onClick buyClick buyAuto msg')
   assert.equal(print('initial'), 'initial = Model (Wallet 0) 1 0 0')
-  assert.equal(print('main'), 'main = set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick))')
+  assert.equal(print('main'), 'main = play (set subscriptions subs (set stepsPerSecond 20 (program initial view handle onTick)))')
   assert.equal(print('keys'), 'keys k = select (k == " ") (Just Click) Nothing')
 })
 

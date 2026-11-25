@@ -75,7 +75,7 @@ export function highLowUnits() {
         tests: [{ args: [], after: ['current'], expect: 'Seven' }, { args: [], after: ['message'], expect: '"Higher or lower?"' }] },
     ]),
     unit('game', 'main', '모두 묶어 하이로우를 완성해요.', [
-      mainBuild('hl-', { signature: 'Program Model Msg', types: [...types, 'Msg'] }),
+      mainBuild('hl-', { signature: 'IO ()', types: [...types, 'Msg'] }),
     ]),
   ]
 }

@@ -216,3 +216,17 @@ export function createGame(ev, program, { exactTime = false } = {}) {
     },
   }
 }
+
+/**
+ * The Program the entry `id` of `graph` plays: an IO entry's (`main =
+ * play p` hands p over, ioRuntime.js) or, for an older entry whose value is
+ * a Program, that value. Output written before `play` goes to `onEffect`.
+ */
+export function entryProgram(ev, graph, id, { onEffect } = {}) {
+  const value = ev.run(graph, id)
+  if (isProgram(value)) return value
+  if (value?.type !== 'IO') throw new EvalError('The entry point is neither IO () nor a Program')
+  const result = ev.performIO(value, { onEffect })
+  if (result.status !== 'waiting' || result.effect !== 'play') throw new EvalError('main does not play a Program')
+  return result.program
+}
